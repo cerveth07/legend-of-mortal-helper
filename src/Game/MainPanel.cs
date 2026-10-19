@@ -106,7 +106,7 @@ namespace MortalHelper.Game
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("收起",GUILayout.Width(70))) Visible = false;
             GUILayout.EndHorizontal();
-            page = GUILayout.Toolbar(page, new[] { "剧情", "单挑", "属性", "关系", "数值", "开发状态" });
+            page = GUILayout.Toolbar(page, new[] { "剧情", "战斗", "属性", "关系", "数值", "开发状态" });
             scroll = GUILayout.BeginScrollView(scroll);
             bool previousEnabled = GUI.enabled;
             if (page != 5) GUI.enabled = plugin.Options.Enabled.Value && plugin.Gate.CanInteract;
@@ -147,11 +147,20 @@ namespace MortalHelper.Game
 
         private void Duel()
         {
+            GUILayout.Label("单挑（回合制）");
             Switch(plugin.Options.DuelHealth,"主角生命不减少");
             Switch(plugin.Options.DuelStamina,"主角气力不减少");
             Switch(plugin.Options.DuelDodge,"最高闪避率");
             Switch(plugin.Options.DuelDamage,"敌方有效受伤时一击必杀");
             GUILayout.Label("保留游戏剧情强制结果与最低生命限制。恢复期间所有辅助暂停；开关变化会通知恢复系统重新建立有效边界。",Wrap());
+            GUILayout.Space(16);
+            GUILayout.Label("群战（即时战斗）");
+            Switch(plugin.Options.GroupHealth,"主角生命不减少（仍可能硬直）");
+            Switch(plugin.Options.GroupMana,"主角气力维持满值");
+            Switch(plugin.Options.GroupCooldown,"技能栏不受冷却限制");
+            Switch(plugin.Options.GroupFreeze,"冻结剩余时间");
+            Switch(plugin.Options.GroupDown,"敌方受伤即倒地");
+            GUILayout.Label("仅群战场景生效；保留闪避、剧情无敌与友情单位。靠倒计时归零判定胜负的关卡不要开「冻结剩余时间」。",Wrap());
         }
 
         private void Switch(ConfigEntry<bool> setting, string label)
