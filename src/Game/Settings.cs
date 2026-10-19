@@ -13,9 +13,11 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<KeyCode> Toggle;
         public readonly ConfigEntry<float> X, Y, Width, Height;
         public readonly ConfigEntry<float> Speed;
+        internal readonly ConfigFile Config;
 
         public Settings(ConfigFile config)
         {
+            Config = config;
             Enabled = config.Bind("General", "Enabled", true, "启用本插件辅助；不会撤销已应用的修改。");
             Toggle = config.Bind("General", "PanelKey", KeyCode.Tab, "展开或收起面板。");
             Dice = config.Bind("Story", "DiceControls", true, "在原生判定页显示点数输入和直接选项。");

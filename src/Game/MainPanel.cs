@@ -7,12 +7,18 @@ using UnityEngine.UI;
 
 namespace MortalHelper.Game
 {
-    // Front-end parity with the previous panel: same title, five navigation pages,
-    // the same two sub-tab groups, and the same wording for controls that exist.
-    // Sections the rewrite has not reached yet stay visible but disabled and are
-    // labelled as unported so the layout does not lie about what is wired up.
+    // Visual shell reproduced from the previous panel: a parchment sheet with
+    // corner accents, ink wash, scroll rolls, the five-page tab row with a paper
+    // highlight, switch rows, footer opacity slider, resize grip and the vertical
+    // KaiTi badge. Feature bodies below are this project's own implementations.
     internal sealed class MainPanel
     {
+        private const float ExpandDuration = .22f;
+        private const float BadgeWidth = 52f;
+        private const float BadgeHeight = 150f;
+        private const float MinWidth = 420f;
+        private const float MinHeight = 360f;
+
         private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "存档设置" };
         private static readonly string[] StoryViews = { "剧情辅助", "单挑回想" };
         private static readonly string[] GrowthViews = { "养成辅助", "人际关系" };
@@ -31,147 +37,312 @@ namespace MortalHelper.Game
             { "命運", "命运" }, { "陰陽內功", "阴阳内功" } };
 
         private readonly Plugin plugin;
-        private Rect bounds;
-        private bool visible;
+        private readonly PanelStyle style = new PanelStyle();
+        private Rect windowRect;
+        private Rect shownRect;
+        private Vector2 badgePosition;
+        private bool open, initialized;
+        private float scale;
+        private float opacity;
+        private bool animating, closing;
+        private float progress;
+        private Rect animFrom, animTo;
+        private float tabTransition = 1f;
         private int page, storyView, growthView, loverIndex;
-        private Vector2 scroll;
+        private readonly Vector2[] scroll = new Vector2[5];
         private GameStat selected;
         private int expectedValue;
         private GameItemType itemType = GameItemType.雜物;
         private ItemData selectedItem;
         private int expectedItemCount;
         private string itemValue = "", itemSearch = "", value = "", search = "";
-        private bool showAllItems;
+        private bool showAllItems, loggedBadge;
         private RelationshipStat relationship;
         private string relationshipValue = "";
         private int expectedRelationship;
         private GameObject blocker;
-        private GUISkin skin;
-        private bool resizing, loggedHidden;
-        private int lastScreenWidth, lastScreenHeight;
-        private Vector2 resizeStart, sizeStart;
+        private bool resizing, draggingBadge, badgeMoved;
+        private Vector2 dragStart, sizeStart;
+        private int lastWidth, lastHeight;
+
         internal bool Visible
         {
-            get => visible;
-            set { visible = value; if (blocker != null) blocker.SetActive(value); }
+            get => open;
+            set
+            {
+                if (value)
+                {
+                    if (open) return;
+                    animFrom = BadgeRect();
+                    animTo = ClampWindow();
+                    open = true;
+                    closing = false;
+                }
+                else
+                {
+                    if (!open || closing) return;
+                    animFrom = shownRect.width > 1f ? shownRect : ClampWindow();
+                    animTo = BadgeRect();
+                    closing = true;
+                }
+                animating = true;
+                progress = 0f;
+            }
         }
 
         internal MainPanel(Plugin plugin)
         {
             this.plugin = plugin;
-            bounds = new Rect(plugin.Options.X.Value, plugin.Options.Y.Value, plugin.Options.Width.Value, plugin.Options.Height.Value);
+            windowRect = new Rect(plugin.Options.X.Value, plugin.Options.Y.Value,
+                Mathf.Max(MinWidth, plugin.Options.Width.Value), Mathf.Max(MinHeight, plugin.Options.Height.Value));
+            badgePosition = new Vector2(plugin.Options.BadgeX.Value, plugin.Options.BadgeY.Value);
+            opacity = Mathf.Clamp(plugin.Options.Opacity.Value, .65f, 1f);
         }
 
         internal void Draw()
         {
+            if (!initialized)
+            {
+                style.Build();
+                style.SetOpacity(opacity);
+                initialized = true;
+            }
+            EnsureScale();
+            if (opacity != Mathf.Clamp(plugin.Options.Opacity.Value, .65f, 1f))
+            {
+                opacity = Mathf.Clamp(plugin.Options.Opacity.Value, .65f, 1f);
+                style.SetOpacity(opacity);
+            }
             GUISkin previous = GUI.skin;
-            if (skin == null)
+            GUI.skin = style.Skin;
+            try
             {
-                skin = UnityEngine.Object.Instantiate(previous);
-                foreach (var source in UnityEngine.Object.FindObjectsOfType<Text>())
-                    if (source.font != null && source.font.HasCharacter('活')) { skin.font = source.font; break; }
-                skin.button.fontSize = skin.label.fontSize = skin.toggle.fontSize = skin.textField.fontSize = 18;
-                skin.window.fontSize = 20;
-                // The panel draws its own backdrop so the opacity setting can apply.
-                skin.window.normal.background = null;
-                skin.window.hover.background = null;
-                skin.window.active.background = null;
+                if (open || closing) DrawPanel();
+                if (!open) DrawBadge();
             }
-            GUI.skin = skin;
-            try { DrawWindow(); } finally { GUI.skin = previous; }
+            finally { GUI.skin = previous; }
         }
 
-        private void DrawWindow()
+        private void EnsureScale()
         {
-            if (!Visible)
-            {
-                if (!loggedHidden) { loggedHidden = true; plugin.Log("Collapsed badge: " + Describe()); }
-                Rect badge = new Rect(plugin.Options.BadgeX.Value, plugin.Options.BadgeY.Value, 34, 104);
-                Color previousColor = GUI.color;
-                GUI.color = new Color(0f, 0f, 0f, plugin.Options.Opacity.Value);
-                GUI.DrawTexture(badge, Texture2D.whiteTexture);
-                GUI.color = previousColor;
-                var style = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.UpperCenter, fontSize = 20, richText = false };
-                style.normal.textColor = Color.white;
-                if (GUI.Button(badge, "萬\n象\n錄", new GUIStyle(style) { normal = { background = null }, hover = { background = null }, active = { background = null } }))
-                    Visible = true;
-                return;
-            }
-            EnsureBlocker();
-            if (lastScreenWidth != Screen.width || lastScreenHeight != Screen.height)
-            {
-                lastScreenWidth = Screen.width;
-                lastScreenHeight = Screen.height;
-                bounds.width = Mathf.Min(bounds.width, Mathf.Max(320f, Screen.width * 0.96f));
-                bounds.height = Mathf.Min(bounds.height, Mathf.Max(240f, Screen.height * 0.96f));
-            }
-            bounds.width = Mathf.Clamp(bounds.width, Mathf.Min(320f, Screen.width), Mathf.Max(320f, Screen.width * 0.96f));
-            bounds.height = Mathf.Clamp(bounds.height, Mathf.Min(240f, Screen.height), Mathf.Max(240f, Screen.height * 0.96f));
-            bounds.x = Mathf.Clamp(bounds.x, 0, Mathf.Max(0, Screen.width - bounds.width));
-            bounds.y = Mathf.Clamp(bounds.y, 0, Mathf.Max(0, Screen.height - bounds.height));
-            Color previous = GUI.color;
-            GUI.color = new Color(0.07f, 0.07f, 0.07f, Mathf.Clamp(plugin.Options.Opacity.Value, 0.65f, 1f));
-            GUI.DrawTexture(bounds, Texture2D.whiteTexture);
-            GUI.color = previous;
-            bounds = GUILayout.Window(0x434D48, bounds, Contents, "活侠·万象录");
-            if (Event.current.type == EventType.MouseUp) SaveBounds();
+            float next = Mathf.Clamp(Mathf.Min(Screen.width / 1920f, Screen.height / 1080f), .85f, 1.35f);
+            if (style.UiFont == null) style.UiFont = FindUiFont();
+            if (Mathf.Abs(next - scale) < .001f && lastWidth == Screen.width && lastHeight == Screen.height &&
+                style.Skin != null) return;
+            scale = next; lastWidth = Screen.width; lastHeight = Screen.height;
+            style.Refresh(scale, style.UiFont);
+            style.SetOpacity(opacity);
         }
 
-        private void Contents(int id)
+        private static Font FindUiFont()
         {
-            GUILayout.BeginHorizontal();
-            plugin.Options.Enabled.Value = GUILayout.Toggle(plugin.Options.Enabled.Value, "万象录功能总开关");
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("收起", GUILayout.Width(70))) Visible = false;
-            GUILayout.EndHorizontal();
-            GUILayout.Label("上次操作：" + plugin.Status, Subtle());
-            page = GUILayout.Toolbar(page, Pages);
-            scroll = GUILayout.BeginScrollView(scroll);
+            foreach (var font in Resources.FindObjectsOfTypeAll<Font>())
+                if (font != null && font.HasCharacter('天')) return font;
+            return null;
+        }
+
+        private Rect BadgeRect()
+        {
+            return new Rect(badgePosition.x, badgePosition.y,
+                Mathf.Min(BadgeWidth * scale, Mathf.Max(1f, Screen.width - 16f)),
+                Mathf.Min(BadgeHeight * scale, Mathf.Max(1f, Screen.height - 16f)));
+        }
+
+        private Rect ClampWindow() { return Clamp(windowRect); }
+
+        private Rect Clamp(Rect source)
+        {
+            float minWidth = Mathf.Min(MinWidth * scale, Mathf.Max(1f, Screen.width - 24f));
+            float minHeight = Mathf.Min(MinHeight * scale, Mathf.Max(1f, Screen.height - 24f));
+            Rect rect = source;
+            rect.width = Mathf.Clamp(rect.width, minWidth, Mathf.Max(minWidth, Screen.width - 24f));
+            rect.height = Mathf.Clamp(rect.height, minHeight, Mathf.Max(minHeight, Screen.height - 24f));
+            rect.x = Mathf.Clamp(rect.x, 8f, Mathf.Max(8f, Screen.width - rect.width - 8f));
+            rect.y = Mathf.Clamp(rect.y, 8f, Mathf.Max(8f, Screen.height - rect.height - 8f));
+            return rect;
+        }
+
+
+        private static float EaseOutCubic(float t) { float p = 1f - t; return 1f - p * p * p; }
+        private static Rect Lerp(Rect a, Rect b, float t)
+        {
+            return new Rect(Mathf.Lerp(a.x, b.x, t), Mathf.Lerp(a.y, b.y, t),
+                Mathf.Lerp(a.width, b.width, t), Mathf.Lerp(a.height, b.height, t));
+        }
+
+        private void DrawPanel()
+        {
+            if (animating) progress += Time.unscaledDeltaTime / ExpandDuration;
+            if (progress >= 1f)
+            {
+                progress = 1f;
+                animating = false;
+                if (closing) { closing = false; open = false; return; }
+            }
+            shownRect = animating ? Lerp(animFrom, animTo, EaseOutCubic(Mathf.Clamp01(progress))) : ClampWindow();
+            windowRect = shownRect;
+            float fade = 1f;
+            Color previousColor = GUI.color;
             bool previousEnabled = GUI.enabled;
-            // The old panel kept its save settings usable while the main features
-            // were paused; keep that exception even though the page is a placeholder.
-            if (page != 4) GUI.enabled = plugin.Options.Enabled.Value && plugin.Gate.CanInteract;
-            switch (page)
+            if (animating)
             {
-                case 0: StoryPage(); break;
-                case 1: BattlePage(); break;
-                case 2: GrowthPage(); break;
-                case 3: NumericPage(); break;
-                default: SavePage(); break;
+                fade = closing ? 1f - Mathf.Clamp01(Mathf.InverseLerp(.25f, .82f, progress))
+                    : Mathf.Clamp01(Mathf.InverseLerp(.12f, .68f, progress));
+                GUI.color = new Color(previousColor.r, previousColor.g, previousColor.b, previousColor.a * fade);
+                GUI.enabled = false;
             }
-            GUI.enabled = previousEnabled;
+            try
+            {
+                EnsureBlocker();
+                GUI.DrawTexture(shownRect, style.Panel, ScaleMode.StretchToFill, true);
+                DrawFrame(shownRect);
+                Rect used = GUILayout.Window(0x4C4F4D10, shownRect, DrawContents, "");
+                if (!animating) { windowRect = Clamp(used); shownRect = windowRect; }
+                else if (used != shownRect) windowRect = Clamp(used);
+            }
+            finally { GUI.color = previousColor; GUI.enabled = previousEnabled; }
+            DrawResizeGrip(shownRect);
+        }
+
+        private void DrawFrame(Rect rect)
+        {
+            float w = rect.width, h = rect.height;
+            GUI.DrawTexture(new Rect(rect.x, rect.y, w, 1f), style.Border);
+            GUI.DrawTexture(new Rect(rect.x, rect.y + h - 1f, w, 1f), style.Border);
+            GUI.DrawTexture(new Rect(rect.x, rect.y, 1f, h), style.Border);
+            GUI.DrawTexture(new Rect(rect.x + w - 1f, rect.y, 1f, h), style.Border);
+            float c = 14f * scale;
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + 2f, c, 1f), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + 2f, 1f, c), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + w - 2f - c, rect.y + 2f, c, 1f), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + w - 3f, rect.y + 2f, 1f, c), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + h - 3f, c, 1f), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + h - 2f - c, 1f, c), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + w - 2f - c, rect.y + h - 3f, c, 1f), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + w - 3f, rect.y + h - 2f - c, 1f, c), style.AccentSoft);
+            if (style.Ink != null)
+                GUI.DrawTexture(new Rect(rect.x + Mathf.Max(0, w - 238f * scale), rect.y + Mathf.Max(70f, h - 205f * scale),
+                    230f * scale, 175f * scale), style.Ink, ScaleMode.StretchToFill, true);
+            if (w > 90f * scale && h > 50f * scale)
+            {
+                float rollW = 10f * scale, rollH = 18f * scale;
+                GUI.DrawTexture(new Rect(rect.x + 4f * scale, rect.y + h - rollH + 2f * scale, rollW, rollH),
+                    style.ScrollRoll, ScaleMode.StretchToFill, true);
+                GUI.DrawTexture(new Rect(rect.x + w - 14f * scale, rect.y + h - rollH + 2f * scale, rollW, rollH),
+                    style.ScrollRoll, ScaleMode.StretchToFill, true);
+                GUI.DrawTexture(new Rect(rect.x + 12f * scale, rect.y + h - 2f * scale, w - 24f * scale, 2f * scale),
+                    style.AccentSoft, ScaleMode.StretchToFill, true);
+            }
+        }
+
+        private void DrawContents(int windowID)
+        {
+            float s = scale;
+            float headerHeight = 42f * s;
+            GUI.Label(new Rect(0, 0, shownRect.width, headerHeight), "活侠·万象录", style.Title);
+            if (GUI.Button(new Rect(shownRect.width - 40f * s, 4f * s, 32f * s, 30f * s), "×", style.IconButton))
+                Visible = false;
+            GUILayout.Space(headerHeight);
+            DrawTabs();
+            GUILayout.Space(7f * s);
+
+            bool features = plugin.Options.Enabled.Value;
+            bool next = DrawSwitchRow("万象录功能总开关", features,
+                "关闭后暂停万象录的辅助功能，保留各项设置；已写入的角色数值不会回退。");
+            if (next != features) plugin.Options.Enabled.Value = features = next;
+            if (!string.IsNullOrEmpty(plugin.Status))
+            {
+                GUILayout.BeginVertical(style.Notice);
+                GUILayout.Label("上次操作：" + plugin.Status, style.Description);
+                GUILayout.EndVertical();
+                GUILayout.Space(7f * s);
+            }
+            if (!features) GUILayout.Label("万象录辅助功能已暂停；已接入的功能不生效。", style.Description);
+            scroll[page] = GUILayout.BeginScrollView(scroll[page], false, true, GUILayout.ExpandHeight(true));
+            if (features || page == 4)
+            {
+                switch (page)
+                {
+                    case 0: StoryPage(); break;
+                    case 1: BattlePage(); break;
+                    case 2: GrowthPage(); break;
+                    case 3: NumericPage(); break;
+                    default: SavePage(); break;
+                }
+            }
             GUILayout.EndScrollView();
-            GUILayout.Space(8);
-            GUILayout.Label(plugin.Options.Toggle.Value + " 展开/收起 · 拖动标题移动 · 右下角缩放", Subtle());
-            Rect handle = new Rect(bounds.width - 24, bounds.height - 24, 24, 24);
-            GUI.Label(handle, "◢");
-            Event e = Event.current;
-            if (e.type == EventType.MouseDown && handle.Contains(e.mousePosition))
-            { resizing = true; resizeStart = GUIUtility.GUIToScreenPoint(e.mousePosition); sizeStart = bounds.size; e.Use(); }
-            if (resizing && e.type == EventType.MouseDrag)
-            { bounds.size = sizeStart + GUIUtility.GUIToScreenPoint(e.mousePosition) - resizeStart; e.Use(); }
-            if (resizing && e.type == EventType.MouseUp) { resizing = false; SaveBounds(); e.Use(); }
-            GUI.DragWindow(new Rect(0, 0, bounds.width - 60, 22));
+            DrawBottomBar();
+            GUI.DragWindow(new Rect(0, 0, shownRect.width, 42f * scale));
+        }
+
+        private void DrawTabs()
+        {
+            float s = scale;
+            float rowHeight = 34f * s;
+            if (tabTransition < 1f) tabTransition = Mathf.MoveTowards(tabTransition, 1f, Time.unscaledDeltaTime / .22f);
+            int columns = shownRect.width < 480f * s ? 3 : Pages.Length;
+            int rows = (Pages.Length + columns - 1) / columns;
+            for (int row = 0; row < rows; row++)
+            {
+                GUILayout.BeginHorizontal(GUILayout.Height(rowHeight));
+                for (int column = 0; column < columns; column++)
+                {
+                    int i = row * columns + column;
+                    if (i >= Pages.Length) { GUILayout.FlexibleSpace(); break; }
+                    Rect r = GUILayoutUtility.GetRect(GUIContent.none, style.Tab, GUILayout.MinWidth(0f),
+                        GUILayout.ExpandWidth(true), GUILayout.Height(rowHeight));
+                    bool hover = r.Contains(Event.current.mousePosition);
+                    if (i == page)
+                    {
+                        float t = EaseOutCubic(Mathf.Clamp01(tabTransition));
+                        float paperWidth = Mathf.Lerp(12f * s, Mathf.Max(16f, r.width - 8f * s), t);
+                        Rect paper = new Rect(r.center.x - paperWidth / 2f, r.y + 3f * s, paperWidth, r.height - 6f * s);
+                        GUI.DrawTexture(paper, style.ScrollPaper, ScaleMode.StretchToFill, true);
+                        float rollW = Mathf.Min(10f * s, paper.width * .18f);
+                        GUI.DrawTexture(new Rect(paper.x - rollW * .35f, paper.y, rollW, paper.height),
+                            style.ScrollRoll, ScaleMode.StretchToFill, true);
+                        GUI.DrawTexture(new Rect(paper.xMax - rollW * .65f, paper.y, rollW, paper.height),
+                            style.ScrollRoll, ScaleMode.StretchToFill, true);
+                        GUI.DrawTexture(new Rect(paper.x, paper.y, paper.width, 1f), style.Accent);
+                        GUI.DrawTexture(new Rect(paper.x, paper.yMax - 1f, paper.width, 1f), style.Accent);
+                        var active = new GUIStyle(style.Tab);
+                        active.normal.textColor = new Color(.17f, .13f, .09f, Mathf.Clamp01(t * 1.6f));
+                        GUI.Label(r, Pages[i], active);
+                    }
+                    else
+                    {
+                        GUI.Label(r, Pages[i], hover ? style.TabHover : style.Tab);
+                        if (hover) GUI.DrawTexture(new Rect(r.x + 8f * s, r.yMax - 2f * s, r.width - 16f * s, 1f), style.AccentSoft);
+                    }
+                    if (GUI.Button(r, GUIContent.none, style.TabHit) && i != page)
+                    { page = i; tabTransition = 0f; GUI.FocusControl(null); }
+                }
+                GUILayout.EndHorizontal();
+            }
+            Rect rule = GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true), GUILayout.Height(Mathf.Max(1f, s)));
+            if (Event.current.type == EventType.Repaint) GUI.DrawTexture(rule, style.AccentSoft);
         }
 
         private void StoryPage()
         {
-            storyView = GUILayout.Toolbar(storyView, StoryViews);
+            int view = GUILayout.Toolbar(storyView, StoryViews, style.SubTab);
+            if (view != storyView) { storyView = view; scroll[0] = Vector2.zero; }
+            GUILayout.Space(8f * scale);
             if (storyView == 1) { Recall(); return; }
             Section("天命控制");
-            plugin.Options.Dice.Value = GUILayout.Toggle(plugin.Options.Dice.Value, "显示点数输入并允许点击结果选项");
+            plugin.Options.Dice.Value = DrawSwitchRow("显示点数输入并允许点击结果选项", plugin.Options.Dice.Value,
+                "清空点数恢复随机。指定值按每次判定范围校验，重掷仍使用原生命运点。");
             GUILayout.BeginHorizontal();
-            GUILayout.Label("基础点数", GUILayout.Width(80));
+            GUILayout.Label("基础点数", style.Entry, GUILayout.Width(80f * scale));
             plugin.Options.Point.Value = GUILayout.TextField(plugin.Options.Point.Value, 8);
-            if (GUILayout.Button("清空（自然掷骰）", GUILayout.Width(150))) plugin.Options.Point.Value = "";
+            if (GUILayout.Button("清空", style.SubtleStyle, GUILayout.Width(70f * scale))) plugin.Options.Point.Value = "";
             GUILayout.EndHorizontal();
-            Note("清空点数恢复随机。指定值按每次判定范围校验，重掷仍使用原生命运点。");
             Section("选项提示");
-            plugin.Options.Hints.Value = GUILayout.Toggle(plugin.Options.Hints.Value, "选项提示（含剧透）");
-            plugin.Options.ShowEffects.Value = GUILayout.Toggle(plugin.Options.ShowEffects.Value, "显示效果");
-            plugin.Options.ShowConditions.Value = GUILayout.Toggle(plugin.Options.ShowConditions.Value, "显示条件");
-            Note("首次安装默认关闭；关闭总开关后保留两个子项的选择。收起面板后悬停选项生效。");
-            GUILayout.Label("当前可对应的分支：" + HintAdapter.Count);
+            plugin.Options.Hints.Value = DrawSwitchRow("选项提示（含剧透）", plugin.Options.Hints.Value,
+                "首次安装默认关闭；关闭总开关后保留两个子项的选择。收起面板后悬停选项生效。");
+            plugin.Options.ShowEffects.Value = DrawSwitchRow("显示效果", plugin.Options.ShowEffects.Value);
+            plugin.Options.ShowConditions.Value = DrawSwitchRow("显示条件", plugin.Options.ShowConditions.Value);
+            Note("当前可对应的分支：" + HintAdapter.Count);
             Section("分支记录");
             Unported("显示已走分支标记", "记录已确认分支需要独立的周目记录组件，本候选尚未接入。");
             Section("高级工具（诊断与强制事件）");
@@ -182,39 +353,40 @@ namespace MortalHelper.Game
 
         private void Recall()
         {
-            Section("单挑回想");
-            Note("记录当前或最近一场单挑的对白，最多 500 条；回想不暂停战斗。");
-            if (DuelTools.Dialogue.Count == 0) { GUILayout.Label("本场还没有记录。"); return; }
-            foreach (string line in DuelTools.Dialogue) GUILayout.Label(line, Wrap());
+            if (DuelTools.Dialogue.Count == 0) { Note("本场还没有记录。回想最多保留 500 条，不暂停战斗。"); return; }
+            foreach (string line in DuelTools.Dialogue) GUILayout.Label(line, style.Entry);
+            Note("回想最多保留 500 条；新单挑开始时清空。");
         }
 
         private void BattlePage()
         {
             Section("单挑辅助");
-            Switch(plugin.Options.DuelHealth, "主角生命不减少");
-            Note("阻止战斗扣血和持续伤害；保留剧情直接改值及强制胜负。");
-            Switch(plugin.Options.DuelStamina, "单挑无限气力");
-            Note("保持单挑行动所需气力，不修改周目内力属性。");
-            Switch(plugin.Options.DuelDodge, "主角最高闪避率");
-            Note("提高原生闪避率，不能避开必中特技或剧情结果。");
-            Switch(plugin.Options.DuelDamage, "敌方受到有效伤害时一击必杀");
-            Note("保留剧情最低生命保护与强制胜负。仅单挑生效；启用或战中切换后本场不能再保存单挑回合。");
+            plugin.Options.DuelHealth.Value = DrawSwitchRow("主角生命不减少", plugin.Options.DuelHealth.Value,
+                "阻止战斗扣血和持续伤害；保留剧情直接改值及强制胜负。");
+            plugin.Options.DuelStamina.Value = DrawSwitchRow("单挑无限气力", plugin.Options.DuelStamina.Value,
+                "保持单挑行动所需气力，不修改周目内力属性。");
+            plugin.Options.DuelDodge.Value = DrawSwitchRow("主角最高闪避率", plugin.Options.DuelDodge.Value,
+                "提高原生闪避率，不能避开必中特技或剧情结果。");
+            plugin.Options.DuelDamage.Value = DrawSwitchRow("敌方受到有效伤害时一击必杀", plugin.Options.DuelDamage.Value,
+                "保留剧情最低生命保护与强制胜负。仅单挑生效；启用或战中切换后本场不能再保存单挑回合。");
             Section("群战辅助");
-            Switch(plugin.Options.GroupHealth, "主角生命不减少");
-            Note("仍可能硬直；友军生命和剧情强制退场沿用原生规则。");
-            Switch(plugin.Options.GroupMana, "主角气力保持充足");
-            Note("作用于群战气力条。");
-            Switch(plugin.Options.GroupCooldown, "群战技能栏立即冷却");
-            Note("保留原生施放限制与演出。");
-            Switch(plugin.Options.GroupFreeze, "冻结群战剩余时间");
-            Note("原生倒计时延长，增援与事件照常推进；按计时归零获胜的关卡请关闭。");
-            Switch(plugin.Options.GroupDown, "敌方受伤即倒地");
-            Note("含友军攻击和持续伤害；保留敌方闪避与剧情无敌，不影响中立及友方。");
+            plugin.Options.GroupHealth.Value = DrawSwitchRow("主角生命不减少", plugin.Options.GroupHealth.Value,
+                "仍可能硬直；友军生命和剧情强制退场沿用原生规则。");
+            plugin.Options.GroupMana.Value = DrawSwitchRow("主角气力保持充足", plugin.Options.GroupMana.Value,
+                "作用于群战气力条。");
+            plugin.Options.GroupCooldown.Value = DrawSwitchRow("群战技能栏立即冷却", plugin.Options.GroupCooldown.Value,
+                "保留原生施放限制与演出。");
+            plugin.Options.GroupFreeze.Value = DrawSwitchRow("冻结群战剩余时间", plugin.Options.GroupFreeze.Value,
+                "原生倒计时延长，增援与事件照常推进；按计时归零获胜的关卡请关闭。");
+            plugin.Options.GroupDown.Value = DrawSwitchRow("敌方受伤即倒地", plugin.Options.GroupDown.Value,
+                "含友军攻击和持续伤害；保留敌方闪避与剧情无敌，不影响中立及友方。");
         }
 
         private void GrowthPage()
         {
-            growthView = GUILayout.Toolbar(growthView, GrowthViews);
+            int view = GUILayout.Toolbar(growthView, GrowthViews, style.SubTab);
+            if (view != growthView) { growthView = view; scroll[2] = Vector2.zero; }
+            GUILayout.Space(8f * scale);
             if (growthView == 1) { Relationships(); return; }
             Note("编辑已登场角色的好感度与心上人，正常存档后保留。");
             Section("练功");
@@ -232,27 +404,24 @@ namespace MortalHelper.Game
 
         private void Relationships()
         {
-            Section("好感编辑");
+            Section("指定角色好感度");
             if (!GameAccess.CanEdit)
-            {
-                GUILayout.Label("请在周目剧情或自由行动中编辑；先关闭商店、升级等面板，并等待加载完成。", Wrap());
-                relationship = null;
-            }
+                Note("请在周目剧情或自由行动中编辑；先关闭商店、升级等面板，并等待加载完成。");
             else
             {
                 var list = PlayerStatManagerData.Instance.Relationships.List;
                 foreach (var item in list)
                 {
                     if (item == null || !item.Active) continue;
-                    if (GUILayout.Button((relationship == item ? "● " : "") + item.Type + "   " + item.Value))
+                    if (GUILayout.Button((relationship == item ? "● " : "") + item.Type + "   " + item.Value, style.ButtonStyle))
                     { relationship = item; expectedRelationship = item.Value; relationshipValue = item.Value.ToString(); }
                 }
                 if (relationship != null)
                 {
                     int maximum = GameAccess.Field<int>(relationship, "_max");
-                    GUILayout.Label("修改 " + relationship.Type + " 好感：0～" + maximum);
+                    Note("修改 " + relationship.Type + " 好感：0～" + maximum + "；仅列出已登场角色。");
                     relationshipValue = GUILayout.TextField(relationshipValue, 12);
-                    if (GUILayout.Button("应用好感度"))
+                    if (GUILayout.Button("应用好感度", style.ButtonStyle))
                     {
                         int parsed;
                         if (!relationship.Active || !list.Contains(relationship) || relationship.Value != expectedRelationship)
@@ -268,28 +437,28 @@ namespace MortalHelper.Game
                         }
                     }
                 }
+                Note("修改当前周目，正常存档后保留。不会补齐恋爱事件、结缘条件或解锁未登场角色。");
             }
-            Note("修改当前周目，正常存档后保留。不会补齐恋爱事件、结缘条件或解锁未登场角色。");
             Section("心上人");
-            loverIndex = GUILayout.SelectionGrid(loverIndex, Lovers, 5);
+            loverIndex = GUILayout.SelectionGrid(loverIndex, Lovers, 5, style.SubTab);
+            bool previous = GUI.enabled;
             GUI.enabled = false;
-            GUILayout.Button("应用心上人");
-            GUI.enabled = true;
+            GUILayout.Button("应用心上人", style.ButtonStyle);
+            GUI.enabled = previous;
             Note("旧版可选择九位候选之一或「自己」；本候选尚未接入，仅保留界面位置。");
         }
 
         private void NumericPage()
         {
             Section("属性");
-            Note("修改会影响进度；请使用备份周目。当前仅在自由活动界面空闲时开放。");
             StatsBody();
             Section("物品数量");
             ItemsBody();
             Section("游戏速度");
             GUILayout.BeginHorizontal();
             float speed = GUILayout.HorizontalSlider(plugin.Options.Speed.Value, 0.25f, 5f);
-            GUILayout.Label(speed.ToString("0.00") + " 倍", GUILayout.Width(70));
-            if (GUILayout.Button("恢复 1 倍", GUILayout.Width(90))) plugin.ApplySpeed(1f);
+            GUILayout.Label(speed.ToString("0.00") + " 倍", style.FooterValue, GUILayout.Width(70f * scale));
+            if (GUILayout.Button("恢复 1 倍", style.SubtleStyle, GUILayout.Width(90f * scale))) plugin.ApplySpeed(1f);
             else if (Mathf.Abs(speed - plugin.Options.Speed.Value) > 0.02f) plugin.ApplySpeed(speed);
             GUILayout.EndHorizontal();
             Note("只改引擎时间倍率；原生暂停、慢动作与快进各有自己的状态。");
@@ -300,22 +469,25 @@ namespace MortalHelper.Game
         private void StatsBody()
         {
             bool safe = GameAccess.CanEdit && UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "Free";
-            if (!safe) { GUILayout.Label("请先进入自由活动场景，关闭游戏内交互面板。", Wrap()); selected = null; return; }
+            if (!safe) { Note("修改会影响进度，请使用备份周目。请先进入自由活动场景，关闭游戏内交互面板。"); selected = null; return; }
             var player = PlayerStatManagerData.Instance;
-            GUILayout.BeginHorizontal(); GUILayout.Label("筛选", GUILayout.Width(45)); search = GUILayout.TextField(search, 80); GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("筛选", style.Description, GUILayout.Width(45f * scale));
+            search = GUILayout.TextField(search, 80);
+            GUILayout.EndHorizontal();
             foreach (var stat in player.Stats.List)
             {
                 if (stat == null || !Editable.Contains(stat.StatType.ToString())) continue;
                 string name = DisplayName(stat);
                 if (!string.IsNullOrEmpty(search) && name.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                if (GUILayout.Button((selected == stat ? "● " : "") + name + "   " + stat.Value + " / 最终 " + stat.FinalValue))
+                if (GUILayout.Button((selected == stat ? "● " : "") + name + "   " + stat.Value + " / 最终 " + stat.FinalValue, style.SubtleStyle))
                 { selected = stat; expectedValue = stat.Value; value = expectedValue.ToString(); }
             }
             if (selected == null) return;
-            GUILayout.Space(12);
-            GUILayout.Label(DisplayName(selected) + "：允许 " + selected.Min + "～" + selected.Max);
+            GUILayout.Space(8f * scale);
+            Note(DisplayName(selected) + "：允许 " + selected.Min + "～" + selected.Max);
             value = GUILayout.TextField(value, 12);
-            if (GUILayout.Button("应用到所选属性"))
+            if (GUILayout.Button("应用到所选属性", style.ButtonStyle))
             {
                 int number;
                 if (!GameAccess.CanEdit || selected.Value != expectedValue || !player.Stats.List.Contains(selected))
@@ -330,29 +502,32 @@ namespace MortalHelper.Game
 
         private void ItemsBody()
         {
-            if (!GameAccess.CanEdit) { GUILayout.Label("请先进入自由活动场景并关闭游戏内交互面板。", Wrap()); selectedItem = null; return; }
+            if (!GameAccess.CanEdit) { Note("请先进入自由活动场景并关闭游戏内交互面板。"); selectedItem = null; return; }
             var database = ItemDatabase.Instance;
-            if (database == null) { GUILayout.Label("物品数据库尚未就绪。", Wrap()); return; }
-            int tab = GUILayout.Toolbar((int)itemType - 1, new[] { "書籍", "雜物", "貴重品", "消耗品" });
+            if (database == null) { Note("物品数据库尚未就绪。"); return; }
+            int tab = GUILayout.Toolbar((int)itemType - 1, new[] { "書籍", "雜物", "貴重品", "消耗品" }, style.SubTab);
             itemType = (GameItemType)(tab + 1);
-            showAllItems = GUILayout.Toggle(showAllItems, "也列出数量为 0 的物品（等于直接生成）");
-            GUILayout.BeginHorizontal(); GUILayout.Label("筛选", GUILayout.Width(45)); itemSearch = GUILayout.TextField(itemSearch, 80); GUILayout.EndHorizontal();
+            showAllItems = DrawSwitchRow("也列出数量为 0 的物品", showAllItems, "勾选后可以给未持有的物品直接设置数量，等同于生成。");
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("筛选", style.Description, GUILayout.Width(45f * scale));
+            itemSearch = GUILayout.TextField(itemSearch, 80);
+            GUILayout.EndHorizontal();
             ItemDataCollection collection = tab == 0 ? database.Books : tab == 1 ? database.Miscs
                 : tab == 2 ? database.Special : database.Consumables;
-            if (collection == null || collection.List == null) { GUILayout.Label("该分类物品列表尚未就绪。", Wrap()); return; }
+            if (collection == null || collection.List == null) { Note("该分类物品列表尚未就绪。"); return; }
             foreach (var item in collection.List)
             {
                 if (item == null || (!showAllItems && item.CurrentCount <= 0)) continue;
                 string label = ItemName(item) + "   " + item.CurrentCount;
                 if (!string.IsNullOrEmpty(itemSearch) && label.IndexOf(itemSearch, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                if (GUILayout.Button((selectedItem == item ? "● " : "") + label))
+                if (GUILayout.Button((selectedItem == item ? "● " : "") + label, style.SubtleStyle))
                 { selectedItem = item; expectedItemCount = item.CurrentCount; itemValue = expectedItemCount.ToString(); }
             }
             if (selectedItem == null) return;
-            GUILayout.Space(12);
-            GUILayout.Label(ItemName(selectedItem) + "：当前 " + selectedItem.CurrentCount + "，可设为 0～999999");
+            GUILayout.Space(8f * scale);
+            Note(ItemName(selectedItem) + "：当前 " + selectedItem.CurrentCount + "，可设为 0～999999");
             itemValue = GUILayout.TextField(itemValue, 12);
-            if (GUILayout.Button("应用到所选物品"))
+            if (GUILayout.Button("应用到所选物品", style.ButtonStyle))
             {
                 int number;
                 if (!GameAccess.CanEdit || selectedItem.CurrentCount != expectedItemCount)
@@ -369,11 +544,12 @@ namespace MortalHelper.Game
         {
             Section("存档格数");
             GUILayout.BeginHorizontal();
-            GUILayout.Label("允许范围 2～999", GUILayout.Width(140));
+            GUILayout.Label("允许范围 2～999", style.Description, GUILayout.Width(140f * scale));
+            bool previous = GUI.enabled;
             GUI.enabled = false;
-            GUILayout.TextField("", 4, GUILayout.Width(60));
-            GUILayout.Button("保存格数", GUILayout.Width(90));
-            GUI.enabled = true;
+            GUILayout.TextField("", 4, GUILayout.Width(60f * scale));
+            GUILayout.Button("保存格数", style.ButtonStyle, GUILayout.Width(90f * scale));
+            GUI.enabled = previous;
             GUILayout.EndHorizontal();
             Note("旧版可改存档格数并提示「格数已保存，重启游戏后生效」；本候选尚未接入。");
             Section("存档备注与排序");
@@ -382,30 +558,178 @@ namespace MortalHelper.Game
             Note("存读仍使用游戏原生系统菜单与编号槽。本页为占位，旧版对应功能尚未重新实现。");
         }
 
-        private void Section(string title) { GUILayout.Space(10); GUILayout.Label(title, Header()); }
-
-        private void Switch(ConfigEntry<bool> setting, string label)
+        private void DrawBottomBar()
         {
-            bool next = GUILayout.Toggle(setting.Value, label);
-            if (next != setting.Value) { plugin.Gate.NotifyMutation("切换 " + label); setting.Value = next; }
+            float s = scale;
+            GUILayout.Space(6f * s);
+            Rule();
+            GUILayout.BeginHorizontal(GUILayout.Height(42f * s));
+            GUILayout.Label("界面透明度", style.FooterLabel, GUILayout.Width(76f * s));
+            float sliderWidth = Mathf.Clamp(shownRect.width - 262f * s, 60f * s, 300f * s);
+            Rect sliderRect = GUILayoutUtility.GetRect(sliderWidth, 30f * s, GUILayout.Width(sliderWidth), GUILayout.Height(30f * s));
+            float normalized = Mathf.InverseLerp(.65f, 1f, opacity);
+            float trackY = sliderRect.y + sliderRect.height * .5f - 3f * s;
+            Rect track = new Rect(sliderRect.x + 8f * s, trackY, sliderRect.width - 16f * s, 6f * s);
+            GUI.DrawTexture(track, style.SliderTrack, ScaleMode.StretchToFill, true);
+            GUI.DrawTexture(new Rect(track.x, track.y, track.width * normalized, track.height),
+                style.SliderFill, ScaleMode.StretchToFill, true);
+            float next = GUI.HorizontalSlider(sliderRect, opacity, .65f, 1f, GUI.skin.horizontalSlider, GUI.skin.horizontalSliderThumb);
+            if (Mathf.Abs(next - opacity) > .0001f)
+            {
+                opacity = Mathf.Clamp(next, .65f, 1f);
+                style.SetOpacity(opacity);
+                plugin.Options.Opacity.Value = opacity;
+            }
+            GUILayout.Label(Mathf.RoundToInt(opacity * 100f) + "%", style.FooterValue, GUILayout.Width(48f * s));
+            GUILayout.FlexibleSpace();
+            GUILayout.Label(plugin.Options.Toggle.Value + " 收起", style.FooterLabel, GUILayout.Width(72f * s));
+            GUILayout.EndHorizontal();
         }
 
-        // A control the rewrite has not reached yet: shown disabled so the layout
-        // matches the old panel without pretending the behaviour is wired up.
+        private void DrawResizeGrip(Rect rect)
+        {
+            if (Event.current.type != EventType.Repaint) return;
+            float s = scale;
+            float x = rect.xMax, y = rect.yMax;
+            for (int i = 0; i < 3; i++)
+            {
+                float inset = (6f + i * 5f) * s;
+                float length = (5f + i * 3f) * s;
+                GUI.DrawTexture(new Rect(x - inset - length, y - inset, Mathf.Max(2f, 2f * s), Mathf.Max(2f, 2f * s)), style.AccentSoft);
+                GUI.DrawTexture(new Rect(x - inset, y - inset - length, Mathf.Max(2f, 2f * s), Mathf.Max(2f, 2f * s)), style.AccentSoft);
+            }
+            Vector2 mouse = Event.current.mousePosition;
+            Rect grip = new Rect(x - 26f * s, y - 26f * s, 26f * s, 26f * s);
+            if (Event.current.type == EventType.MouseDown && grip.Contains(mouse))
+            { resizing = true; dragStart = GUIUtility.GUIToScreenPoint(mouse); sizeStart = new Vector2(windowRect.width, windowRect.height); Event.current.Use(); }
+            if (resizing && Event.current.type == EventType.MouseDrag)
+            {
+                Vector2 delta = GUIUtility.GUIToScreenPoint(Event.current.mousePosition) - dragStart;
+                windowRect.width = Mathf.Max(MinWidth * scale, sizeStart.x + delta.x);
+                windowRect.height = Mathf.Max(MinHeight * scale, sizeStart.y + delta.y);
+                Event.current.Use();
+            }
+            if (resizing && Event.current.type == EventType.MouseUp)
+            { resizing = false; SaveGeometry(); Event.current.Use(); }
+        }
+
+        private void DrawBadge()
+        {
+            Rect badge = BadgeRect();
+            if (!loggedBadge) { loggedBadge = true; plugin.Log("Badge: " + Describe()); }
+            bool hover = badge.Contains(Event.current.mousePosition);
+            GUI.DrawTexture(badge, draggingBadge ? style.BadgeActive : hover ? style.BadgeHover : style.Badge, ScaleMode.StretchToFill, true);
+            float s = scale;
+            float line = Mathf.Max(1f, s);
+            Texture2D edge = hover || draggingBadge ? style.Accent : style.Border;
+            GUI.DrawTexture(new Rect(badge.x, badge.y, badge.width, line), edge);
+            GUI.DrawTexture(new Rect(badge.x, badge.yMax - line, badge.width, line), edge);
+            GUI.DrawTexture(new Rect(badge.x, badge.y, line, badge.height), edge);
+            GUI.DrawTexture(new Rect(badge.xMax - line, badge.y, line, badge.height), edge);
+            float inset = Mathf.Min(5f * s, badge.height * .06f);
+            float rollH = Mathf.Min(8f * s, badge.height * .10f);
+            float rollW = Mathf.Max(1f, badge.width - 10f * s);
+            float rollX = badge.x + (badge.width - rollW) * .5f;
+            GUI.DrawTexture(new Rect(rollX, badge.y + inset, rollW, rollH), style.ScrollRoll, ScaleMode.StretchToFill, true);
+            GUI.DrawTexture(new Rect(rollX, badge.yMax - inset - rollH, rollW, rollH), style.ScrollRoll, ScaleMode.StretchToFill, true);
+            float footerH = Mathf.Min(16f * s, badge.height * .14f);
+            float footerY = badge.yMax - inset - rollH - footerH - 5f * s;
+            float titleY = badge.y + inset + rollH + 8f * s;
+            float titleH = Mathf.Max(1f, footerY - titleY - 6f * s);
+            float sideInset = Mathf.Min(7f * s, badge.width * .18f);
+            GUI.DrawTexture(new Rect(badge.x + sideInset, titleY, line, titleH), style.AccentSoft);
+            GUI.DrawTexture(new Rect(badge.xMax - sideInset - line, titleY, line, titleH), style.AccentSoft);
+            var title = new GUIStyle(GUI.skin.label)
+            { font = style.BadgeFont ?? style.UiFont, fontSize = Mathf.Max(16, (int)(18 * s)), alignment = TextAnchor.MiddleCenter, wordWrap = false };
+            title.normal.textColor = new Color(.92f, .88f, .79f, 1f);
+            GUI.Label(new Rect(badge.x + 3f * s, titleY, badge.width - 6f * s, titleH), "萬\n象\n錄", title);
+            float tagWidth = Mathf.Max(1f, badge.width - 14f * s);
+            Rect tagRect = new Rect(badge.x + (badge.width - tagWidth) * .5f, footerY, tagWidth, footerH);
+            GUI.DrawTexture(new Rect(badge.x + 10f * s, footerY - 3f * s, Mathf.Max(1f, badge.width - 20f * s), line), style.AccentSoft);
+            GUI.DrawTexture(tagRect, style.BambooTag, ScaleMode.StretchToFill, true);
+            var key = new GUIStyle(GUI.skin.label) { fontSize = Mathf.Max(10, (int)(12 * s)), alignment = TextAnchor.MiddleCenter };
+            key.normal.textColor = new Color(.83f, .64f, .35f, 1f);
+            GUI.Label(tagRect, plugin.Options.Toggle.Value.ToString(), key);
+
+            Vector2 mouse = Event.current.mousePosition;
+            if (Event.current.type == EventType.MouseDown && badge.Contains(mouse))
+            { draggingBadge = true; badgeMoved = false; dragStart = GUIUtility.GUIToScreenPoint(mouse); Event.current.Use(); }
+            if (draggingBadge && Event.current.type == EventType.MouseDrag)
+            {
+                Vector2 delta = GUIUtility.GUIToScreenPoint(Event.current.mousePosition) - dragStart;
+                if (Mathf.Abs(delta.x) + Mathf.Abs(delta.y) > 6f) badgeMoved = true;
+                if (badgeMoved)
+                {
+                    badgePosition += delta; dragStart = GUIUtility.GUIToScreenPoint(Event.current.mousePosition);
+                    badgePosition.x = Mathf.Clamp(badgePosition.x, 8f, Mathf.Max(8f, Screen.width - badge.width - 8f));
+                    badgePosition.y = Mathf.Clamp(badgePosition.y, 8f, Mathf.Max(8f, Screen.height - badge.height - 8f));
+                }
+                Event.current.Use();
+            }
+            if (draggingBadge && Event.current.type == EventType.MouseUp)
+            {
+                draggingBadge = false;
+                SaveBadge();
+                if (!badgeMoved) Visible = true;
+                Event.current.Use();
+            }
+        }
+
+        private void EnsureBlocker()
+        {
+            if (blocker != null) { blocker.SetActive(true); return; }
+            blocker = new GameObject("MortalHelper.PointerShield", typeof(Canvas), typeof(GraphicRaycaster));
+            UnityEngine.Object.DontDestroyOnLoad(blocker);
+            var canvas = blocker.GetComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay; canvas.sortingOrder = 32760;
+            var child = new GameObject("Block", typeof(RectTransform), typeof(Image));
+            child.transform.SetParent(blocker.transform, false);
+            var rect = (RectTransform)child.transform;
+            rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one;
+            rect.offsetMin = rect.offsetMax = Vector2.zero;
+            child.GetComponent<Image>().color = Color.clear;
+        }
+
+        private void Section(string title)
+        {
+            GUILayout.Space(5f * scale);
+            GUILayout.BeginHorizontal(GUILayout.Height(26f * scale));
+            GUILayout.Label("◇ " + title, style.SectionTitle);
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            Rule();
+            GUILayout.Space(4f * scale);
+        }
+
+        private void Rule()
+        {
+            Rect r = GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true), GUILayout.Height(1f));
+            GUI.DrawTexture(r, style.AccentSoft);
+        }
+
+        private bool DrawSwitchRow(string label, bool value, string hint = null)
+        {
+            GUILayout.BeginHorizontal(GUILayout.MinHeight(28f * scale));
+            GUILayout.Label(label, style.Entry, GUILayout.ExpandWidth(true));
+            bool next = GUILayout.Toggle(value, GUIContent.none, style.SwitchTrack,
+                GUILayout.Width(52f * scale), GUILayout.Height(25f * scale));
+            GUILayout.Label(next ? "开" : "关", style.SwitchState, GUILayout.Width(22f * scale));
+            GUILayout.EndHorizontal();
+            if (!string.IsNullOrEmpty(hint)) GUILayout.Label(hint, style.Description);
+            Rule();
+            return next;
+        }
+
         private void Unported(string label, string description)
         {
-            bool previousEnabled = GUI.enabled;
+            bool previous = GUI.enabled;
             GUI.enabled = false;
-            GUILayout.Toggle(false, label);
-            GUI.enabled = previousEnabled;
+            DrawSwitchRow(label, false);
+            GUI.enabled = previous;
             Note(description);
         }
 
-        private void Note(string text) { GUILayout.Label(text, Wrap()); }
-
-        private static GUIStyle Wrap() { return new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false }; }
-        private static GUIStyle Header() { return new GUIStyle(GUI.skin.label) { fontSize = 18, fontStyle = FontStyle.Bold }; }
-        private static GUIStyle Subtle() { return new GUIStyle(GUI.skin.label) { fontSize = 15, wordWrap = true }; }
+        private void Note(string text) { GUILayout.Label(text, style.Description); }
 
         private static string DisplayName(GameStat stat)
         {
@@ -430,33 +754,33 @@ namespace MortalHelper.Game
 
         internal string Describe()
         {
-            return "visible=" + visible + " bounds=" + bounds.x.ToString("0") + "," + bounds.y.ToString("0") +
-                " " + bounds.width.ToString("0") + "x" + bounds.height.ToString("0") +
+            return "open=" + open + " window=" + windowRect.x.ToString("0") + "," + windowRect.y.ToString("0") +
+                " " + windowRect.width.ToString("0") + "x" + windowRect.height.ToString("0") +
+                " badge=" + badgePosition.x.ToString("0") + "," + badgePosition.y.ToString("0") +
                 " screen=" + Screen.width + "x" + Screen.height;
         }
 
-        private void SaveBounds()
+        private void SaveGeometry()
         {
-            plugin.Options.X.Value = bounds.x; plugin.Options.Y.Value = bounds.y;
-            plugin.Options.Width.Value = bounds.width; plugin.Options.Height.Value = bounds.height;
+            var rect = ClampWindow();
+            windowRect = rect;
+            plugin.Options.X.Value = rect.x; plugin.Options.Y.Value = rect.y;
+            plugin.Options.Width.Value = rect.width; plugin.Options.Height.Value = rect.height;
+            plugin.Options.Config.Save();
         }
 
-        private void EnsureBlocker()
+        private void SaveBadge()
         {
-            if (blocker != null) { blocker.SetActive(Visible); return; }
-            blocker = new GameObject("MortalHelper.PointerShield", typeof(Canvas), typeof(GraphicRaycaster));
-            UnityEngine.Object.DontDestroyOnLoad(blocker);
-            var canvas = blocker.GetComponent<Canvas>(); canvas.renderMode = RenderMode.ScreenSpaceOverlay; canvas.sortingOrder = 32760;
-            var child = new GameObject("Block", typeof(RectTransform), typeof(Image)); child.transform.SetParent(blocker.transform, false);
-            var rect = (RectTransform)child.transform; rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one;
-            rect.offsetMin = rect.offsetMax = Vector2.zero; child.GetComponent<Image>().color = Color.clear;
+            plugin.Options.BadgeX.Value = badgePosition.x;
+            plugin.Options.BadgeY.Value = badgePosition.y;
+            plugin.Options.Config.Save();
         }
 
         internal void ClearSelection() { selected = null; relationship = null; selectedItem = null; }
         internal void Dispose()
         {
             if (blocker != null) UnityEngine.Object.Destroy(blocker);
-            if (skin != null) UnityEngine.Object.Destroy(skin);
+            style.Dispose();
         }
     }
 }

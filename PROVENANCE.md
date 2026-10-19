@@ -41,7 +41,9 @@ MIT 存档槽扩展可依法保留原作者署名；知天命的 GPLv3 代码如
 
 ## 前端对齐核对（2026-10-19）
 
-用户要求「只重构后端，前端表现与旧版一致」。为此读取了旧仓库的界面文案与配置默认值（`DicePlugin.cs`、`PanelSettings.cs`、`GroupBattleControls.cs`、`DuelAssistControls.cs`、`ProgressionControls.cs`、`RelationshipEditor.cs`、`NumericEditor.cs`）以及 `README.md`、`docs/使用说明.md` 的行为描述，**只提取页面结构、控件文案与默认值，没有复制实现代码**。重写版的面板是重新组织编写的，页名与文案与旧版相同属于兼容性要求。这一接触范围扩大了旧代码的阅读面，同样不能据此声称洁净室开发。逐项对照见 `outputs/前端对齐核对-2026-10-19.md`。
+用户要求「只重构后端，前端表现与旧版一致」，并说明**旧面板界面由用户本人设计、授权完全复刻**。因此重写版按既有设计复现视觉：羊皮卷配色与自绘边框、卷轴装饰、72×34 开关贴图、页签纸面高亮、底部透明度滑条与缩放握把、竖排楷体「萬象錄」徽章、展开/收起动画。样式与贴图生成为重新编写的代码，**没有照搬旧文件的业务逻辑**。
+
+实现过程中读取了旧仓库的界面文案与配置默认值（`DicePlugin.cs`、`PanelSettings.cs`、`GroupBattleControls.cs`、`DuelAssistControls.cs`、`ProgressionControls.cs`、`RelationshipEditor.cs`、`NumericEditor.cs`）以及 `README.md`、`docs/使用说明.md` 的行为描述，只提取页面结构、控件文案、配色与尺寸。这一接触范围扩大了旧代码的阅读面，不能据此声称洁净室开发。逐项对照见 `outputs/前端对齐核对-2026-10-19.md`。
 
 ## 相似度核查（可复现）
 
