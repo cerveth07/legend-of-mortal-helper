@@ -498,10 +498,12 @@ namespace MortalHelper.Game
             if (growthView == 1) { Relationships(); return; }
             Note("编辑已登场角色的好感度与心上人，正常存档后保留。");
             Section("练功");
-            Unported("练功消耗不减", "保留练功点数、本次次数和负向升级消耗；武功修炼条件仍须满足。");
+            plugin.Options.SkillFree.Value = DrawSwitchRow("练功消耗不减", plugin.Options.SkillFree.Value,
+                "练功结束后把武学点数恢复到操作前的值；武功修炼条件仍须满足。");
             Unported("快速练功", "每次正常练功完成当前一级进度，仍执行原生升级奖励与条件。");
             Section("锻造与炼丹");
-            Unported("锻造炼丹消耗不减", "锻造炼丹不扣点数、金钱与本次次数，资源为零也可操作；不解锁研发条件。");
+            plugin.Options.ForgeFree.Value = DrawSwitchRow("锻造炼丹消耗不减", plugin.Options.ForgeFree.Value,
+                "操作结束后把点数与金钱恢复到操作前的值；不解锁研发条件。");
             Unported("快速锻造炼丹", "每次操作完成当前一级进度；保留原生等级上限与奖励。");
             Section("日常行动");
             plugin.Options.UnlimitedActions.Value = DrawSwitchRow("无限日常行动点", plugin.Options.UnlimitedActions.Value,

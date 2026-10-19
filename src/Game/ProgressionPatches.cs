@@ -1,0 +1,116 @@
+using System.Collections.Generic;
+using HarmonyLib;
+using Mortal.Core;
+using Mortal.Free;
+
+namespace MortalHelper.Game
+{
+    // Progression conveniences expressed as patches on the game's own panels.
+    // Every switch is off by default and every hook only stashes and restores a
+    // value the game itself owns, so nothing here writes saves.
+    internal static class ProgressionState
+    {
+        internal static int MartialPoint = -1;
+        internal static int CraftPoint = -1;
+        internal static int CraftMoney = -1;
+
+        internal static bool FreeSkill => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.SkillFree.Value;
+        internal static bool FreeForge => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.ForgeFree.Value;
+        internal static bool EndlessActions => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.UnlimitedActions.Value;
+        internal static bool MaxAffection => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.MaxAffection.Value;
+
+        private static GameStat Stat(object panel, string name)
+        {
+            try { return GameAccess.Field<GameStat>(panel, name); }
+            catch (System.Exception) { return null; }
+        }
+
+        internal static void StashSkill(MartialPanel panel)
+        {
+            var stat = Stat(panel, "_martialPoint");
+            MartialPoint = stat == null ? -1 : stat.Value;
+        }
+
+        internal static void RestoreSkill(MartialPanel panel)
+        {
+            if (MartialPoint < 0) return;
+            var stat = Stat(panel, "_martialPoint");
+            if (stat != null && stat.Value != MartialPoint) stat.SetValue(MartialPoint);
+            MartialPoint = -1;
+        }
+
+        internal static void StashForge(UpgradePanel panel)
+        {
+            var point = Stat(panel, "_pointData");
+            var money = Stat(panel, "_moneyData");
+            CraftPoint = point == null ? -1 : point.Value;
+            CraftMoney = money == null ? -1 : money.Value;
+        }
+
+        internal static void RestoreForge(UpgradePanel panel)
+        {
+            var point = Stat(panel, "_pointData");
+            var money = Stat(panel, "_moneyData");
+            if (CraftPoint >= 0 && point != null && point.Value != CraftPoint) point.SetValue(CraftPoint);
+            if (CraftMoney >= 0 && money != null && money.Value != CraftMoney) money.SetValue(CraftMoney);
+            CraftPoint = -1; CraftMoney = -1;
+        }
+    }
+
+    [HarmonyPatch(typeof(MartialPanel), "HandleLearnNextItem")]
+    internal static class SkillSpendPatch
+    {
+        private static void Prefix(MartialPanel __instance)
+        {
+            if (ProgressionState.FreeSkill) ProgressionState.StashSkill(__instance);
+        }
+        private static System.Exception Finalizer(MartialPanel __instance, System.Exception __exception)
+        {
+            if (ProgressionState.FreeSkill) ProgressionState.RestoreSkill(__instance);
+            return __exception;
+        }
+    }
+
+    [HarmonyPatch(typeof(MartialPanel), "CanUseLearnButton")]
+    internal static class SkillButtonPatch
+    {
+        private static void Postfix(ref bool __result)
+        {
+            if (ProgressionState.FreeSkill) __result = true;
+        }
+    }
+
+    [HarmonyPatch(typeof(UpgradePanel), "HandleUpgradeNextItem")]
+    internal static class ForgeSpendPatch
+    {
+        private static void Prefix(UpgradePanel __instance)
+        {
+            if (ProgressionState.FreeForge) ProgressionState.StashForge(__instance);
+        }
+        private static System.Exception Finalizer(UpgradePanel __instance, System.Exception __exception)
+        {
+            if (ProgressionState.FreeForge) ProgressionState.RestoreForge(__instance);
+            return __exception;
+        }
+    }
+
+    [HarmonyPatch(typeof(PositionController), "HasActionPoint")]
+    internal static class ActionPointPatch
+    {
+        private static void Postfix(ref bool __result)
+        {
+            if (ProgressionState.EndlessActions) __result = true;
+        }
+    }
+
+    [HarmonyPatch(typeof(RelationshipStat), "SetActive")]
+    internal static class AffectionActivatePatch
+    {
+        private static void Postfix(RelationshipStat __instance)
+        {
+            if (!ProgressionState.MaxAffection || __instance == null || !__instance.Active) return;
+            int maximum = GameAccess.Field<int>(__instance, "_max");
+            if (maximum > 0 && __instance.Value < maximum) __instance.SetValue(maximum);
+        }
+    }
+}

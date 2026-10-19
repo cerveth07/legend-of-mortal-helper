@@ -12,7 +12,7 @@
 - 物品数量编辑：`ItemDatabase` 四类物品（书籍/杂物/贵重品/消耗品），本地化名称取自 `LocalizationManager`，应用前复核当前数量；默认只列已有物品，勾选后才显示 0 数量条目（等同于直接生成）；与属性、好感一样只在自由活动空闲时开放。
 - 游戏速度：0.25～5 倍滑杆，写入 `Time.timeScale` 并保存配置；只在数值变化时应用，避免和原生暂停/慢动作互相覆盖；插件卸载时还原为 1 倍。
 - 天命控制三态：`Mode` 0 自然 / 1 指定点数 / 2 直接选项；点数输入仅在模式 1 生效，选项点击仅在模式 2 生效；基础点数默认 50。
-- 养成辅助（部分）：`无限日常行动点`（`GameStatType.行動次數` 维持 ≥1）、`最高好感`（`RelationshipStat._max` 维持上限），只在自由活动场景空闲时运行。
+- 养成辅助：`无限日常行动点`（`PositionController.HasActionPoint` 放行 + `GameStatType.行動次數` 维持 ≥1）、`最高好感`（`RelationshipStat.SetActive` 补满 + 自由活动维持上限）、`练功消耗不减`（`MartialPanel.HandleLearnNextItem` 前后暂存/恢复 `_martialPoint`）、`锻造炼丹消耗不减`（`UpgradePanel.HandleUpgradeNextItem` 前后恢复 `_pointData`/`_moneyData`）。「快速练功 / 快速锻造炼丹」尚未接入。
 - 心上人：十项候选写入 `GameStatType.愛人`（值取 `RelationshipStatType` 编号）；未实机验证。
 - 界面：透明度 40%～100%；四边/角落拖拽缩放（原始鼠标轮询 + 高亮边）；标题栏拖动。
 - 群战辅助（`Mortal.Battle`，全部默认关闭）：生命 `Character.TakeDamage` 前缀、气力 `CharacterMana.Modify` 补满、技能 `SkillButton.CanProcess` 放行、剩余时间 `GameLevelManager._currentSessionTime` 维持在最大值、敌方受伤即倒地。玩家/敌人用 `Character._entity.CurrentType` 区分，避免误伤友军与中立单位。四个补丁目标在本机启动日志中解析成功，但**战斗内的实际效果尚未验证**。
