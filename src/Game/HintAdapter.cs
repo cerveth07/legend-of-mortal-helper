@@ -60,25 +60,61 @@ namespace MortalHelper.Game
         {
             var options = Plugin.Instance == null ? null : Plugin.Instance.Options;
             if (!Plugin.Active || options == null || !options.Hints.Value || Plugin.Instance.Panel.Visible || hovered == null ||
-                !hovered.isActiveAndEnabled || hovered.Revision != Revision || hovered.Source == null) return;
-            // The old panel had one master switch plus independent effect/condition
-            // preferences; keep them independent so either can be used alone.
+                !hovered.isActiveAndEnabled || hovered.Revision != Revision || hovered.Source == null ||
+                Event.current.type != EventType.Repaint) return;
+            // Same two sections and wording as the previous overlay: a native
+            // condition block and an "已确认部分" effect block, either optional.
             var output = new StringBuilder();
             if (options.ShowConditions.Value && hovered.Condition != null && !string.IsNullOrWhiteSpace(hovered.Condition.text))
-                output.Append("原生条件：").Append(hovered.Condition.text).AppendLine();
+                output.Append("选择条件\n").Append(hovered.Condition.text);
             if (options.ShowEffects.Value)
             {
                 string effects = Description(hovered.Source.text);
-                if (effects != null) output.Append(effects);
+                if (!string.IsNullOrWhiteSpace(effects))
+                {
+                    if (output.Length > 0) output.Append("\n\n");
+                    output.Append("选择效果（已确认部分）\n").Append(effects);
+                }
             }
             string text = output.ToString();
             if (string.IsNullOrWhiteSpace(text)) return;
-            var style = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft, wordWrap = true, fontSize = 18, richText = false };
-            float width = Mathf.Min(440, Screen.width - 24);
-            float height = Mathf.Min(Screen.height - 24, style.CalcHeight(new GUIContent(text), width) + 16);
-            Vector2 mouse = Event.current.mousePosition;
-            GUI.Box(new Rect(Mathf.Clamp(mouse.x + 20,12,Screen.width-width-12),
-                Mathf.Clamp(mouse.y + 16,12,Screen.height-height-12),width,height),text,style);
+            var style = new GUIStyle(GUI.skin.box)
+            {
+                wordWrap = true, richText = false, alignment = TextAnchor.UpperLeft, fontSize = 18,
+                padding = new RectOffset(14, 14, 12, 12)
+            };
+            if (hovered.Source.font != null) style.font = hovered.Source.font;
+            float width = Mathf.Min(360, Screen.width - 24);
+            float height = style.CalcHeight(new GUIContent(text), width);
+            if (width < 140 || height > Screen.height - 24) return;
+            Rect anchor = ScreenRect(hovered.transform as RectTransform);
+            Rect[] candidates = {
+                new Rect(anchor.xMax + 12, anchor.y, width, height),
+                new Rect(anchor.xMin - width - 12, anchor.y, width, height),
+                new Rect(anchor.x, anchor.yMin - height - 12, width, height),
+                new Rect(anchor.x, anchor.yMax + 12, width, height)
+            };
+            foreach (var candidate in candidates)
+            {
+                Rect box = candidate;
+                box.x = Mathf.Clamp(box.x, 12, Mathf.Max(12, Screen.width - width - 12));
+                box.y = Mathf.Clamp(box.y, 12, Mathf.Max(12, Screen.height - height - 12));
+                if (box.Overlaps(anchor)) continue;
+                GUI.Box(box, text, style);
+                return;
+            }
+        }
+
+        private static Rect ScreenRect(RectTransform rect)
+        {
+            if (rect == null) return new Rect(0, 0, Screen.width, Screen.height);
+            var corners = new Vector3[4];
+            rect.GetWorldCorners(corners);
+            var canvas = rect.GetComponentInParent<Canvas>();
+            Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
+            Vector2 a = RectTransformUtility.WorldToScreenPoint(camera, corners[0]);
+            Vector2 b = RectTransformUtility.WorldToScreenPoint(camera, corners[2]);
+            return Rect.MinMaxRect(a.x, Screen.height - b.y, b.x, Screen.height - a.y);
         }
     }
 
