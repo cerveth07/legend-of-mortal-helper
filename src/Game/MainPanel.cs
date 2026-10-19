@@ -16,6 +16,10 @@ namespace MortalHelper.Game
         private Vector2 scroll;
         private GameStat selected;
         private int expectedValue;
+        private GameItemType itemType = GameItemType.雜物;
+        private ItemData selectedItem;
+        private int expectedItemCount;
+        private string itemValue = "", itemSearch = "";
         private string value = "", search = "";
         private RelationshipStat relationship;
         private string relationshipValue = "";
@@ -101,14 +105,15 @@ namespace MortalHelper.Game
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("收起",GUILayout.Width(70))) Visible = false;
             GUILayout.EndHorizontal();
-            page = GUILayout.Toolbar(page, new[] { "剧情", "单挑", "属性", "关系", "开发状态" });
+            page = GUILayout.Toolbar(page, new[] { "剧情", "单挑", "属性", "关系", "物品", "开发状态" });
             scroll = GUILayout.BeginScrollView(scroll);
             bool previousEnabled = GUI.enabled;
-            if (page != 4) GUI.enabled = plugin.Options.Enabled.Value && plugin.Gate.CanInteract;
+            if (page != 5) GUI.enabled = plugin.Options.Enabled.Value && plugin.Gate.CanInteract;
             if (page == 0) Story();
             else if (page == 1) Duel();
             else if (page == 2) Stats();
             else if (page == 3) Relationships();
+            else if (page == 4) Items();
             else Diagnostics();
             GUI.enabled = previousEnabled;
             GUILayout.EndScrollView();
@@ -184,6 +189,58 @@ namespace MortalHelper.Game
             }
         }
 
+        private void Items()
+        {
+            GUILayout.Label("物品数量会直接影响剧情、交易与战斗；请使用备份周目。当前仅在自由活动界面空闲时开放。", Wrap());
+            if (!GameAccess.CanEdit) { GUILayout.Label("请先进入自由活动场景并关闭游戏内交互面板。",Wrap()); selectedItem = null; return; }
+            var database = ItemDatabase.Instance;
+            if (database == null) { GUILayout.Label("物品数据库尚未就绪。",Wrap()); return; }
+            int tab = GUILayout.Toolbar((int)itemType - 1, new[] { "書籍", "雜物", "貴重品", "消耗品" });
+            itemType = (GameItemType)(tab + 1);
+            GUILayout.BeginHorizontal(); GUILayout.Label("筛选",GUILayout.Width(45)); itemSearch = GUILayout.TextField(itemSearch,80); GUILayout.EndHorizontal();
+            ItemDataCollection collection = tab == 0 ? database.Books : tab == 1 ? database.Miscs
+                : tab == 2 ? database.Special : database.Consumables;
+            if (collection == null || collection.List == null) { GUILayout.Label("该分类物品列表尚未就绪。",Wrap()); return; }
+            foreach (var item in collection.List)
+            {
+                if (item == null) continue;
+                string label = ItemName(item) + "   " + item.CurrentCount;
+                if (!string.IsNullOrEmpty(itemSearch) && label.IndexOf(itemSearch,StringComparison.OrdinalIgnoreCase)<0) continue;
+                if (GUILayout.Button((selectedItem == item ? "● " : "") + label))
+                { selectedItem = item; expectedItemCount = item.CurrentCount; itemValue = expectedItemCount.ToString(); }
+            }
+            if (selectedItem == null) return;
+            GUILayout.Space(12);
+            GUILayout.Label(ItemName(selectedItem) + "：当前 " + selectedItem.CurrentCount + "，可设为 0～999999");
+            itemValue = GUILayout.TextField(itemValue,12);
+            if (GUILayout.Button("应用到所选物品"))
+            {
+                int number;
+                if (!GameAccess.CanEdit || selectedItem.CurrentCount != expectedItemCount)
+                { plugin.Status = "物品状态已改变，请重新选择。"; selectedItem = null; return; }
+                if (!int.TryParse(itemValue,out number) || number<0 || number>999999)
+                { plugin.Status = "输入不在允许范围内。"; return; }
+                plugin.Gate.NotifyMutation("修改物品 " + selectedItem.Id);
+                selectedItem.SetCount(number); expectedItemCount = selectedItem.CurrentCount;
+                plugin.Status = "已修改物品数量；请通过原生存档保留。";
+            }
+        }
+
+        private static string ItemName(ItemData item)
+        {
+            try
+            {
+                var manager = LocalizationManager.Instance;
+                if (manager != null && manager.LocaleResolver != null)
+                {
+                    string text = manager.LocaleResolver.GetString(item.GetNameKey());
+                    if (!string.IsNullOrEmpty(text)) return text;
+                }
+            }
+            catch (Exception) { }
+            return item.Id;
+        }
+
         private void Relationships()
         {
             if (!GameAccess.CanEdit) { GUILayout.Label("请先进入自由活动场景并关闭游戏内交互面板。",Wrap()); relationship = null; return; }
@@ -214,7 +271,7 @@ namespace MortalHelper.Game
         {
             GUILayout.Label("该版本是重建中的开发候选，尚未完成 Unity 实机验收。", Wrap());
             GUILayout.Space(10);
-            GUILayout.Label("已接入：独立配置、主面板、骰子控制、受限脚本提示、属性与好感编辑、单挑辅助、单挑回想。",Wrap());
+            GUILayout.Label("已接入：独立配置、主面板、骰子控制、受限脚本提示、属性/好感/物品数量编辑、单挑辅助、单挑回想。",Wrap());
             GUILayout.Label("恢复底层：固定字段文件格式、完整性检查、大小限制、单文件备份和恢复状态机。",Wrap());
             GUILayout.Label("剧情与单挑恢复尚未接入游戏，当前不会读取旧 .loms / .duel，也不会改写原生存档。",Wrap());
             GUILayout.Space(10);
