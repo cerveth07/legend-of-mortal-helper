@@ -5,7 +5,8 @@ namespace MortalHelper.Game
 {
     internal sealed class Settings
     {
-        public readonly ConfigEntry<bool> Enabled, Dice, Hints;
+        public readonly ConfigEntry<bool> Enabled, Dice, Hints, ShowEffects, ShowConditions;
+        public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
         public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage;
         public readonly ConfigEntry<bool> GroupHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
         public readonly ConfigEntry<string> Point;
@@ -18,7 +19,9 @@ namespace MortalHelper.Game
             Enabled = config.Bind("General", "Enabled", true, "启用本插件辅助；不会撤销已应用的修改。");
             Toggle = config.Bind("General", "PanelKey", KeyCode.Tab, "展开或收起面板。");
             Dice = config.Bind("Story", "DiceControls", true, "在原生判定页显示点数输入和直接选项。");
-            Hints = config.Bind("Story", "EffectHints", false, "显示可确认的脚本效果（包含剧透）。");
+            Hints = config.Bind("Story", "EffectHints", false, "选项悬停提示总开关；关闭时保留两个子项偏好。");
+            ShowEffects = config.Bind("Story", "ShowEffects", false, "悬停选项时显示可靠的选择效果，包含剧透。");
+            ShowConditions = config.Bind("Story", "ShowConditions", false, "悬停选项时显示已确认的原生选择条件，包含剧透。");
             Point = config.Bind("Story", "BasePoint", "", "空白为自然掷骰；整数按每次范围校验。");
             DuelHealth = config.Bind("Duel", "KeepHealth", false, "单挑主角生命不因普通扣减降低。");
             DuelStamina = config.Bind("Duel", "KeepStamina", false, "单挑主角气力不因普通扣减降低。");
@@ -33,6 +36,10 @@ namespace MortalHelper.Game
             Y = config.Bind("Window", "Y", 64f, "窗口上边距。");
             Width = config.Bind("Window", "Width", 640f, "窗口宽度。");
             Height = config.Bind("Window", "Height", 580f, "窗口高度。");
+            Opacity = config.Bind("Window", "Opacity", 0.85f,
+                new ConfigDescription("面板背景透明度，范围 65%～100%。", new AcceptableValueRange<float>(0.65f, 1f)));
+            BadgeX = config.Bind("Window", "BadgeX", 12f, "收起徽章左上角 X 坐标。");
+            BadgeY = config.Bind("Window", "BadgeY", 12f, "收起徽章左上角 Y 坐标。");
             Speed = config.Bind("Edits", "GameSpeed", 1f,
                 new ConfigDescription("游戏速度倍率，1 为默认。原生暂停与慢动作由游戏自己管理。",
                     new AcceptableValueRange<float>(0.25f, 5f)));

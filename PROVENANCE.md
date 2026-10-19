@@ -39,6 +39,10 @@
 
 MIT 存档槽扩展可依法保留原作者署名；知天命的 GPLv3 代码如决定复用，则另行评估并遵守 GPL。当前源码没有引入它们。无需为了采用相同功能思想而删除对原作者的历史致谢，但致谢不能替代授权。
 
+## 前端对齐核对（2026-10-19）
+
+用户要求「只重构后端，前端表现与旧版一致」。为此读取了旧仓库的界面文案与配置默认值（`DicePlugin.cs`、`PanelSettings.cs`、`GroupBattleControls.cs`、`DuelAssistControls.cs`、`ProgressionControls.cs`、`RelationshipEditor.cs`、`NumericEditor.cs`）以及 `README.md`、`docs/使用说明.md` 的行为描述，**只提取页面结构、控件文案与默认值，没有复制实现代码**。重写版的面板是重新组织编写的，页名与文案与旧版相同属于兼容性要求。这一接触范围扩大了旧代码的阅读面，同样不能据此声称洁净室开发。逐项对照见 `outputs/前端对齐核对-2026-10-19.md`。
+
 ## 相似度核查（可复现）
 
 工具：`tools/provenance_scan.py`。它去掉注释，按标识符与标点切词，对每个新文件计算与旧仓库每个 `.cs` 的 8-token shingle 包含率，并给出最长公共 token 片段。命令：

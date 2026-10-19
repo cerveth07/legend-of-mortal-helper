@@ -58,11 +58,20 @@ namespace MortalHelper.Game
 
         internal static void Draw()
         {
-            if (!Plugin.Active || !Plugin.Instance.Options.Hints.Value || Plugin.Instance.Panel.Visible || hovered == null ||
+            var options = Plugin.Instance == null ? null : Plugin.Instance.Options;
+            if (!Plugin.Active || options == null || !options.Hints.Value || Plugin.Instance.Panel.Visible || hovered == null ||
                 !hovered.isActiveAndEnabled || hovered.Revision != Revision || hovered.Source == null) return;
-            string text = Description(hovered.Source.text);
-            if (hovered.Condition != null && !string.IsNullOrWhiteSpace(hovered.Condition.text))
-                text = "原生条件：" + hovered.Condition.text + "\n" + text;
+            // The old panel had one master switch plus independent effect/condition
+            // preferences; keep them independent so either can be used alone.
+            var output = new StringBuilder();
+            if (options.ShowConditions.Value && hovered.Condition != null && !string.IsNullOrWhiteSpace(hovered.Condition.text))
+                output.Append("原生条件：").Append(hovered.Condition.text).AppendLine();
+            if (options.ShowEffects.Value)
+            {
+                string effects = Description(hovered.Source.text);
+                if (effects != null) output.Append(effects);
+            }
+            string text = output.ToString();
             if (string.IsNullOrWhiteSpace(text)) return;
             var style = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft, wordWrap = true, fontSize = 18, richText = false };
             float width = Mathf.Min(440, Screen.width - 24);

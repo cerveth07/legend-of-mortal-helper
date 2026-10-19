@@ -9,7 +9,7 @@ using UnityEngine.SceneManagement;
 
 namespace MortalHelper.Game
 {
-    [BepInPlugin("cerveth.mortal.helper", "活侠助手 · 独立重建", "0.1.0")]
+    [BepInPlugin("cerveth.mortal.helper", "活侠·万象录", "0.1.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal static Plugin Instance;
