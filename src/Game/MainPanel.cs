@@ -126,7 +126,11 @@ namespace MortalHelper.Game
         private void EnsureScale()
         {
             float next = Mathf.Clamp(Mathf.Min(Screen.width / 1920f, Screen.height / 1080f), .85f, 1.35f);
-            if (style.UiFont == null) style.UiFont = FindUiFont();
+            if (style.UiFont == null)
+            {
+                style.UiFont = CreateBodyFont();
+                plugin.Log("Body font: " + (style.UiFont == null ? "game default" : style.UiFont.name));
+            }
             if (Mathf.Abs(next - scale) < .001f && lastWidth == Screen.width && lastHeight == Screen.height &&
                 style.Skin != null) return;
             scale = next; lastWidth = Screen.width; lastHeight = Screen.height;
@@ -134,11 +138,41 @@ namespace MortalHelper.Game
             style.SetOpacity(opacity);
         }
 
-        private static Font FindUiFont()
+        // The game ships only a calligraphic CJK font plus Arial, and Unity does not
+        // fall back glyphs for dynamic fonts. Load a normal sans CJK face from the
+        // OS for panel text; the Kai font stays on the vertical badge title.
+        private static Font CreateBodyFont()
         {
+            try
+            {
+                var font = Font.CreateDynamicFontFromOSFont(new[]
+                {
+                    "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑", "SimHei", "黑体",
+                    "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Meiryo", "Yu Gothic UI"
+                }, 18);
+                if (font != null) return font;
+            }
+            catch (Exception) { }
+            return FindGameFont();
+        }
+
+        private static Font FindGameFont()
+        {
+            Font fallback = null;
             foreach (var font in Resources.FindObjectsOfTypeAll<Font>())
-                if (font != null && font.HasCharacter('天')) return font;
-            return null;
+            {
+                if (font == null || !font.HasCharacter('天')) continue;
+                if (IsCalligraphic(font.name)) { if (fallback == null) fallback = font; continue; }
+                return font;
+            }
+            return fallback;
+        }
+
+        private static bool IsCalligraphic(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string lower = name.ToLowerInvariant();
+            return lower.Contains("kai") || lower.Contains("brush") || lower.Contains("callig") || name.Contains("楷") || name.Contains("行書") || name.Contains("行书");
         }
 
         private Rect BadgeRect()
