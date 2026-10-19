@@ -15,6 +15,8 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<KeyCode> Toggle;
         public readonly ConfigEntry<float> X, Y, Width, Height;
         public readonly ConfigEntry<float> Speed;
+        public readonly ConfigEntry<int> SlotCount;
+        public readonly ConfigEntry<bool> SortRecent;
         internal readonly ConfigFile Config;
 
         public Settings(ConfigFile config)
@@ -51,6 +53,9 @@ namespace MortalHelper.Game
                 new ConfigDescription("面板背景透明度，范围 40%～100%。", new AcceptableValueRange<float>(0.4f, 1f)));
             BadgeX = config.Bind("Window", "BadgeX", 12f, "收起徽章左上角 X 坐标。");
             BadgeY = config.Bind("Window", "BadgeY", 12f, "收起徽章左上角 Y 坐标。");
+            SlotCount = config.Bind("Save", "SlotCount", 0,
+                new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
+            SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
             Speed = config.Bind("Edits", "GameSpeed", 1f,
                 new ConfigDescription("游戏速度倍率，1 为默认。原生暂停与慢动作由游戏自己管理。",
                     new AcceptableValueRange<float>(0.25f, 5f)));

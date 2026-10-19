@@ -51,6 +51,15 @@ namespace MortalHelper.Game
 
         private void Update()
         {
+            if (!GameAccess.Typing && Input.GetKeyDown(KeyCode.F3))
+            {
+                Options.SortRecent.Value = !Options.SortRecent.Value;
+                Options.Config.Save();
+                SaveSlotSort.Refresh();
+                Status = Options.SortRecent.Value ? "读档列表已按最近存档排序。" : "读档列表已恢复原有顺序。";
+            }
+            if (!GameAccess.Typing && Input.GetKeyDown(KeyCode.F2) && !string.IsNullOrEmpty(SaveSlotComments.Selected))
+                Panel.OpenSaveSettings();
             if (!GameAccess.Typing && Input.GetKeyDown(Options.Toggle.Value))
             {
                 Panel.Visible = !Panel.Visible;

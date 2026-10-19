@@ -57,6 +57,7 @@ namespace MortalHelper.Game
         private int expectedItemCount;
         private string itemValue = "", itemSearch = "", value = "", search = "";
         private bool showAllItems, loggedBadge;
+        private string slotComment = "", commentSlot, slotCountText = "";
         private RelationshipStat relationship;
         private string relationshipValue = "";
         private int expectedRelationship;
@@ -91,6 +92,15 @@ namespace MortalHelper.Game
                 animating = true;
                 progress = 0f;
             }
+        }
+
+        // Opened by F2 so the comment editor is one keystroke away from the save
+        // list, matching the previous panel's shortcut.
+        internal void OpenSaveSettings()
+        {
+            page = 4;
+            commentSlot = null;
+            Visible = true;
         }
 
         internal MainPanel(Plugin plugin)
@@ -675,16 +685,47 @@ namespace MortalHelper.Game
             Section("存档格数");
             GUILayout.BeginHorizontal();
             GUILayout.Label("允许范围 2～999", style.Description, GUILayout.Width(140f * scale));
-            bool previous = GUI.enabled;
-            GUI.enabled = false;
-            GUILayout.TextField("", 4, GUILayout.Width(60f * scale));
-            GUILayout.Button("保存格数", style.ButtonStyle, GUILayout.Width(90f * scale));
-            GUI.enabled = previous;
+            if (string.IsNullOrEmpty(slotCountText)) slotCountText = plugin.Options.SlotCount.Value.ToString();
+            slotCountText = GUILayout.TextField(slotCountText, 4, GUILayout.Width(60f * scale));
+            if (GUILayout.Button("保存格数", style.ButtonStyle, GUILayout.Width(90f * scale)))
+            {
+                int parsed;
+                if (!int.TryParse(slotCountText, out parsed) || parsed < 2 || parsed > 999)
+                    plugin.Status = "格数必须是 2～999 的整数。";
+                else
+                {
+                    plugin.Options.SlotCount.Value = parsed;
+                    plugin.Options.Config.Save();
+                    plugin.Status = "格数已保存为 " + parsed + "；重新打开存档或读档界面后生效。";
+                }
+            }
+            if (GUILayout.Button("恢复默认", style.SubtleStyle, GUILayout.Width(90f * scale)))
+            {
+                plugin.Options.SlotCount.Value = 0; slotCountText = "0";
+                plugin.Options.Config.Save();
+                plugin.Status = "已恢复游戏默认格数。";
+            }
             GUILayout.EndHorizontal();
-            Note("旧版可改存档格数并提示「格数已保存，重启游戏后生效」；本候选尚未接入。");
-            Section("存档备注与排序");
-            Unported("存档备注（选中存档后 F2 编辑）", "备注保存在实际存档目录的 SaveSlotComments.ini。");
-            Unported("按最近存档排序（F3 切换）", "排序状态由独立存档组件维护。");
+            Note("只改变列表里建多少个槽位，不改动已有存档文件；填 0 或点「恢复默认」使用游戏原值。");
+            Section("存档备注");
+            string selected = SaveSlotComments.Selected;
+            if (string.IsNullOrEmpty(selected)) Note("先在游戏存档列表选中一个槽位，再按 F2 打开这里。");
+            else
+            {
+                if (commentSlot != selected) { commentSlot = selected; slotComment = SaveSlotComments.Get(selected); }
+                Note("槽位 " + selected + " 的备注（保存在配置目录，不写入存档）");
+                slotComment = GUILayout.TextField(slotComment, 60);
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("保存备注", style.ButtonStyle, GUILayout.Width(100f * scale)))
+                { SaveSlotComments.Set(selected, slotComment); plugin.Status = "备注已保存。"; }
+                if (GUILayout.Button("清除备注", style.SubtleStyle, GUILayout.Width(100f * scale)))
+                { SaveSlotComments.Set(selected, ""); slotComment = ""; plugin.Status = "备注已清除。"; }
+                GUILayout.EndHorizontal();
+                Note("备注会追加显示在该槽位的标题下方，形如〔备注〕…。");
+            }
+            Section("排序");
+            plugin.Options.SortRecent.Value = DrawSwitchRow("按最近存档排序（F3 切换）", plugin.Options.SortRecent.Value,
+                "只在读档列表里按存档时间重排行顺序，槽位编号与存档文件不变。");
             Note("存读仍使用游戏原生系统菜单与编号槽。本页为占位，旧版对应功能尚未重新实现。");
         }
 
