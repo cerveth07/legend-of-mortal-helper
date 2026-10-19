@@ -7,7 +7,7 @@ namespace MortalHelper.Game
     {
         public readonly ConfigEntry<bool> Enabled, Hints, ShowEffects, ShowConditions, ShowBranches, DiagnoseScript;
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
-        public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage;
+        public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage, DuelZeroDamage, DuelAlwaysHit, DuelFirstStrike;
         public readonly ConfigEntry<bool> GroupHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
         public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge, PracticeLimit, CheckpointLog;
         public readonly ConfigEntry<string> Point;
@@ -35,6 +35,9 @@ namespace MortalHelper.Game
             DuelStamina = config.Bind("Duel", "KeepStamina", false, "单挑主角气力不因普通扣减降低。");
             DuelDodge = config.Bind("Duel", "MaximumDodge", false, "单挑主角闪避率设为最高；保留必中机制。");
             DuelDamage = config.Bind("Duel", "LethalDamage", false, "对敌方有效伤害提升至当前生命；保留剧情保底。");
+            DuelZeroDamage = config.Bind("Duel", "ZeroDamage", false, "敌方受到的伤害归零（含持续伤害）；与一击必杀互斥。");
+            DuelAlwaysHit = config.Bind("Duel", "AlwaysHit", false, "敌方基础闪避失效，主角攻击不会落空；一击必杀已自动包含。");
+            DuelFirstStrike = config.Bind("Duel", "FirstStrike", false, "行动对比必定主角成功、敌方失败；一击必杀已自动包含。");
             GroupHealth = config.Bind("GroupBattle", "KeepHealth", false, "群战主角生命不因普通伤害降低；仍可能硬直。");
             GroupMana = config.Bind("GroupBattle", "FullMana", false, "群战主角气力维持满值。");
             GroupCooldown = config.Bind("GroupBattle", "InstantCooldown", false, "群战技能栏不受冷却限制；保留原生施放条件。");
