@@ -168,7 +168,9 @@ namespace MortalHelper.Game
         {
             if (Enabled && Session.Phase == RollPhase.Committed && result != null && Session.RequestedOption.HasValue)
                 result.Result = Session.RequestedOption.Value;
-            if (result != null) StoryRecovery.NoteDice(result.Result);
+            // Replay injects the raw roll, so the tape must store Random, not the
+            // bonus-adjusted Result.
+            if (result != null) StoryRecovery.NoteDice(result.Random);
             Session.Resolved();
         }
     }

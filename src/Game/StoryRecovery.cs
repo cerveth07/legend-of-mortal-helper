@@ -24,6 +24,7 @@ namespace MortalHelper.Game
         internal static bool Recording { get; private set; }
         internal static string ClientId => client;
         internal static int Count => Events.Count;
+        internal static int LastInteger => Events.Count == 0 ? 0 : Events[Events.Count - 1].Integer;
         internal static string LastFile { get; private set; } = "";
         internal static string Status { get; set; } = "尚未记录";
 
