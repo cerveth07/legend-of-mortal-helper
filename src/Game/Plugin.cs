@@ -23,6 +23,8 @@ namespace MortalHelper.Game
         {
             Instance = this;
             Options = new Settings(Config);
+            // Self test needs Update to keep running while the window is unfocused.
+            if (Options.SelfTest.Value) Application.runInBackground = true;
             Panel = new MainPanel(this);
             try
             {
@@ -65,7 +67,7 @@ namespace MortalHelper.Game
                 Panel.Visible = !Panel.Visible;
                 Logger.LogInfo("Panel toggled: " + Panel.Describe());
             }
-            try { DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick(); }
+            try { DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick(); SelfTest.Tick(); }
             catch (Exception error) { DiceAdapter.Close(); Options.Mode.Value = 0; Report(error); }
         }
 

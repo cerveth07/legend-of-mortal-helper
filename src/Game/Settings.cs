@@ -17,6 +17,7 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<float> Speed;
         public readonly ConfigEntry<int> SlotCount;
         public readonly ConfigEntry<bool> SortRecent;
+        public readonly ConfigEntry<bool> SelfTest;
         internal readonly ConfigFile Config;
 
         public Settings(ConfigFile config)
@@ -62,6 +63,7 @@ namespace MortalHelper.Game
             SlotCount = config.Bind("Save", "SlotCount", 0,
                 new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
+            SelfTest = config.Bind("Diagnostics", "SelfTest", false, "一次性自检：载入槽位 3 的存档，再用播放路径重新载入同一份 JSON，比较前后是否一致。");
             Speed = config.Bind("Edits", "GameSpeed", 1f,
                 new ConfigDescription("游戏速度倍率，1 为默认。原生暂停与慢动作由游戏自己管理。",
                     new AcceptableValueRange<float>(0.25f, 5f)));

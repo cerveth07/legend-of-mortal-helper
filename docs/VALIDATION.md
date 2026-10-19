@@ -66,3 +66,29 @@
 - 未验证单挑辅助实际效果、剧情强制结果和原生菜单输入共存。
 - 剧情/单挑恢复适配尚未完成（只有 `IReplayHost` 的测试假实现），因此没有真实存读闭环或旧附加档迁移。
 - 未创建公开 GitHub 仓库，未发布 Release。
+
+## 恢复基线自动探测（2026-10-19）
+
+为回答「记录下来的基线能不能原样载回」，在插件里加了一次性自检（Diagnostics/SelfTest，默认关闭），不需要人工操作：
+
+1. 用游戏读档面板的同一套调用顺序载入真实存档：SetSlot("003") → SoundManager.StopMusic() → LoadGameData() → SaveUniverseData() → MissionManagerData.UpdateCheckMissions() → SceneController.LoadCurrentScene()；
+2. 10 秒后取 SaveSystem.GetCurrentSaveData()（下称 A），并用播放路径重新应用：JsonUtility.FromJson<GameSave>(A) → 私有 ExecuteLoadGameData → SaveUniverseData → UpdateCheckMissions → LoadCurrentScene；
+3. 0.5 秒后取 B，逐字段比较 A 与 B。
+
+结果：
+
+- 原生读档后场景变为 **Story**，说明这套调用顺序确实能把玩家带进存档对应的剧情位置；
+- 重新应用后场景仍是 **Story**；
+- A 与 B 逐字段比较只剩 **5 处差异**：FreeRandomState 的 4 个字段与 TimeTick；
+- **剧情位置字段完全一致**：CurrentStoryScript、CurrentScene、CurrentSceneKey、CurrentNextScene、临时脚本、属性、物品、商店库存、关系全部相同。
+
+结论：
+
+1. 「存档 JSON 作基线」是可行的：ExecuteLoadGameData 能把数据原样装回，且没有丢字段；
+2. **只调用 ExecuteLoadGameData 不会切场景**，必须补 SaveUniverseData + UpdateCheckMissions + LoadCurrentScene（读档面板就是这么做的）；
+3. TimeTick 每次应用都会刷新为当前时间（CreateSaveData 里写 DateTime.Now.Ticks），比较时必须忽略；
+4. FreeRandomState（自由场景随机数）不会被还原成记录值，重放时不能假设随机一致——要么显式写回该字段，要么让重放不依赖自由场景随机。
+
+第一次测量（4 秒窗口）曾出现物品与商店库存差异，把窗口缩到 0.5 秒后消失，说明那是这几秒里剧情真的在跑，不是还原丢失。
+
+探测代码保留为 Diagnostics/SelfTest（默认关闭，开启后仅在失焦时也需要运行时才会设置 Application.runInBackground），可作为后续回归工具。
