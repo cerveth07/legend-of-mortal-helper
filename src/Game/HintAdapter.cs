@@ -30,6 +30,9 @@ namespace MortalHelper.Game
         internal static void Load(string source, string name)
         {
             Revision++; hovered = null; ScriptName = name ?? ""; branches = ScriptHints.Read(source);
+            if (Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.DiagnoseScript.Value)
+                Plugin.Instance.Status = "剧情脚本：" + (string.IsNullOrEmpty(ScriptName) ? "(未命名)" : ScriptName) +
+                    " · 可对应分支 " + branches.Count;
         }
         internal static void Clear() { Revision++; hovered = null; branches.Clear(); ScriptName = ""; }
         internal static void Bind(Component target, Text source, Text condition = null)

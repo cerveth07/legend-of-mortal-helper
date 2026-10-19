@@ -5,7 +5,7 @@ namespace MortalHelper.Game
 {
     internal sealed class Settings
     {
-        public readonly ConfigEntry<bool> Enabled, Hints, ShowEffects, ShowConditions, ShowBranches;
+        public readonly ConfigEntry<bool> Enabled, Hints, ShowEffects, ShowConditions, ShowBranches, DiagnoseScript;
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
         public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage;
         public readonly ConfigEntry<bool> GroupHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
@@ -27,6 +27,7 @@ namespace MortalHelper.Game
             Hints = config.Bind("Story", "EffectHints", false, "选项悬停提示总开关；关闭时保留两个子项偏好。");
             ShowEffects = config.Bind("Story", "ShowEffects", false, "悬停选项时显示可靠的选择效果，包含剧透。");
             ShowConditions = config.Bind("Story", "ShowConditions", false, "悬停选项时显示已确认的原生选择条件，包含剧透。");
+            DiagnoseScript = config.Bind("Story", "DiagnoseScript", false, "剧情诊断：切换脚本时在状态行提示脚本名与可对应分支数。");
             ShowBranches = config.Bind("Story", "ShowBranches", false, "在选项上标记〔已走〕〔未记录〕，记录保存在配置目录的 cerveth.mortal.helper.choices.txt。");
             Point = config.Bind("Story", "BasePoint", "50", "指定点数模式下的基础点数；按每次判定范围校验。");
             Mode = config.Bind("Story", "Mode", 0, new ConfigDescription("0 自然掷骰；1 指定点数；2 直接选项。", new AcceptableValueRange<int>(0, 2)));
