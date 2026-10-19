@@ -19,7 +19,10 @@ namespace MortalHelper.Game
         private static int? queuedOption;
         private static bool nativeInvocation;
         // Mode: 0 自然, 1 指定点数, 2 直接选项. Only modes 1 and 2 touch the roll.
-        internal static bool Enabled => Plugin.Active && Plugin.Instance.Options.Mode.Value != 0;
+        internal static bool Enabled => Plugin.Active && (Plugin.Instance.Options.Mode.Value != 0 || StoryReplay.Active);
+        // Set only while a recorded roll is being injected; Commit reads it instead
+        // of the configured point.
+        internal static int? ReplayPoint;
         internal static bool PointMode => Plugin.Instance != null && Plugin.Instance.Options.Mode.Value == 1;
         internal static bool OptionMode => Plugin.Instance != null && Plugin.Instance.Options.Mode.Value == 2;
         internal static bool Ready => Enabled && Dialog != null && Dialog.isActiveAndEnabled && Session.Phase == RollPhase.Input;
@@ -29,6 +32,7 @@ namespace MortalHelper.Game
             Close();
             Dialog = dialog;
             Session.Open();
+            if (StoryReplay.Active) StoryReplay.TakeDice();
         }
 
         internal static void Close()
@@ -63,6 +67,18 @@ namespace MortalHelper.Game
             Session.Rearm(CanReroll());
             BindChoices();
             widget.Refresh();
+            InjectReplayPoint();
+        }
+
+        // During playback the recorded roll is committed and the native start is
+        // pressed by the game itself, exactly like a normal submit.
+        private static void InjectReplayPoint()
+        {
+            if (!StoryReplay.Active || !StoryReplay.PendingDice.HasValue || !Ready) return;
+            ReplayPoint = StoryReplay.PendingDice.Value;
+            try { Dialog.PressStartButton(); }
+            catch (System.Exception error) { Plugin.Instance.Report(error); }
+            finally { ReplayPoint = null; StoryReplay.AfterDice(); }
         }
 
         private static void BindChoices()
@@ -120,7 +136,8 @@ namespace MortalHelper.Game
             if (!Enabled || Dialog == null) return true;
             if (!Ready || (!nativeInvocation && (GameAccess.Typing || Plugin.Instance.Panel.Visible))) return false;
             string error;
-            bool ok = Session.Commit(Session.Generation, PointMode ? Plugin.Instance.Options.Point.Value : "",
+            string pointValue = ReplayPoint.HasValue ? ReplayPoint.Value.ToString() : (PointMode ? Plugin.Instance.Options.Point.Value : "");
+            bool ok = Session.Commit(Session.Generation, pointValue,
                 GameAccess.Field<int>(Dialog, "_diceMin"), GameAccess.Field<int>(Dialog, "_diceMax"),
                 queuedOption, Dialog.CachedButtons.Length, out error);
             if (!ok) Plugin.Instance.Status = error;

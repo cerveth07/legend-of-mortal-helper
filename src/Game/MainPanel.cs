@@ -493,7 +493,11 @@ namespace MortalHelper.Game
             Note("记录中：" + (StoryRecovery.Recording ? "是" : "否") + " · 已记录事件 " + StoryRecovery.Count + " 个");
             Note(StoryRecovery.Status);
             Note("本阶段只做记录：基线是当前存档的 JSON，事件是骰子结果与选项点击；文件写到配置目录 mhr\\slot-00N.mhr。");
-            Note("播放尚未实现——恢复需要把基线写回游戏再重放事件，必须实机逐步验证后才开放，避免把进度改坏。");
+            if (!StoryRecovery.Recording && GUILayout.Button("恢复检查点（实验）", style.ButtonStyle, GUILayout.Width(170f * scale)))
+                StoryReplay.Start(recoverySlot);
+            Note("重放中：" + (StoryReplay.Active ? "是，第 " + StoryReplay.Position + " 个事件" : "否"));
+            Note(StoryReplay.Status);
+            Note("恢复会先载入该检查点的基线存档，再按记录自动掷骰/点选项。请先另存当前进度；任何不一致都会中止并提示。");
             Section("高级工具（诊断与强制事件）");
             plugin.Options.CheckpointLog.Value = DrawSwitchRow("检查点更新提醒（剧情标记，不是存档点）", plugin.Options.CheckpointLog.Value,
                 "剧情标记变化时在「上次操作」提示名称与值。");

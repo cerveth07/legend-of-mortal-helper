@@ -164,6 +164,8 @@ namespace MortalHelper.Game
                 if (source == null) return;
                 var marker = __instance.GetComponent<BranchMarker>() ?? __instance.gameObject.AddComponent<BranchMarker>();
                 marker.Bind(source, HintAdapter.ScriptName);
+                var button = __instance.GetComponent<UnityEngine.UI.Button>();
+                if (button != null) StoryReplay.TryChoice(button, source.text);
             }
             catch (System.Exception) { }
         }
