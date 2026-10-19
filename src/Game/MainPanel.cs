@@ -564,7 +564,7 @@ namespace MortalHelper.Game
             Section("最高好感");
             plugin.Options.MaxAffection.Value = DrawSwitchRow("已登场角色保持各自好感上限", plugin.Options.MaxAffection.Value,
                 "不解锁未登场角色；正常存档后保留，关闭不会还原。");
-            Note("以上四项在自由活动场景空闲时生效。练功与锻造炼丹两组尚未接入。");
+            Note("以上六项在自由活动场景空闲时生效；练功与锻造炼丹两组按操作前后恢复点数与金钱。");
         }
 
         private void Relationships()
@@ -759,7 +759,7 @@ namespace MortalHelper.Game
             Section("排序");
             plugin.Options.SortRecent.Value = DrawSwitchRow("按最近存档排序（F3 切换）", plugin.Options.SortRecent.Value,
                 "只在读档列表里按存档时间重排行顺序，槽位编号与存档文件不变。");
-            Note("存读仍使用游戏原生系统菜单与编号槽。本页为占位，旧版对应功能尚未重新实现。");
+            Note("存读仍使用游戏原生系统菜单与编号槽；格数、备注与排序都只影响列表显示，不改动存档文件。");
         }
 
         private void DrawBottomBar()

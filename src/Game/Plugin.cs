@@ -65,7 +65,7 @@ namespace MortalHelper.Game
                 Panel.Visible = !Panel.Visible;
                 Logger.LogInfo("Panel toggled: " + Panel.Describe());
             }
-            try { DiceAdapter.Tick(); ProgressionTools.Maintain(); }
+            try { DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick(); }
             catch (Exception error) { DiceAdapter.Close(); Options.Mode.Value = 0; Report(error); }
         }
 
@@ -93,7 +93,13 @@ namespace MortalHelper.Game
             Options.Speed.Value = value;
             Time.timeScale = value;
         }
-        private void SceneChanged(Scene previous, Scene next) { DiceAdapter.Close(); HintAdapter.Clear(); Panel?.ClearSelection(); }
+        private void SceneChanged(Scene previous, Scene next)
+        {
+            DiceAdapter.Close(); HintAdapter.Clear(); Panel?.ClearSelection();
+            // A replay must never survive a scene change: the follow-up script would
+            // keep receiving injections meant for the previous one.
+            StoryReplay.Stop("场景已切换，重放已中止。");
+        }
         private void OnDestroy()
         {
             SceneManager.activeSceneChanged -= SceneChanged;

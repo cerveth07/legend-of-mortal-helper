@@ -22,6 +22,8 @@ namespace MortalHelper.Game
             Document != null && Position < Document.Events.Count ? Document.Events[Position] : null;
 
         internal static int? PendingDice { get; private set; }
+        private static float lastProgress;
+        private const float StallSeconds = 120f;
 
         internal static string ExpectedChoice
         {
@@ -71,6 +73,7 @@ namespace MortalHelper.Game
                 }
                 Log("parsed baseline tick=" + save.TimeTick + " script=" + save.CurrentStoryScript + " scene=" + save.CurrentScene);
                 Active = true; Document = document; Position = 0; PendingDice = null;
+                lastProgress = UnityEngine.Time.unscaledTime;
                 var load = AccessTools.Method(typeof(SaveSystem), "ExecuteLoadGameData");
                 if (load == null) { Stop("找不到游戏读档方法，已中止。"); return false; }
                 Log("baseline " + document.Baseline.Length + " chars, events " + document.Events.Count);
@@ -85,6 +88,16 @@ namespace MortalHelper.Game
                 Stop("恢复失败：" + error.Message);
                 return false;
             }
+        }
+
+        // Playback only stops itself; if the story never reaches the next recorded
+        // interaction the player is left with injections pending, so give up loudly.
+        internal static void Tick()
+        {
+            if (!Active) return;
+            if (Position > 0) { /* progress resets the clock in Take/Choice */ }
+            if (UnityEngine.Time.unscaledTime - lastProgress > StallSeconds)
+                Stop("超过 " + (int)StallSeconds + " 秒没有匹配到记录的交互，重放已中止。");
         }
 
         internal static void Stop(string reason)
@@ -112,6 +125,7 @@ namespace MortalHelper.Game
             if (next == null || next.Kind != EventKind.Dice) return false;
             PendingDice = next.Integer;
             Position++;
+            lastProgress = UnityEngine.Time.unscaledTime;
             Log("inject dice=" + next.Integer + " (" + Position + "/" + Document.Events.Count + ")");
             if (Position >= Document.Events.Count) { /* finish after the roll resolves */ }
             return true;
@@ -140,6 +154,7 @@ namespace MortalHelper.Game
             if (next == null || next.Kind != EventKind.Choice) return;
             if (!string.Equals(next.Data, text, StringComparison.Ordinal)) return;
             clicking = true;
+            lastProgress = UnityEngine.Time.unscaledTime;
             try
             {
                 Position++;
