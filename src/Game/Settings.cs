@@ -9,7 +9,7 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
         public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage;
         public readonly ConfigEntry<bool> GroupHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
-        public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree;
+        public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge;
         public readonly ConfigEntry<string> Point;
         public readonly ConfigEntry<int> Mode;
         public readonly ConfigEntry<KeyCode> Toggle;
@@ -40,6 +40,8 @@ namespace MortalHelper.Game
             MaxAffection = config.Bind("Progression", "MaxAffection", false, "已登场角色维持各自好感上限；不解锁未登场角色。");
             SkillFree = config.Bind("Progression", "SkillFree", false, "练功不消耗武学点数；保留武功修炼条件。");
             ForgeFree = config.Bind("Progression", "ForgeFree", false, "锻造炼丹不扣点数与金钱；不解锁研发条件。");
+            FastSkill = config.Bind("Progression", "FastSkill", false, "每次练功完成当前一级的剩余进度。");
+            FastForge = config.Bind("Progression", "FastForge", false, "每次锻造炼丹完成当前一级的剩余进度。");
             X = config.Bind("Window", "X", 36f, "窗口左边距。");
             Y = config.Bind("Window", "Y", 64f, "窗口上边距。");
             Width = config.Bind("Window", "Width", 640f, "窗口宽度。");

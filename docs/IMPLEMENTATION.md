@@ -14,6 +14,8 @@
 - 天命控制三态：`Mode` 0 自然 / 1 指定点数 / 2 直接选项；点数输入仅在模式 1 生效，选项点击仅在模式 2 生效；基础点数默认 50。
 - 养成辅助：`无限日常行动点`（`PositionController.HasActionPoint` 放行 + `GameStatType.行動次數` 维持 ≥1）、`最高好感`（`RelationshipStat.SetActive` 补满 + 自由活动维持上限）、`练功消耗不减`（`MartialPanel.HandleLearnNextItem` 前后暂存/恢复 `_martialPoint`）、`锻造炼丹消耗不减`（`UpgradePanel.HandleUpgradeNextItem` 前后恢复 `_pointData`/`_moneyData`）。「快速练功 / 快速锻造炼丹」尚未接入。
 - 心上人：十项候选写入 `GameStatType.愛人`（值取 `RelationshipStatType` 编号）；未实机验证。
+- 快速练功 / 快速锻造炼丹：在 `Book.Learn` / `UpgradeItemData.Upgrade` 前缀里把本次消耗替换为当前级剩余点数，动画与升级奖励仍走原生。
+- 物品选取路径：`ItemStatPanel.OnItemSelected` 记录游戏物品面板里选中的物品，数值编辑页可直接编辑该物品；读档时清空记录。
 - 界面：透明度 40%～100%；四边/角落拖拽缩放（原始鼠标轮询 + 高亮边）；标题栏拖动。
 - 群战辅助（`Mortal.Battle`，全部默认关闭）：生命 `Character.TakeDamage` 前缀、气力 `CharacterMana.Modify` 补满、技能 `SkillButton.CanProcess` 放行、剩余时间 `GameLevelManager._currentSessionTime` 维持在最大值、敌方受伤即倒地。玩家/敌人用 `Character._entity.CurrentType` 区分，避免误伤友军与中立单位。四个补丁目标在本机启动日志中解析成功，但**战斗内的实际效果尚未验证**。
 - 固定字段 `.mhr` 格式；文件预算、严格长度、事件枚举与有限数值检查，截断/损坏拒绝；单文件写入和显式备份读取；原子替换不可用时回退为复制，且损坏主档不会被提升为备份。

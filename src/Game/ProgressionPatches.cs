@@ -18,6 +18,8 @@ namespace MortalHelper.Game
         internal static bool FreeForge => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.ForgeFree.Value;
         internal static bool EndlessActions => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.UnlimitedActions.Value;
         internal static bool MaxAffection => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.MaxAffection.Value;
+        internal static bool FastSkill => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.FastSkill.Value;
+        internal static bool FastForge => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.FastForge.Value;
 
         private static GameStat Stat(object panel, string name)
         {
@@ -91,6 +93,35 @@ namespace MortalHelper.Game
         {
             if (ProgressionState.FreeForge) ProgressionState.RestoreForge(__instance);
             return __exception;
+        }
+    }
+
+    // Fast levelling only rewrites the point amount handed to the game's own
+    // Learn / Upgrade call, so one action finishes the current level while level
+    // rewards and conditions still run natively.
+    [HarmonyPatch(typeof(Book), "Learn")]
+    internal static class FastSkillPatch
+    {
+        private static void Prefix(Book __instance, ref int __0)
+        {
+            if (!ProgressionState.FastSkill || __0 <= 0 || __instance.IsMaxLevel) return;
+            var data = __instance.GetCurrentMartialData();
+            if (data == null) return;
+            long remaining = (long)data.Points - __instance.CurrentLevelPoints;
+            if (remaining > 0) __0 = (int)System.Math.Min(int.MaxValue, remaining);
+        }
+    }
+
+    [HarmonyPatch(typeof(UpgradeItemData), "Upgrade")]
+    internal static class FastForgePatch
+    {
+        private static void Prefix(UpgradeItemData __instance, ref int __0)
+        {
+            if (!ProgressionState.FastForge || __0 <= 0 || __instance.IsMaxLevel) return;
+            var level = __instance.GetCurrentItemLevel();
+            if (level == null) return;
+            long remaining = (long)level.LevelPoints - __instance.CurrentPoints;
+            if (remaining > 0) __0 = (int)System.Math.Min(int.MaxValue, remaining);
         }
     }
 

@@ -500,11 +500,13 @@ namespace MortalHelper.Game
             Section("练功");
             plugin.Options.SkillFree.Value = DrawSwitchRow("练功消耗不减", plugin.Options.SkillFree.Value,
                 "练功结束后把武学点数恢复到操作前的值；武功修炼条件仍须满足。");
-            Unported("快速练功", "每次正常练功完成当前一级进度，仍执行原生升级奖励与条件。");
+            plugin.Options.FastSkill.Value = DrawSwitchRow("快速练功", plugin.Options.FastSkill.Value,
+                "把本次消耗替换为当前级剩余点数，一次完成一级；仍执行原生升级奖励与条件。");
             Section("锻造与炼丹");
             plugin.Options.ForgeFree.Value = DrawSwitchRow("锻造炼丹消耗不减", plugin.Options.ForgeFree.Value,
                 "操作结束后把点数与金钱恢复到操作前的值；不解锁研发条件。");
-            Unported("快速锻造炼丹", "每次操作完成当前一级进度；保留原生等级上限与奖励。");
+            plugin.Options.FastForge.Value = DrawSwitchRow("快速锻造炼丹", plugin.Options.FastForge.Value,
+                "把本次消耗替换为当前级剩余点数，一次完成一级；保留原生等级上限与奖励。");
             Section("日常行动");
             plugin.Options.UnlimitedActions.Value = DrawSwitchRow("无限日常行动点", plugin.Options.UnlimitedActions.Value,
                 "行动点至少为 1 且不减，日期不会因行动用完自动前进。");
@@ -615,6 +617,15 @@ namespace MortalHelper.Game
             if (!GameAccess.CanEdit) { Note("请先进入自由活动场景并关闭游戏内交互面板。"); selectedItem = null; return; }
             var database = ItemDatabase.Instance;
             if (database == null) { Note("物品数据库尚未就绪。"); return; }
+            // Same entry path as before: select the item in the game's inventory
+            // panel, then edit exactly that item here.
+            var picked = ItemSelection.Selected;
+            if (picked != null)
+            {
+                if (GUILayout.Button("编辑游戏内选中的物品：" + ItemName(picked) + "   " + picked.CurrentCount, style.ButtonStyle))
+                { selectedItem = picked; expectedItemCount = picked.CurrentCount; itemValue = expectedItemCount.ToString(); }
+            }
+            else Note("也可以先在游戏物品面板选中一个物品，这里会直接取该物品。");
             int tab = GUILayout.Toolbar((int)itemType - 1, new[] { "書籍", "雜物", "貴重品", "消耗品" }, style.SubTab);
             itemType = (GameItemType)(tab + 1);
             showAllItems = DrawSwitchRow("也列出数量为 0 的物品", showAllItems, "勾选后可以给未持有的物品直接设置数量，等同于生成。");
