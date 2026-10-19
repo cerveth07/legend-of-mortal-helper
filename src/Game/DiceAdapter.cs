@@ -18,13 +18,12 @@ namespace MortalHelper.Game
         private static DiceWidget widget;
         private static int? queuedOption;
         private static bool nativeInvocation;
-        // Mode: 0 自然, 1 指定点数, 2 直接选项. Only modes 1 and 2 touch the roll.
-        internal static bool Enabled => Plugin.Active && (Plugin.Instance.Options.Mode.Value != 0 || StoryReplay.Active);
+        // The dice controls live in the game UI: the widget is always shown while a
+        // wheel is open and clicking an option always picks it. No modes to switch.
+        internal static bool Enabled => Plugin.Active;
         // Set only while a recorded roll is being injected; Commit reads it instead
         // of the configured point.
         internal static int? ReplayPoint;
-        internal static bool PointMode => Plugin.Instance != null && Plugin.Instance.Options.Mode.Value == 1;
-        internal static bool OptionMode => Plugin.Instance != null && Plugin.Instance.Options.Mode.Value == 2;
         internal static bool Ready => Enabled && Dialog != null && Dialog.isActiveAndEnabled && Session.Phase == RollPhase.Input;
 
         internal static void Open(DiceMenuDialog dialog)
@@ -44,20 +43,16 @@ namespace MortalHelper.Game
         internal static void Tick()
         {
             if (Dialog == null || !Dialog.isActiveAndEnabled) return;
-            if (!Enabled || !PointMode)
+            if (!Enabled)
             {
                 if (widget != null) { UnityEngine.Object.Destroy(widget.gameObject); widget = null; }
-                if (!OptionMode) queuedOption = null;
-                if (!Enabled) return;
-            }
-            if (!PointMode)
-            {
-                BindChoices();
+                queuedOption = null;
                 return;
             }
             if (widget == null)
             {
                 Text reference = GameAccess.Field<Text>(Dialog, "_maxDiceText");
+                if (reference == null) return;
                 var root = new GameObject("MortalHelper.Dice", typeof(RectTransform));
                 root.transform.SetParent(reference.transform.parent, false);
                 widget = root.AddComponent<DiceWidget>();
@@ -83,7 +78,6 @@ namespace MortalHelper.Game
 
         private static void BindChoices()
         {
-            if (!OptionMode) return;
             foreach (Button button in Dialog.CachedButtons ?? new Button[0])
             {
                 if (button == null || button.GetComponent<DiceOption>() == null) continue;
@@ -104,7 +98,6 @@ namespace MortalHelper.Game
         internal static bool ValidInput()
         {
             if (!Enabled || Dialog == null) return true;
-            if (!PointMode) return true;
             int? point;
             return queuedOption.HasValue || Session.RequestedOption.HasValue || InteractionSession.ParsePoint(Plugin.Instance.Options.Point.Value,
                 GameAccess.Field<int>(Dialog, "_diceMin"), GameAccess.Field<int>(Dialog, "_diceMax"), out point);
@@ -112,7 +105,7 @@ namespace MortalHelper.Game
 
         internal static void Choose(ChoicePointer pointer)
         {
-            if (!OptionMode || !Ready || pointer.Owner != Dialog || pointer.Generation != Session.Generation) return;
+            if (!Ready || pointer.Owner != Dialog || pointer.Generation != Session.Generation) return;
             Button[] buttons = Dialog.CachedButtons;
             int index = Array.FindIndex(buttons, b => b != null && b.gameObject == pointer.gameObject);
             if (index < 0 || !pointer.gameObject.activeInHierarchy) return;
@@ -136,7 +129,7 @@ namespace MortalHelper.Game
             if (!Enabled || Dialog == null) return true;
             if (!Ready || (!nativeInvocation && (GameAccess.Typing || Plugin.Instance.Panel.Visible))) return false;
             string error;
-            string pointValue = ReplayPoint.HasValue ? ReplayPoint.Value.ToString() : (PointMode ? Plugin.Instance.Options.Point.Value : "");
+            string pointValue = ReplayPoint.HasValue ? ReplayPoint.Value.ToString() : Plugin.Instance.Options.Point.Value;
             bool ok = Session.Commit(Session.Generation, pointValue,
                 GameAccess.Field<int>(Dialog, "_diceMin"), GameAccess.Field<int>(Dialog, "_diceMax"),
                 queuedOption, Dialog.CachedButtons.Length, out error);
@@ -175,13 +168,54 @@ namespace MortalHelper.Game
         }
     }
 
-    public sealed class ChoicePointer : MonoBehaviour, IPointerClickHandler
+    // The game already owns the selection look: DiceOption.Select() swaps to the
+    // highlighted sprite, shows the arrow, switches text and plays the button sound.
+    // Reuse it instead of inventing a tint, so picking an option feels native.
+    public sealed class ChoicePointer : MonoBehaviour, IPointerClickHandler, IPointerEnterHandler, IPointerExitHandler
     {
         internal DiceMenuDialog Owner;
         internal long Generation;
+        private DiceOption option;
+        private bool choosing;
+
+        private void Awake() { option = GetComponent<DiceOption>(); }
+
+        public void OnPointerEnter(PointerEventData data)
+        {
+            if (!DiceAdapter.Ready) return;
+            Natively(true);
+        }
+
+        public void OnPointerExit(PointerEventData data)
+        {
+            if (choosing) return;
+            Natively(false);
+        }
+
         public void OnPointerClick(PointerEventData data)
         {
-            if (data.button == PointerEventData.InputButton.Left) DiceAdapter.Choose(this);
+            if (data.button != PointerEventData.InputButton.Left || choosing || !DiceAdapter.Ready) return;
+            choosing = true;
+            Natively(true);
+            StartCoroutine(Pick());
+        }
+
+        private System.Collections.IEnumerator Pick()
+        {
+            yield return new WaitForSecondsRealtime(.1f);
+            if (!DiceAdapter.Ready) { choosing = false; Natively(false); yield break; }
+            DiceAdapter.Choose(this);
+            yield return new WaitForSecondsRealtime(.3f);
+            Natively(false);
+            choosing = false;
+        }
+
+        private void Natively(bool selected)
+        {
+            if (option == null) option = GetComponent<DiceOption>();
+            if (option == null) return;
+            try { if (selected) option.Select(); else option.UnSelect(); }
+            catch (Exception) { }
         }
     }
 

@@ -15,7 +15,7 @@ namespace MortalHelper.Game
         internal static Plugin Instance;
         internal Settings Options;
         internal readonly OperationGate Gate = new OperationGate();
-        internal string Status = "开发构建：尚未完成实机验收";
+        internal string Status = "";
         internal MainPanel Panel;
         private Harmony patches;
 
@@ -53,6 +53,8 @@ namespace MortalHelper.Game
 
         private void Update()
         {
+            Panel?.Drain();
+            Tour();
             if (!GameAccess.Typing && Input.GetKeyDown(KeyCode.F3))
             {
                 Options.SortRecent.Value = !Options.SortRecent.Value;
@@ -68,7 +70,7 @@ namespace MortalHelper.Game
                 Logger.LogInfo("Panel toggled: " + Panel.Describe());
             }
             try { DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick(); Probe.Tick(); }
-            catch (Exception error) { DiceAdapter.Close(); Options.Mode.Value = 0; Report(error); }
+            catch (Exception error) { DiceAdapter.Close(); Report(error); }
         }
 
         private void OnGUI()
@@ -110,6 +112,92 @@ namespace MortalHelper.Game
             Panel?.Dispose(); patches?.UnpatchSelf(); Config.Save();
             Instance = null;
         }
+
+        // Diagnostic self-tour: drives the panel through every page and writes a
+        // screenshot per page, so layout can be checked without touching the mouse.
+        private float tourNext;
+        private int tourPage;
+        private int tourStage;
+        private bool tourStarted;
+        private bool tourLogged;
+        private void Tour()
+        {
+            if (!Options.AutoTour.Value)
+            {
+                if (!tourLogged) { tourLogged = true; Logger.LogInfo("[Tour] disabled"); }
+                return;
+            }
+            if (tourPage == 0 && !tourStarted)
+            {
+                tourStarted = true;
+                Options.PreviewEditable.Value = true;
+                Panel.Visible = true;
+                tourNext = Time.unscaledTime + 1.6f;
+                Logger.LogInfo("[Tour] start");
+                return;
+            }
+            if (Time.unscaledTime < tourNext) return;
+            string dir = System.IO.Path.Combine(Paths.ConfigPath, "mh");
+            if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+            if (tourStage == 0)
+            {
+                if (tourPage >= TourViews.Length)
+                {
+                    if (!Options.AutoTour.Value) return;
+                    Options.AutoTour.Value = false;
+                    Options.PreviewEditable.Value = false;
+                    Config.Save();
+                    Logger.LogInfo("[Tour] finished");
+                    return;
+                }
+                ApplyTourView(TourViews[tourPage]);
+                Logger.LogInfo("[Tour] " + TourViews[tourPage] + " " + Panel.Geo());
+                tourStage = 1;
+                tourNext = Time.unscaledTime + 1.5f;
+                return;
+            }
+            string file = System.IO.Path.Combine(dir, "tour-" + tourPage + "-" + TourViews[tourPage] + ".png");
+            ScreenCapture.CaptureScreenshot(file);
+            Logger.LogInfo("[Tour] shot " + file);
+            tourPage++;
+            tourStage = 0;
+            tourNext = Time.unscaledTime + 1.5f;
+        }
+
+        private static readonly string[] TourViews =
+        {
+            "story", "story-recall", "battle-duel", "battle-group",
+            "growth", "growth-relation", "numeric-top", "numeric-bottom", "save", "badge"
+        };
+
+        private void ApplyTourView(string view)
+        {
+            Panel.Visible = true;
+            switch (view)
+            {
+                case "story":
+                    Panel.SetView(0, 0, 0); Panel.Page = 0; Panel.RecoveryOpen = false; break;
+                case "story-recall":
+                    Panel.SetView(1, 0, 0); Panel.Page = 0; break;
+                case "battle-duel":
+                    Panel.SetView(0, 0, 0); Panel.Page = 1; break;
+                case "battle-group":
+                    Panel.SetView(0, 1, 0); Panel.Page = 1; break;
+                case "growth":
+                    Panel.SetView(0, 0, 0); Panel.Page = 2; break;
+                case "growth-relation":
+                    Panel.SetView(0, 0, 1); Panel.Page = 2; break;
+                case "numeric-top":
+                    Panel.Page = 3; break;
+                case "numeric-bottom":
+                    Panel.Page = 3; Panel.ScrollToEnd(3); break;
+                case "save":
+                    Panel.Page = 4; break;
+                case "badge":
+                    Panel.Visible = false; break;
+            }
+        }
+
         internal void Report(Exception error) { Status = error.Message; Logger.LogError(error); }
         internal static bool Active => Instance != null && Instance.Options.Enabled.Value && Instance.Gate.CanInteract;
     }

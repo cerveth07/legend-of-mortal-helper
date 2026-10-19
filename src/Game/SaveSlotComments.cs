@@ -44,6 +44,22 @@ namespace MortalHelper.Game
             Save();
         }
 
+        // Slot -> comment snapshot, ordered by slot number so the panel can list them.
+        internal static List<KeyValuePair<string, string>> All()
+        {
+            Load();
+            var list = new List<KeyValuePair<string, string>>(Map);
+            list.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
+            return list;
+        }
+
+        internal static void Clear()
+        {
+            Load();
+            Map.Clear();
+            Save();
+        }
+
         private static void Load()
         {
             if (loaded) return;
@@ -146,12 +162,30 @@ namespace MortalHelper.Game
             }
         }
 
+        // The row count the panel actually built is the only honest proof that the
+        // configured slot count reached the UI.
+        internal static void Report(object panel)
+        {
+            try
+            {
+                var slots = GameAccess.Field<Array>(panel, "_saveSlots");
+                Plugin.Instance?.Log("[SlotCount] " + (panel == null ? "?" : panel.GetType().Name)
+                    + " rows=" + (slots == null ? -1 : slots.Length));
+            }
+            catch (Exception error) { Plugin.Instance?.Log("[SlotCount] report failed: " + error.Message); }
+        }
+
         internal static void Apply(object panel)
         {
             int count = Configured;
             if (count <= 0) return;
-            try { GameAccess.Set(panel, "_slotCount", count); }
-            catch (Exception) { }
+            try
+            {
+                GameAccess.Set(panel, "_slotCount", count);
+                Plugin.Instance?.Log("[SlotCount] applied " + count + " to "
+                    + (panel == null ? "?" : panel.GetType().Name));
+            }
+            catch (Exception error) { Plugin.Instance?.Log("[SlotCount] failed: " + error.Message); }
         }
     }
 
@@ -159,12 +193,14 @@ namespace MortalHelper.Game
     internal static class SavePanelSlotCountPatch
     {
         private static void Prefix(SaveGamePanel __instance) { SaveSlotCount.Apply(__instance); }
+        private static void Postfix(SaveGamePanel __instance) { SaveSlotCount.Report(__instance); }
     }
 
     [HarmonyPatch(typeof(LoadGamePanel), "CreateSlot")]
     internal static class LoadPanelSlotCountPatch
     {
         private static void Prefix(LoadGamePanel __instance) { SaveSlotCount.Apply(__instance); }
+        private static void Postfix(LoadGamePanel __instance) { SaveSlotCount.Report(__instance); }
     }
 
     // Recency sorting only reorders the row siblings the panel already built; slot

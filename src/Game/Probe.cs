@@ -72,7 +72,6 @@ namespace MortalHelper.Game
             Check("slot count config", SlotCountConfig());
             // Keep point mode armed while driving, otherwise DiceAdapter.Enabled is false
             // and the dice dialog is never recognised.
-            Plugin.Instance.Options.Mode.Value = 1;
             Plugin.Instance.Options.Point.Value = "37";
             Log("point mode armed (37) for the drive phase");
             started = Time.unscaledTime;
@@ -127,11 +126,10 @@ namespace MortalHelper.Game
             try
             {
                 var options = Plugin.Instance.Options;
-                int before = options.Mode.Value;
-                options.Mode.Value = 1;
+                string before = options.Point.Value;
                 options.Point.Value = "37";
-                bool ok = DiceAdapter.Enabled && DiceAdapter.PointMode && options.Point.Value == "37";
-                options.Mode.Value = before;
+                bool ok = DiceAdapter.Enabled && options.Point.Value == "37";
+                options.Point.Value = before;
                 return ok;
             }
             catch (Exception error) { Log("dice config failed: " + error.Message); return false; }
@@ -222,7 +220,6 @@ namespace MortalHelper.Game
                 int before = StoryRecovery.Count;
                 Log("dice dialog range=" + Range(dialog, "_diceMin") + ".." + Range(dialog, "_diceMax") +
                     " results=" + Range(dialog, "_resultCount") + " point=" + options.Point.Value);
-                options.Mode.Value = 1;
                 options.Point.Value = "37";
                 dialog.PressStartButton();
                 int after = StoryRecovery.Count;

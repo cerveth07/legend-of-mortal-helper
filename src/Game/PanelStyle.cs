@@ -13,19 +13,21 @@ namespace MortalHelper.Game
 
         internal Texture2D Dark, Panel, Surface, SurfaceAlt, Accent, AccentSoft, Hover, Transparent,
             Button, ButtonHover, ButtonActive, Input, SwitchOn, SwitchOff, SliderTrack, SliderFill,
-            SliderThumb, ScrollPaper, ScrollRoll, BambooTag, Border, Ink, Badge, BadgeHover, BadgeActive;
+            SliderThumb, ScrollPaper, ScrollRoll, BambooTag, Border, Ink, Badge, BadgeHover, BadgeActive,
+            Hairline, Focus, Flash, SegOff;
 
-        internal GUIStyle Title, Header, SectionTitle, Tab, TabHover, TabHit, SubTab, Description,
-            Entry, SwitchTrack, SwitchState, FooterLabel, FooterValue, ButtonStyle, SubtleStyle, IconButton, Notice, Overlay;
+        internal GUIStyle Title, Header, SectionTitle, Tab, TabHover, TabHit, SubTab, Segment, Description, Tight,
+            Entry, SwitchTrack, SwitchState, SwitchOnLabel, SwitchOffLabel, DangerStyle, FooterLabel, FooterValue, ButtonStyle, SubtleStyle, IconButton, Notice, Overlay;
 
         private static readonly Color Primary = new Color(.92f, .88f, .79f, 1f);
-        private static readonly Color Secondary = new Color(.70f, .66f, .59f, 1f);
+        private static readonly Color Secondary = new Color(.76f, .72f, .63f, 1f);
         private static readonly Color AccentColor = new Color(.83f, .64f, .35f, 1f);
+        private static readonly Color DangerColor = new Color(.94f, .55f, .45f, 1f);
 
         internal void Build()
         {
             Dark = Solid(new Color(.045f, .04f, .035f, 1f));
-            Panel = Solid(new Color(.075f, .068f, .06f, .85f));
+            Panel = Solid(new Color(.075f, .068f, .06f, .78f));
             Surface = Solid(new Color(.16f, .14f, .115f, .22f));
             SurfaceAlt = Solid(new Color(.20f, .16f, .115f, .30f));
             Accent = Solid(new Color(.78f, .55f, .27f, 1f));
@@ -34,11 +36,15 @@ namespace MortalHelper.Game
             Button = Bordered(new Color(.11f, .095f, .075f, .72f), new Color(.55f, .42f, .26f, .62f));
             ButtonHover = Bordered(new Color(.19f, .145f, .09f, .82f), new Color(.78f, .55f, .27f, .86f));
             ButtonActive = Bordered(new Color(.32f, .22f, .12f, .92f), new Color(.88f, .67f, .36f, .95f));
-            Input = Bordered(new Color(.10f, .085f, .07f, .78f), new Color(.48f, .38f, .25f, .68f));
+            Input = Bordered(new Color(.10f, .085f, .07f, .85f), new Color(.62f, .50f, .32f, .85f));
+            Hairline = Solid(new Color(.78f, .62f, .36f, .22f));
+            SegOff = Bordered(new Color(.16f, .14f, .11f, .55f), new Color(.55f, .42f, .26f, .45f));
+            Focus = Bordered(new Color(0f, 0f, 0f, 0f), new Color(.83f, .64f, .35f, .95f));
+            Flash = Solid(new Color(.83f, .64f, .35f, .30f));
             Transparent = Solid(new Color(0f, 0f, 0f, 0f));
             SwitchOff = MakeSwitch(72, 34, false);
             SwitchOn = MakeSwitch(72, 34, true);
-            SliderTrack = Solid(new Color(.18f, .15f, .11f, .92f));
+            SliderTrack = Solid(new Color(.30f, .26f, .20f, 1f));
             SliderFill = Solid(new Color(.78f, .55f, .27f, .96f));
             SliderThumb = MakeCircle(24, 24, new Color(.94f, .82f, .59f, 1f), new Color(.52f, .39f, .22f, .95f));
             ScrollPaper = Solid(new Color(.78f, .69f, .50f, .97f));
@@ -50,22 +56,29 @@ namespace MortalHelper.Game
             BadgeHover = Solid(new Color(.10f, .075f, .042f, .88f));
             BadgeActive = Solid(new Color(.15f, .105f, .055f, .94f));
             BadgeFont = CreateBadgeFont();
-            Title = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
+            Title = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Normal, alignment = TextAnchor.MiddleCenter };
             Header = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, wordWrap = true };
-            SectionTitle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold };
+            SectionTitle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Normal };
             Tab = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, clipping = TextClipping.Clip };
             TabHover = new GUIStyle(Tab);
             TabHit = new GUIStyle(GUIStyle.none);
             SubTab = new GUIStyle(GUI.skin.button);
+            Segment = new GUIStyle(GUI.skin.button);
             Description = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false };
+            Tight = new GUIStyle(GUI.skin.label) { wordWrap = false, richText = false, clipping = TextClipping.Clip };
             Entry = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = true };
             SwitchTrack = new GUIStyle(GUI.skin.toggle);
             SwitchState = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleLeft };
+            SwitchOnLabel = new GUIStyle(SwitchState);
+            SwitchOffLabel = new GUIStyle(SwitchState);
             FooterLabel = new GUIStyle(GUI.skin.label);
             FooterValue = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleRight };
             ButtonStyle = new GUIStyle(GUI.skin.button);
             SubtleStyle = new GUIStyle(GUI.skin.button);
             IconButton = new GUIStyle(GUI.skin.button);
+            SubtleStyle = new GUIStyle(GUI.skin.button);
+            IconButton = new GUIStyle(GUI.skin.button);
+            DangerStyle = new GUIStyle(GUI.skin.button);
             Notice = new GUIStyle(GUI.skin.box);
             Overlay = new GUIStyle(GUI.skin.box) { wordWrap = true, alignment = TextAnchor.MiddleLeft };
         }
@@ -75,21 +88,34 @@ namespace MortalHelper.Game
             Scale = scale;
             if (uiFont != null) UiFont = uiFont;
             int size = Mathf.Max(14, (int)(16 * Scale));
-            foreach (var style in new[] { Title, Header, SectionTitle, Tab, TabHover, SubTab, Description, Entry,
-                SwitchState, FooterLabel, FooterValue, ButtonStyle, IconButton, Notice, Overlay })
+            foreach (var style in new[] { Header, Tab, TabHover, SubTab, Description, Entry,
+                SwitchState, SwitchOnLabel, SwitchOffLabel, FooterLabel, FooterValue, ButtonStyle, IconButton, Notice, Overlay })
                 style.font = UiFont;
+            var headingFont = BadgeFont != null ? BadgeFont : UiFont;
 
             Title.fontSize = size + 4; Title.normal.textColor = Primary;
             Title.alignment = TextAnchor.MiddleCenter; Title.wordWrap = false; Title.clipping = TextClipping.Clip;
             Title.padding = new RectOffset(0, 0, 0, 0); Title.margin = new RectOffset(0, 0, 0, 0); Title.contentOffset = Vector2.zero;
             Header.fontSize = size + 2; Header.normal.textColor = Primary;
-            SectionTitle.fontSize = size + 1; SectionTitle.normal.textColor = Primary;
+            SectionTitle.fontSize = size + 1; SectionTitle.normal.textColor = AccentColor;
             Tab.fontSize = Mathf.Max(12, size - 2); Tab.normal.textColor = Secondary;
             TabHover.fontSize = Mathf.Max(12, size - 2); TabHover.normal.textColor = Primary;
             SubTab.fontSize = Mathf.Max(12, size - 2);
+            SubTab.normal.background = Surface; SubTab.hover.background = Hover;
+            SubTab.onNormal.background = AccentSoft; SubTab.onHover.background = AccentSoft;
             Description.fontSize = Mathf.Max(12, size - 2); Description.normal.textColor = Secondary;
+            Tight.font = UiFont; Tight.fontSize = Mathf.Max(12, size - 2); Tight.normal.textColor = Secondary;
             Entry.fontSize = size; Entry.normal.textColor = Primary;
             SwitchState.fontSize = Mathf.Max(11, size - 3); SwitchState.normal.textColor = Secondary;
+            SwitchOnLabel.fontSize = SwitchState.fontSize; SwitchOnLabel.normal.textColor = AccentColor;
+            SwitchOffLabel.fontSize = SwitchState.fontSize; SwitchOffLabel.normal.textColor = Secondary;
+            DangerStyle.fontSize = Mathf.Max(11, size - 3); DangerStyle.normal.textColor = DangerColor;
+            DangerStyle.font = UiFont; DangerStyle.padding = new RectOffset(7, 7, 3, 3);
+            DangerStyle.margin = new RectOffset(0, 0, 0, 0); DangerStyle.border = new RectOffset(1, 1, 1, 1);
+            DangerStyle.normal.background = Button; DangerStyle.hover.background = ButtonHover;
+            DangerStyle.active.background = ButtonActive; DangerStyle.focused.background = ButtonHover;
+            DangerStyle.hover.textColor = new Color(1f, .66f, .58f);
+            DangerStyle.active.textColor = new Color(1f, .72f, .66f);
             FooterLabel.fontSize = Mathf.Max(11, size - 3); FooterLabel.normal.textColor = Secondary;
             FooterValue.fontSize = Mathf.Max(11, size - 3); FooterValue.normal.textColor = AccentColor;
 
@@ -100,7 +126,7 @@ namespace MortalHelper.Game
 
             var button = Skin.button;
             button.font = UiFont; button.fontSize = Mathf.Max(12, size - 2); button.alignment = TextAnchor.MiddleCenter;
-            button.padding = new RectOffset(6, 6, 5, 5);
+            button.padding = new RectOffset(8, 8, 3, 3);
             button.normal.background = Transparent; button.hover.background = Hover;
             button.active.background = AccentSoft; button.focused.background = Hover;
             button.onNormal.background = AccentSoft; button.onHover.background = Accent;
@@ -117,8 +143,8 @@ namespace MortalHelper.Game
 
             var field = Skin.textField;
             field.font = UiFont; field.fontSize = size; field.normal.textColor = Primary; field.focused.textColor = Primary;
-            field.normal.background = Input; field.focused.background = Input;
-            field.padding = new RectOffset(8, 8, 5, 5); field.border = new RectOffset(1, 1, 1, 1);
+            field.normal.background = Input; field.focused.background = Focus; field.hover.background = Input;
+            field.padding = new RectOffset(8, 8, 3, 3); field.border = new RectOffset(1, 1, 1, 1);
 
             var window = Skin.window;
             window.font = UiFont; window.fontSize = size; window.normal.textColor = Primary;
@@ -130,31 +156,43 @@ namespace MortalHelper.Game
             box.font = UiFont; box.fontSize = size; box.normal.background = Surface; box.normal.textColor = Secondary;
             box.padding = new RectOffset(8, 8, 7, 7);
 
-            Skin.horizontalSlider.normal.background = Transparent; Skin.horizontalSlider.fixedHeight = 6f * Scale;
+            Skin.horizontalSlider.normal.background = SliderTrack; Skin.horizontalSlider.fixedHeight = 8f * Scale;
+            Skin.horizontalSlider.margin = new RectOffset(0, 0, 8, 8);
             Skin.horizontalSliderThumb.normal.background = SliderThumb;
             Skin.horizontalSliderThumb.fixedWidth = 18f * Scale; Skin.horizontalSliderThumb.fixedHeight = 18f * Scale;
             Skin.verticalScrollbar.normal.background = Transparent;
-            Skin.verticalScrollbarThumb.normal.background = AccentSoft;
-            Skin.verticalScrollbarThumb.hover.background = Accent;
-            Skin.verticalScrollbarThumb.fixedWidth = 7f * Scale;
+            Skin.verticalScrollbarThumb.normal.background = Hairline;
+            Skin.verticalScrollbarThumb.hover.background = AccentSoft;
+            Skin.verticalScrollbarThumb.fixedWidth = 5f * Scale;
+            Skin.verticalScrollbar.fixedWidth = 6f * Scale;
 
-            SubTab.font = UiFont; SubTab.padding = new RectOffset(10, 10, 5, 5);
-            SubTab.normal.background = Transparent; SubTab.hover.background = Hover;
+            Segment.font = UiFont; Segment.fontSize = SubTab.fontSize;
+            Segment.padding = new RectOffset(8, 8, 3, 3); Segment.margin = new RectOffset(2, 2, 0, 0);
+            Segment.normal.background = SegOff; Segment.hover.background = Hover;
+            Segment.active.background = AccentSoft; Segment.focused.background = Hover;
+            Segment.onNormal.background = AccentSoft; Segment.onHover.background = AccentSoft;
+            Segment.onActive.background = Accent; Segment.onFocused.background = AccentSoft;
+            Segment.normal.textColor = Secondary; Segment.hover.textColor = Primary;
+            Segment.active.textColor = Primary; Segment.focused.textColor = Primary;
+            Segment.onNormal.textColor = Primary; Segment.onHover.textColor = Primary;
+            Segment.onActive.textColor = Primary; Segment.onFocused.textColor = Primary;
+            SubTab.font = UiFont;
+            SubTab.normal.background = SegOff; SubTab.hover.background = Hover;
             SubTab.active.background = AccentSoft; SubTab.focused.background = Hover;
-            SubTab.onNormal.background = AccentSoft; SubTab.onHover.background = Accent;
+            SubTab.onNormal.background = AccentSoft; SubTab.onHover.background = AccentSoft;
             SubTab.onActive.background = Accent; SubTab.onFocused.background = AccentSoft;
             SubTab.normal.textColor = Secondary; SubTab.hover.textColor = Primary;
             SubTab.active.textColor = Primary; SubTab.focused.textColor = Primary;
             SubTab.onNormal.textColor = Primary; SubTab.onHover.textColor = Primary;
             SubTab.onActive.textColor = Primary; SubTab.onFocused.textColor = Primary;
 
-            ButtonStyle.font = UiFont; ButtonStyle.padding = new RectOffset(10, 10, 6, 6); ButtonStyle.fontSize = Mathf.Max(12, size - 2);
+            ButtonStyle.font = UiFont; ButtonStyle.padding = new RectOffset(8, 8, 3, 3); ButtonStyle.fontSize = Mathf.Max(12, size - 2);
             ButtonStyle.normal.background = Button; ButtonStyle.hover.background = ButtonHover;
             ButtonStyle.active.background = ButtonActive; ButtonStyle.focused.background = ButtonHover;
             ButtonStyle.normal.textColor = Primary; ButtonStyle.hover.textColor = Primary;
             ButtonStyle.active.textColor = Primary; ButtonStyle.focused.textColor = Primary;
             SubtleStyle.font = UiFont; SubtleStyle.fontSize = Mathf.Max(12, size - 2);
-            SubtleStyle.padding = new RectOffset(7, 7, 4, 4);
+            SubtleStyle.padding = new RectOffset(7, 7, 3, 3);
             SubtleStyle.normal.background = Transparent; SubtleStyle.hover.background = Hover; SubtleStyle.active.background = AccentSoft;
             SubtleStyle.normal.textColor = Secondary; SubtleStyle.hover.textColor = Primary; SubtleStyle.active.textColor = Primary;
             IconButton.font = UiFont; IconButton.fontSize = size + 2; IconButton.alignment = TextAnchor.MiddleCenter;

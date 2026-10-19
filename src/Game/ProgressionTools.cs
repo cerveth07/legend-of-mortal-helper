@@ -50,7 +50,7 @@ namespace MortalHelper.Game
         internal static string SetLover(int index)
         {
             if (index < 0 || index >= LoverIds.Length) return "未选择角色。";
-            if (!GameAccess.CanEdit) return "请先进入自由活动场景并关闭游戏内交互面板。";
+            if (!GameAccess.CanEditValues) return "当前场景不能修改：等加载完成、关闭游戏内面板，且不在战斗中。";
             try
             {
                 var stat = PlayerStatManagerData.Instance.Stats.Get(GameStatType.愛人);

@@ -11,13 +11,15 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<bool> GroupHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
         public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge, PracticeLimit, CheckpointLog;
         public readonly ConfigEntry<string> Point;
-        public readonly ConfigEntry<int> Mode;
         public readonly ConfigEntry<KeyCode> Toggle;
         public readonly ConfigEntry<float> X, Y, Width, Height;
         public readonly ConfigEntry<float> Speed;
         public readonly ConfigEntry<int> SlotCount;
         public readonly ConfigEntry<bool> SortRecent;
         public readonly ConfigEntry<bool> SelfTest;
+        public readonly ConfigEntry<bool> LayoutProbe;
+    public readonly ConfigEntry<bool> AutoTour;
+    public readonly ConfigEntry<bool> PreviewEditable;
         internal readonly ConfigFile Config;
 
         public Settings(ConfigFile config)
@@ -31,7 +33,6 @@ namespace MortalHelper.Game
             DiagnoseScript = config.Bind("Story", "DiagnoseScript", false, "剧情诊断：切换脚本时在状态行提示脚本名与可对应分支数。");
             ShowBranches = config.Bind("Story", "ShowBranches", false, "在选项上标记〔已走〕〔未记录〕，记录保存在配置目录的 cerveth.mortal.helper.choices.txt。");
             Point = config.Bind("Story", "BasePoint", "50", "指定点数模式下的基础点数；按每次判定范围校验。");
-            Mode = config.Bind("Story", "Mode", 0, new ConfigDescription("0 自然掷骰；1 指定点数；2 直接选项。", new AcceptableValueRange<int>(0, 2)));
             DuelHealth = config.Bind("Duel", "KeepHealth", false, "单挑主角生命不因普通扣减降低。");
             DuelStamina = config.Bind("Duel", "KeepStamina", false, "单挑主角气力不因普通扣减降低。");
             DuelDodge = config.Bind("Duel", "MaximumDodge", false, "单挑主角闪避率设为最高；保留必中机制。");
@@ -64,6 +65,9 @@ namespace MortalHelper.Game
                 new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
             SelfTest = config.Bind("Diagnostics", "SelfTest", false, "无头检测：载入槽位 3，跑 API 项（备注/分支/速度/格数/控骰）并自动推进剧情记录交互；不移动鼠标、不抢焦点。");
+            LayoutProbe = config.Bind("Diagnostics", "LayoutProbe", false, "布局探针：每页把每个控件的矩形与溢出情况写进日志，供校准 UI 用。");
+        AutoTour = config.Bind("Diagnostics", "AutoTour", false, "自检巡视：打开面板后每 1.6 秒切一页并截图到配置目录 mh\\tour-*.png，用于实机校验布局。");
+        PreviewEditable = config.Bind("Diagnostics", "PreviewEditable", false, "只读预览：把数值/物品/好感行按可编辑宽度绘制但不写入，供截图核对布局。");
             Speed = config.Bind("Edits", "GameSpeed", 1f,
                 new ConfigDescription("游戏速度倍率，1 为默认。原生暂停与慢动作由游戏自己管理。",
                     new AcceptableValueRange<float>(0.25f, 5f)));
