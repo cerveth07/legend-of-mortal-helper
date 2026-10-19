@@ -61,7 +61,10 @@ namespace MortalHelper.Game
         private string relationshipValue = "";
         private int expectedRelationship;
         private GameObject blocker;
-        private bool resizing, draggingBadge, badgeMoved;
+        private bool resizing, draggingBadge, badgeMoved, draggingWindow;
+        private int resizeEdges, hoverEdges;
+        private Vector2 dragStartMouse;
+        private Rect dragStartRect;
         private Vector2 dragStart, sizeStart;
         private int lastWidth, lastHeight;
 
@@ -96,7 +99,7 @@ namespace MortalHelper.Game
             windowRect = new Rect(plugin.Options.X.Value, plugin.Options.Y.Value,
                 Mathf.Max(MinWidth, plugin.Options.Width.Value), Mathf.Max(MinHeight, plugin.Options.Height.Value));
             badgePosition = new Vector2(plugin.Options.BadgeX.Value, plugin.Options.BadgeY.Value);
-            opacity = Mathf.Clamp(plugin.Options.Opacity.Value, .65f, 1f);
+            opacity = Mathf.Clamp(plugin.Options.Opacity.Value, .4f, 1f);
         }
 
         internal void Draw()
@@ -110,7 +113,7 @@ namespace MortalHelper.Game
             EnsureScale();
             if (opacity != Mathf.Clamp(plugin.Options.Opacity.Value, .65f, 1f))
             {
-                opacity = Mathf.Clamp(plugin.Options.Opacity.Value, .65f, 1f);
+                opacity = Mathf.Clamp(plugin.Options.Opacity.Value, .4f, 1f);
                 style.SetOpacity(opacity);
             }
             GUISkin previous = GUI.skin;
@@ -198,6 +201,59 @@ namespace MortalHelper.Game
 
 
         private static float EaseOutCubic(float t) { float p = 1f - t; return 1f - p * p * p; }
+
+        // Four-edge and corner resizing plus header dragging, polled from real
+        // mouse input. IMGUI cannot reliably own these gestures across the
+        // Layout/Repaint passes, which is why the previous panel did the same.
+        private void PollWindowPointer()
+        {
+            Vector3 raw = Input.mousePosition;
+            Vector2 mouse = new Vector2(raw.x, Screen.height - raw.y);
+            Rect rect = windowRect;
+            float hit = 16f * scale;
+            if (Input.GetMouseButtonDown(0))
+            {
+                int edges = NearEdges(rect, mouse, hit);
+                if (edges != 0) { resizeEdges = edges; dragStartMouse = mouse; dragStartRect = rect; }
+                else if (new Rect(rect.x, rect.y, Mathf.Max(0f, rect.width - 44f * scale), 42f * scale).Contains(mouse))
+                { draggingWindow = true; dragStartMouse = mouse; dragStartRect = rect; }
+            }
+            if (Input.GetMouseButton(0) && (resizeEdges != 0 || draggingWindow))
+            {
+                Vector2 delta = mouse - dragStartMouse;
+                Rect next = dragStartRect;
+                if (draggingWindow) { next.x += delta.x; next.y += delta.y; }
+                else
+                {
+                    if ((resizeEdges & 1) != 0) { next.x = dragStartRect.x + delta.x; next.width = dragStartRect.width - delta.x; }
+                    if ((resizeEdges & 2) != 0) next.width = dragStartRect.width + delta.x;
+                    if ((resizeEdges & 4) != 0) { next.y = dragStartRect.y + delta.y; next.height = dragStartRect.height - delta.y; }
+                    if ((resizeEdges & 8) != 0) next.height = dragStartRect.height + delta.y;
+                    next.width = Mathf.Max(MinWidth * scale, next.width);
+                    next.height = Mathf.Max(MinHeight * scale, next.height);
+                    if ((resizeEdges & 1) != 0 && next.x + next.width < dragStartRect.xMax)
+                        next.x = dragStartRect.xMax - next.width;
+                    if ((resizeEdges & 4) != 0 && next.y + next.height < dragStartRect.yMax)
+                        next.y = dragStartRect.yMax - next.height;
+                }
+                windowRect = Clamp(next);
+            }
+            if (Input.GetMouseButtonUp(0) && (resizeEdges != 0 || draggingWindow))
+            { resizeEdges = 0; draggingWindow = false; SaveGeometry(); }
+            hoverEdges = resizeEdges != 0 ? resizeEdges : NearEdges(rect, mouse, hit);
+        }
+
+        // Bit mask: 1 left, 2 right, 4 top, 8 bottom.
+        private static int NearEdges(Rect rect, Vector2 point, float hit)
+        {
+            if (!new Rect(rect.x - hit, rect.y - hit, rect.width + hit * 2f, rect.height + hit * 2f).Contains(point)) return 0;
+            int edges = 0;
+            if (Mathf.Abs(point.x - rect.xMin) <= hit) edges |= 1;
+            if (Mathf.Abs(point.x - rect.xMax) <= hit) edges |= 2;
+            if (Mathf.Abs(point.y - rect.yMin) <= hit) edges |= 4;
+            if (Mathf.Abs(point.y - rect.yMax) <= hit) edges |= 8;
+            return edges;
+        }
         private static Rect Lerp(Rect a, Rect b, float t)
         {
             return new Rect(Mathf.Lerp(a.x, b.x, t), Mathf.Lerp(a.y, b.y, t),
@@ -207,6 +263,7 @@ namespace MortalHelper.Game
         private void DrawPanel()
         {
             if (animating) progress += Time.unscaledDeltaTime / ExpandDuration;
+            else PollWindowPointer();
             if (progress >= 1f)
             {
                 progress = 1f;
@@ -235,7 +292,19 @@ namespace MortalHelper.Game
                 else if (used != shownRect) windowRect = Clamp(used);
             }
             finally { GUI.color = previousColor; GUI.enabled = previousEnabled; }
+            DrawEdgeHint(shownRect);
             DrawResizeGrip(shownRect);
+        }
+
+        // Active-edge highlight, matching the previous panel's resize affordance.
+        private void DrawEdgeHint(Rect rect)
+        {
+            if (hoverEdges == 0 || Event.current.type != EventType.Repaint) return;
+            float thickness = Mathf.Max(2f, 2f * scale);
+            if ((hoverEdges & 1) != 0) GUI.DrawTexture(new Rect(rect.x, rect.y, thickness, rect.height), style.Accent);
+            if ((hoverEdges & 2) != 0) GUI.DrawTexture(new Rect(rect.xMax - thickness, rect.y, thickness, rect.height), style.Accent);
+            if ((hoverEdges & 4) != 0) GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, thickness), style.Accent);
+            if ((hoverEdges & 8) != 0) GUI.DrawTexture(new Rect(rect.x, rect.yMax - thickness, rect.width, thickness), style.Accent);
         }
 
         private void DrawFrame(Rect rect)
@@ -306,7 +375,6 @@ namespace MortalHelper.Game
             }
             GUILayout.EndScrollView();
             DrawBottomBar();
-            GUI.DragWindow(new Rect(0, 0, shownRect.width, 42f * scale));
         }
 
         private void DrawTabs()
@@ -364,13 +432,19 @@ namespace MortalHelper.Game
             GUILayout.Space(8f * scale);
             if (storyView == 1) { Recall(); return; }
             Section("天命控制");
-            plugin.Options.Dice.Value = DrawSwitchRow("显示点数输入并允许点击结果选项", plugin.Options.Dice.Value,
-                "清空点数恢复随机。指定值按每次判定范围校验，重掷仍使用原生命运点。");
+            plugin.Options.Mode.Value = GUILayout.Toolbar(plugin.Options.Mode.Value,
+                new[] { "自然掷骰", "指定点数", "直接选项" }, style.SubTab);
+            Note("自然掷骰不覆盖任何结果；指定点数按每次判定范围校验；直接选项在判定页点击目标选项。");
+            bool pointMode = plugin.Options.Mode.Value == 1;
+            bool previousEnabled = GUI.enabled;
+            GUI.enabled = previousEnabled && pointMode;
             GUILayout.BeginHorizontal();
             GUILayout.Label("基础点数", style.Entry, GUILayout.Width(80f * scale));
             plugin.Options.Point.Value = GUILayout.TextField(plugin.Options.Point.Value, 8);
             if (GUILayout.Button("清空", style.SubtleStyle, GUILayout.Width(70f * scale))) plugin.Options.Point.Value = "";
             GUILayout.EndHorizontal();
+            GUI.enabled = previousEnabled;
+            Note(pointMode ? "清空点数恢复随机。重掷仍使用原生命运点。" : "切换到「指定点数」后此项才生效。");
             Section("选项提示");
             plugin.Options.Hints.Value = DrawSwitchRow("选项提示（含剧透）", plugin.Options.Hints.Value,
                 "首次安装默认关闭；关闭总开关后保留两个子项的选择。收起面板后悬停选项生效。");
@@ -430,10 +504,12 @@ namespace MortalHelper.Game
             Unported("锻造炼丹消耗不减", "锻造炼丹不扣点数、金钱与本次次数，资源为零也可操作；不解锁研发条件。");
             Unported("快速锻造炼丹", "每次操作完成当前一级进度；保留原生等级上限与奖励。");
             Section("日常行动");
-            Unported("无限日常行动点", "行动点至少为 1 且不减，日期不会因行动用完自动前进。");
+            plugin.Options.UnlimitedActions.Value = DrawSwitchRow("无限日常行动点", plugin.Options.UnlimitedActions.Value,
+                "行动点至少为 1 且不减，日期不会因行动用完自动前进。");
             Section("最高好感");
-            Unported("已登场角色保持各自好感上限", "不解锁未登场角色；正常存档后保留，关闭不会还原。");
-            Note("以上四组属于养成辅助，旧版已实现；本候选尚未接入，界面保留原位置。");
+            plugin.Options.MaxAffection.Value = DrawSwitchRow("已登场角色保持各自好感上限", plugin.Options.MaxAffection.Value,
+                "不解锁未登场角色；正常存档后保留，关闭不会还原。");
+            Note("以上四项在自由活动场景空闲时生效。练功与锻造炼丹两组尚未接入。");
         }
 
         private void Relationships()
@@ -475,11 +551,9 @@ namespace MortalHelper.Game
             }
             Section("心上人");
             loverIndex = GUILayout.SelectionGrid(loverIndex, Lovers, 5, style.SubTab);
-            bool previous = GUI.enabled;
-            GUI.enabled = false;
-            GUILayout.Button("应用心上人", style.ButtonStyle);
-            GUI.enabled = previous;
-            Note("旧版可选择九位候选之一或「自己」；本候选尚未接入，仅保留界面位置。");
+            if (GUILayout.Button("应用心上人", style.ButtonStyle))
+                plugin.Status = ProgressionTools.SetLover(loverIndex);
+            Note("可选择九位候选之一或「自己」。不补齐结缘事件、不清除已发生的恋爱剧情标记。此功能尚未实机验证。");
         }
 
         private void NumericPage()
@@ -601,16 +675,16 @@ namespace MortalHelper.Game
             GUILayout.Label("界面透明度", style.FooterLabel, GUILayout.Width(76f * s));
             float sliderWidth = Mathf.Clamp(shownRect.width - 262f * s, 60f * s, 300f * s);
             Rect sliderRect = GUILayoutUtility.GetRect(sliderWidth, 30f * s, GUILayout.Width(sliderWidth), GUILayout.Height(30f * s));
-            float normalized = Mathf.InverseLerp(.65f, 1f, opacity);
+            float normalized = Mathf.InverseLerp(.4f, 1f, opacity);
             float trackY = sliderRect.y + sliderRect.height * .5f - 3f * s;
             Rect track = new Rect(sliderRect.x + 8f * s, trackY, sliderRect.width - 16f * s, 6f * s);
             GUI.DrawTexture(track, style.SliderTrack, ScaleMode.StretchToFill, true);
             GUI.DrawTexture(new Rect(track.x, track.y, track.width * normalized, track.height),
                 style.SliderFill, ScaleMode.StretchToFill, true);
-            float next = GUI.HorizontalSlider(sliderRect, opacity, .65f, 1f, GUI.skin.horizontalSlider, GUI.skin.horizontalSliderThumb);
+            float next = GUI.HorizontalSlider(sliderRect, opacity, .4f, 1f, GUI.skin.horizontalSlider, GUI.skin.horizontalSliderThumb);
             if (Mathf.Abs(next - opacity) > .0001f)
             {
-                opacity = Mathf.Clamp(next, .65f, 1f);
+                opacity = Mathf.Clamp(next, .4f, 1f);
                 style.SetOpacity(opacity);
                 plugin.Options.Opacity.Value = opacity;
             }

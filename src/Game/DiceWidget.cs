@@ -47,7 +47,7 @@ namespace MortalHelper.Game
             bool valid = DiceAdapter.ValidInput();
             message.color = valid ? new Color(.85f,.85f,.8f) : new Color(1f,.55f,.4f);
             message.text = !valid ? "超出当前点数范围，请修改或清空" : DiceAdapter.Ready ?
-                "点原生启动，或直接点击目标选项" : "正在判定，请等待原生操作恢复";
+                "点原生启动使用该点数；清空则自然掷骰" : "正在判定，请等待原生操作恢复";
         }
 
         private GameObject Box(string name, Vector2 position, Vector2 size, Transform parent = null)

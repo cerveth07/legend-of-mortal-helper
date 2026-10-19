@@ -18,7 +18,10 @@ namespace MortalHelper.Game
         private static DiceWidget widget;
         private static int? queuedOption;
         private static bool nativeInvocation;
-        internal static bool Enabled => Plugin.Active && Plugin.Instance.Options.Dice.Value;
+        // Mode: 0 自然, 1 指定点数, 2 直接选项. Only modes 1 and 2 touch the roll.
+        internal static bool Enabled => Plugin.Active && Plugin.Instance.Options.Mode.Value != 0;
+        internal static bool PointMode => Plugin.Instance != null && Plugin.Instance.Options.Mode.Value == 1;
+        internal static bool OptionMode => Plugin.Instance != null && Plugin.Instance.Options.Mode.Value == 2;
         internal static bool Ready => Enabled && Dialog != null && Dialog.isActiveAndEnabled && Session.Phase == RollPhase.Input;
 
         internal static void Open(DiceMenuDialog dialog)
@@ -37,10 +40,15 @@ namespace MortalHelper.Game
         internal static void Tick()
         {
             if (Dialog == null || !Dialog.isActiveAndEnabled) return;
-            if (!Enabled)
+            if (!Enabled || !PointMode)
             {
-                if (widget != null) widget.gameObject.SetActive(false);
-                queuedOption = null;
+                if (widget != null) { UnityEngine.Object.Destroy(widget.gameObject); widget = null; }
+                if (!OptionMode) queuedOption = null;
+                if (!Enabled) return;
+            }
+            if (!PointMode)
+            {
+                BindChoices();
                 return;
             }
             if (widget == null)
@@ -53,13 +61,19 @@ namespace MortalHelper.Game
             }
             widget.gameObject.SetActive(true);
             Session.Rearm(CanReroll());
+            BindChoices();
+            widget.Refresh();
+        }
+
+        private static void BindChoices()
+        {
+            if (!OptionMode) return;
             foreach (Button button in Dialog.CachedButtons ?? new Button[0])
             {
                 if (button == null || button.GetComponent<DiceOption>() == null) continue;
                 var click = button.GetComponent<ChoicePointer>() ?? button.gameObject.AddComponent<ChoicePointer>();
                 click.Owner = Dialog; click.Generation = Session.Generation;
             }
-            widget.Refresh();
         }
 
         internal static bool CanReroll()
@@ -74,6 +88,7 @@ namespace MortalHelper.Game
         internal static bool ValidInput()
         {
             if (!Enabled || Dialog == null) return true;
+            if (!PointMode) return true;
             int? point;
             return queuedOption.HasValue || Session.RequestedOption.HasValue || InteractionSession.ParsePoint(Plugin.Instance.Options.Point.Value,
                 GameAccess.Field<int>(Dialog, "_diceMin"), GameAccess.Field<int>(Dialog, "_diceMax"), out point);
@@ -81,7 +96,7 @@ namespace MortalHelper.Game
 
         internal static void Choose(ChoicePointer pointer)
         {
-            if (!Ready || pointer.Owner != Dialog || pointer.Generation != Session.Generation) return;
+            if (!OptionMode || !Ready || pointer.Owner != Dialog || pointer.Generation != Session.Generation) return;
             Button[] buttons = Dialog.CachedButtons;
             int index = Array.FindIndex(buttons, b => b != null && b.gameObject == pointer.gameObject);
             if (index < 0 || !pointer.gameObject.activeInHierarchy) return;
@@ -105,7 +120,7 @@ namespace MortalHelper.Game
             if (!Enabled || Dialog == null) return true;
             if (!Ready || (!nativeInvocation && (GameAccess.Typing || Plugin.Instance.Panel.Visible))) return false;
             string error;
-            bool ok = Session.Commit(Session.Generation, Plugin.Instance.Options.Point.Value,
+            bool ok = Session.Commit(Session.Generation, PointMode ? Plugin.Instance.Options.Point.Value : "",
                 GameAccess.Field<int>(Dialog, "_diceMin"), GameAccess.Field<int>(Dialog, "_diceMax"),
                 queuedOption, Dialog.CachedButtons.Length, out error);
             if (!ok) Plugin.Instance.Status = error;

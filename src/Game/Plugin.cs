@@ -56,8 +56,8 @@ namespace MortalHelper.Game
                 Panel.Visible = !Panel.Visible;
                 Logger.LogInfo("Panel toggled: " + Panel.Describe());
             }
-            try { DiceAdapter.Tick(); }
-            catch (Exception error) { DiceAdapter.Close(); Options.Dice.Value = false; Report(error); }
+            try { DiceAdapter.Tick(); ProgressionTools.Maintain(); }
+            catch (Exception error) { DiceAdapter.Close(); Options.Mode.Value = 0; Report(error); }
         }
 
         private void OnGUI()

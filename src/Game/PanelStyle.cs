@@ -175,7 +175,7 @@ namespace MortalHelper.Game
         internal void SetOpacity(float value)
         {
             if (Panel == null) return;
-            value = Mathf.Clamp(value, .65f, 1f);
+            value = Mathf.Clamp(value, .4f, 1f);
             Panel.SetPixel(0, 0, new Color(.075f, .068f, .06f, value));
             Panel.Apply(false, false);
         }
