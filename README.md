@@ -32,7 +32,7 @@ python build.py --game "D:\steam\steamapps\common\LegendOfMortal" --loader "本�
 
 输出位于被 Git 忽略的 `artifacts/`。构建记录包含源码与本机依赖的 SHA-256，不包含游戏程序集本体。离线检查只使用人工构造的数据和临时目录，不读取玩家存档。
 
-本轮已针对本机 Steam Build 26021712 编译，编译器警告视为错误。测试报告见 [VALIDATION.md](docs/VALIDATION.md)。未启动游戏验证 Unity UI、Harmony 回调时序、剧情恢复或单挑恢复。
+本轮已针对本机 Steam Build 26021712 编译，编译器警告视为错误。测试报告见 [VALIDATION.md](docs/VALIDATION.md)。2026-10-19 完成启动级实机验证：加载器兼容、16 个 Harmony 补丁全部解析、无运行期异常、Tab 可打开面板且中文正常渲染；轮盘交互、面板拖动收起、辅助效果和恢复闭环仍未验证。
 
 ## 开发候选的安装边界
 

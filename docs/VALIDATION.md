@@ -1,6 +1,6 @@
 # 本轮验证记录
 
-日期：2026-10-19。结论：**编译与离线合同检查通过；尚未完成游戏内验证，不能发布为完整替代版。**
+日期：2026-10-19。结论：**编译、离线合同检查与启动级实机验证通过；交互路径、辅助效果和恢复闭环仍未验证，不能发布为完整替代版。**
 
 ## 构建
 
@@ -40,10 +40,22 @@
 
 `tools/provenance_scan.py` 对 17 个新 C# 文件与旧仓库 91 个源文件做了 token shingle 与最长公共片段比对：最高包含率 10.8%，且最长公共片段是 Harmony 目标签名；其余集中在 `using` 指令、Unity UI 赋值和“写临时文件再替换”惯用法。逐文件结果见 [PROVENANCE.md](../PROVENANCE.md)。
 
+## 实机启动验证（2026-10-19）
+
+安装位置：`D:\steam\steamapps\common\LegendOfMortal`。游戏 Unity 2020.3.49f1，加载器 BepInEx 6.0.0-be.692（Mono/x64），手工放入 `winhttp.dll`、`doorstop_config.ini`、`.doorstop_version` 与 `BepInEx\{core,config,plugins}`；新 DLL 位于 `BepInEx\plugins\cerveth.mortal.helper\MortalHelper.dll`。安装前该目录没有任何加载器文件；本工程未读写玩家存档目录。
+
+运行 1（`plugins` 内还留着旧整合版的四个插件）：本插件在 `Awake` 检测到旧插件后抛错停用，日志为 `System.InvalidOperationException: 检测到旧辅助插件 LOMSave2.dll；请先将其移出 plugins 后重启。`——启动冲突保护按设计生效。
+
+运行 2（`plugins` 内只留本工程 DLL）：`1 plugin to load`，出现 `Independent helper 0.1.0 initialized; experimental build.` 与 `Chainloader startup complete`，没有补丁错误、没有运行期异常。16 个 `[HarmonyPatch]` 目标全部解析成功（`DiceMenuDialog`、`CheckPointManager`、`LuaEnvironment`、`NormalOptionButton`、`DiceOption`、`CombatStatController`、`CombatDialogUI`、`CombatManager`、`SaveSystem`）。
+
+界面：向游戏窗口发送 Tab 后截图可见面板标题「活侠助手 · 独立重建 0.1.0」、启用复选框、剧情/单挑/属性/关闭标签页、轮盘与效果提示选项，中文正常渲染、无豆腐块。截图含游戏画面，只作本地证据、不进仓库（`outputs\实机验证-2026-10-19\`）。
+
+仍待人工验证：面板收起与拖动缩放、点击标签页、轮盘在真实判定中的行为、提示文本正确性、单挑辅助效果、原生菜单与键盘输入共存，以及剧情/单挑恢复闭环。
+
 ## 未覆盖
 
-- 未启动游戏；本机所给游戏目录没有 BepInEx 加载器。
-- 未验证原生轮盘布局、中文字体、回调顺序、命运点消耗或 Harmony 运行时冲突。
-- 未验证辅助功能实际效果、剧情强制结果和原生菜单输入共存。
-- 剧情/单挑恢复适配尚未完成，因此没有进行真实存读闭环或旧附加存档迁移。
-- 未创建公开 GitHub 仓库，未发布 Release，未安装新 DLL 到游戏。
+- 未验证原生轮盘在真实判定中的布局与回调顺序、命运点消耗、动画连点与场景切换。
+- 未验证面板收起/拖动/缩放、点击标签页、按键与输入框共存。
+- 未验证单挑辅助实际效果、剧情强制结果和原生菜单输入共存。
+- 剧情/单挑恢复适配尚未完成（只有 `IReplayHost` 的测试假实现），因此没有真实存读闭环或旧附加档迁移。
+- 未创建公开 GitHub 仓库，未发布 Release。
