@@ -189,6 +189,19 @@ namespace MortalHelper.Game
         private static void Postfix(DiceMenuDialog __instance) { DiceAdapter.Open(__instance); }
     }
 
+    // The native gate only offers the reroll/range stage while 命運 > 0, which also
+    // blocked direct choice at zero fate. Keep the stage available outside replay.
+    [HarmonyPatch(typeof(DiceMenuDialog), "CheckRevolution")]
+    internal static class DiceRerollStagePatch
+    {
+        private static bool Prefix(ref bool __result)
+        {
+            if (!DiceAdapter.Enabled || StoryReplay.Active) return true;
+            __result = true;
+            return false;
+        }
+    }
+
     [HarmonyPatch(typeof(DiceMenuDialog), "OnDisable")]
     internal static class CloseDicePatch
     {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace MortalHelper.Core
 {
@@ -14,6 +15,9 @@ namespace MortalHelper.Core
     {
         public string Id;
         public readonly List<EffectCall> Effects = new List<EffectCall>();
+        // Branch points and story jumps the option leads to. These calls are not
+        // stat changes, so they get their own scan of the option block.
+        public readonly List<string> Consequences = new List<string>();
         public bool Incomplete;
     }
 
@@ -80,7 +84,47 @@ namespace MortalHelper.Core
                 else current.Effects.Add(new EffectCall { Method = method, Arguments = args.ToArray() });
             }
             foreach (string id in duplicates) result.Remove(id);
+            CollectConsequences(source, result);
             return result;
+        }
+
+        // Scans each option block for the three calls the game uses to move the story
+        // sideways. Unknown call shapes are ignored rather than guessed at.
+        private static void CollectConsequences(string source, Dictionary<string, BranchHint> result)
+        {
+            var marker = new Regex(@"(?m)^[ \t]*--[ \t]*index:([A-Za-z0-9_]{1,200})[ \t]*\r?$");
+            var branch = new Regex("checkpointmanager\\.Switch\\(\\s*[\"']([^\"']*)", RegexOptions.IgnoreCase);
+            var next = new Regex("luamanager\\.SetNextScript\\(\\s*[\"']([^\"']*)", RegexOptions.IgnoreCase);
+            var story = new Regex("statmodifymanager\\.AddStory\\(\\s*[\"']([^\"']*)", RegexOptions.IgnoreCase);
+            var matches = marker.Matches(source);
+            for (int i = 0; i < matches.Count; i++)
+            {
+                BranchHint hint;
+                if (!result.TryGetValue(matches[i].Groups[1].Value, out hint)) continue;
+                int start = matches[i].Index + matches[i].Length;
+                int end = i + 1 < matches.Count ? matches[i + 1].Index : source.Length;
+                string block = StripComments(source.Substring(start, Math.Max(0, end - start)));
+                Collect(hint, branch, block, "分支点 ");
+                Collect(hint, next, block, "剧情 ");
+                Collect(hint, story, block, "剧情 ");
+            }
+        }
+
+        // Commented-out calls must never show up as real consequences.
+        private static string StripComments(string block)
+        {
+            block = Regex.Replace(block, "--\\[(=*)\\[.*?\\]\\1\\]", " ", RegexOptions.Singleline);
+            return Regex.Replace(block, "--[^\n]*", " ");
+        }
+
+        private static void Collect(BranchHint hint, Regex pattern, string block, string prefix)
+        {
+            foreach (Match match in pattern.Matches(block))
+            {
+                if (hint.Consequences.Count >= 6) return;
+                string text = prefix + match.Groups[1].Value;
+                if (!hint.Consequences.Contains(text)) hint.Consequences.Add(text);
+            }
         }
 
         private static bool Take(List<Token> items, ref int index, string value)

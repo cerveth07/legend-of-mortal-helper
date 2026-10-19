@@ -62,6 +62,13 @@ internal static class Contracts
         Check(ScriptHints.Read(new string(' ',2000001)).Count==0,"oversized input parsed");
         Check(ScriptHints.Read("foo() --index:FAKE\nstatmodifymanager.Player('Money',1)").Count==0,"inline comment became branch marker");
 
+        var consequence=ScriptHints.Read(prefix+"checkpointmanager.Switch(\"S12\")\nluamanager.SetNextScript(\"S0017_02\")\nend");
+        Check(consequence["O_test"].Consequences.Count==2 && consequence["O_test"].Consequences[0]=="分支点 S12","consequence scan failed");
+        Check(ScriptHints.Read(prefix+"statmodifymanager.AddStory(\"S03\")")["O_test"].Consequences[0]=="剧情 S03","story consequence mislabelled");
+        Check(ScriptHints.Read("--[=[\ncheckpointmanager.Switch(\"FAKE\")\n]=]\n"+prefix+"x()")["O_test"].Consequences.Count==0,"comment produced a consequence");
+        Check(ScriptHints.Read(prefix+"-- checkpointmanager.Switch(\"FAKE\")\nx()")["O_test"].Consequences.Count==0,"line comment produced a consequence");
+        Check(ScriptHints.Read(prefix+"checkpointmanager.Switch(\"A\")\ncheckpointmanager.Switch(\"A\")")["O_test"].Consequences.Count==1,"duplicate consequence kept");
+
         byte[] data = Archive.Encode(Document());
         using(var input=new MemoryStream(data)) Check(Archive.Decode(input).Events[0].Integer==2,"round trip failed");
         for(int length=0;length<data.Length;length++)

@@ -59,6 +59,14 @@ namespace MortalHelper.Game
             return output.ToString();
         }
 
+        // Branch points and story jumps that follow this option, one per line.
+        internal static string Consequences(string key)
+        {
+            BranchHint branch;
+            if (!branches.TryGetValue(key ?? "", out branch) || branch.Consequences.Count == 0) return null;
+            return string.Join("\n", branch.Consequences.ToArray());
+        }
+
         internal static void Draw()
         {
             var options = Plugin.Instance == null ? null : Plugin.Instance.Options;
@@ -68,8 +76,18 @@ namespace MortalHelper.Game
             // Same two sections and wording as the previous overlay: a native
             // condition block and an "已确认部分" effect block, either optional.
             var output = new StringBuilder();
-            if (options.ShowConditions.Value && hovered.Condition != null && !string.IsNullOrWhiteSpace(hovered.Condition.text))
-                output.Append("选择条件\n").Append(hovered.Condition.text);
+            if (options.ShowConditions.Value)
+            {
+                bool wrote = false;
+                if (hovered.Condition != null && !string.IsNullOrWhiteSpace(hovered.Condition.text))
+                { output.Append("选择条件\n").Append(hovered.Condition.text); wrote = true; }
+                string consequences = Consequences(hovered.Source.text);
+                if (consequences != null)
+                {
+                    if (wrote) output.Append("\n\n");
+                    output.Append("取决于判定的后果\n").Append(consequences);
+                }
+            }
             if (options.ShowEffects.Value)
             {
                 string effects = Description(hovered.Source.text);

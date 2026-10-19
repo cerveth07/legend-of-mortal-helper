@@ -32,6 +32,21 @@ namespace MortalHelper.Game
             }
         }
 
+        // Why a restore cannot start right now; empty means it can.
+        internal static string Blocker(int slot)
+        {
+            if (Active) return "正在重放中";
+            if (StoryRecovery.Recording) return "正在记录，请先停止记录";
+            try
+            {
+                string folder = StoryRecovery.Directory;
+                if (folder == null) return "找不到记录目录";
+                if (!File.Exists(Path.Combine(folder, "slot-" + slot.ToString("D3") + ".mhr"))) return "槽位 " + slot + " 还没有检查点";
+            }
+            catch (Exception) { return "读取记录目录失败"; }
+            return "";
+        }
+
         internal static bool Start(int slot)
         {
             if (Active) { Status = "已经在重放中。"; return false; }
