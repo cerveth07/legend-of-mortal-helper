@@ -27,6 +27,8 @@ namespace MortalHelper.Game
         private GameObject blocker;
         private GUISkin skin;
         private bool resizing;
+        private bool loggedHidden;
+        private int lastScreenWidth, lastScreenHeight;
         private Vector2 resizeStart, sizeStart;
         internal bool Visible
         {
@@ -59,12 +61,33 @@ namespace MortalHelper.Game
         {
             if (!Visible)
             {
-                if (GUI.Button(new Rect(12, Screen.height / 2f - 22, 94, 44), "活侠助手")) Visible = true;
+                if (!loggedHidden)
+                {
+                    loggedHidden = true;
+                    plugin.Log("Hidden affordance: " + Describe());
+                }
+                // Do not depend on the game skin or a CJK font here: before the
+                // first text object exists the label would render as nothing.
+                Rect entry = new Rect(12, Screen.height / 2f - 22, 94, 44);
+                Color previous = GUI.color;
+                GUI.color = new Color(0f, 0f, 0f, 0.55f);
+                GUI.DrawTexture(entry, Texture2D.whiteTexture);
+                GUI.color = previous;
+                if (GUI.Button(entry, "Tab")) Visible = true;
                 return;
             }
             EnsureBlocker();
-            bounds.width = Mathf.Clamp(bounds.width, Mathf.Min(440,Screen.width), Screen.width);
-            bounds.height = Mathf.Clamp(bounds.height, Mathf.Min(360,Screen.height), Screen.height);
+            // Screen starts as a placeholder size and changes once the window is
+            // real, so refit whenever it changes instead of trusting the awake value.
+            if (lastScreenWidth != Screen.width || lastScreenHeight != Screen.height)
+            {
+                lastScreenWidth = Screen.width;
+                lastScreenHeight = Screen.height;
+                bounds.width = Mathf.Min(bounds.width, Mathf.Max(320f, Screen.width * 0.96f));
+                bounds.height = Mathf.Min(bounds.height, Mathf.Max(240f, Screen.height * 0.96f));
+            }
+            bounds.width = Mathf.Clamp(bounds.width, Mathf.Min(320f, Screen.width), Mathf.Max(320f, Screen.width * 0.96f));
+            bounds.height = Mathf.Clamp(bounds.height, Mathf.Min(240f, Screen.height), Mathf.Max(240f, Screen.height * 0.96f));
             bounds.x = Mathf.Clamp(bounds.x, 0, Mathf.Max(0,Screen.width - bounds.width));
             bounds.y = Mathf.Clamp(bounds.y, 0, Mathf.Max(0,Screen.height - bounds.height));
             bounds = GUILayout.Window(0x434D48, bounds, Contents, "活侠助手 · 独立重建 0.1.0");
@@ -200,6 +223,15 @@ namespace MortalHelper.Game
         }
 
         private static GUIStyle Wrap() { return new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false }; }
+
+        // Diagnostics for the window/panel mismatch: IMGUI works in game screen
+        // coordinates, which do not always match the window pixel size.
+        internal string Describe()
+        {
+            return "visible=" + visible + " bounds=" + bounds.x.ToString("0") + "," + bounds.y.ToString("0") +
+                " " + bounds.width.ToString("0") + "x" + bounds.height.ToString("0") +
+                " screen=" + Screen.width + "x" + Screen.height;
+        }
         private void SaveBounds()
         {
             plugin.Options.X.Value = bounds.x; plugin.Options.Y.Value = bounds.y;

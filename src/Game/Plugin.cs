@@ -39,6 +39,7 @@ namespace MortalHelper.Game
                 patches.PatchAll(typeof(Plugin).Assembly);
                 SceneManager.activeSceneChanged += SceneChanged;
                 Logger.LogInfo("Independent helper 0.1.0 initialized; experimental build.");
+                Logger.LogInfo("Display: " + Panel.Describe());
             }
             catch (Exception error)
             {
@@ -50,12 +51,30 @@ namespace MortalHelper.Game
 
         private void Update()
         {
-            if (!GameAccess.Typing && Input.GetKeyDown(Options.Toggle.Value)) Panel.Visible = !Panel.Visible;
+            if (!GameAccess.Typing && Input.GetKeyDown(Options.Toggle.Value))
+            {
+                Panel.Visible = !Panel.Visible;
+                Logger.LogInfo("Panel toggled: " + Panel.Describe());
+            }
             try { DiceAdapter.Tick(); }
             catch (Exception error) { DiceAdapter.Close(); Options.Dice.Value = false; Report(error); }
         }
 
-        private void OnGUI() { Panel?.Draw(); HintAdapter.Draw(); }
+        private void OnGUI()
+        {
+            // An exception thrown here repeats every frame and is otherwise silent
+            // in the plugin log, so report the first one only.
+            try { Panel?.Draw(); HintAdapter.Draw(); }
+            catch (Exception error)
+            {
+                if (guiError) return;
+                guiError = true;
+                Report(error);
+            }
+        }
+
+        private bool guiError;
+        internal void Log(string message) { Logger.LogInfo(message); }
         private void SceneChanged(Scene previous, Scene next) { DiceAdapter.Close(); HintAdapter.Clear(); Panel?.ClearSelection(); }
         private void OnDestroy()
         {
