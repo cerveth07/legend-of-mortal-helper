@@ -452,7 +452,16 @@ namespace MortalHelper.Game
             plugin.Options.ShowConditions.Value = DrawSwitchRow("显示条件", plugin.Options.ShowConditions.Value);
             Note("当前可对应的分支：" + HintAdapter.Count);
             Section("分支记录");
-            Unported("显示已走分支标记", "记录已确认分支需要独立的周目记录组件，本候选尚未接入。");
+            plugin.Options.ShowBranches.Value = DrawSwitchRow("显示已走分支标记", plugin.Options.ShowBranches.Value,
+                "选项会显示〔已走〕或〔未记录〕；点击时记录，保存在配置目录，不写入存档。");
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("清空记录", style.SubtleStyle, GUILayout.Width(90f * scale)))
+            { BranchHistory.Clear(); plugin.Status = "分支记录已清空。"; }
+            GUILayout.Label("最近记录：", style.Description);
+            GUILayout.EndHorizontal();
+            var recent = BranchHistory.Recent(12);
+            if (recent.Count == 0) Note("还没有记录；开启标记后正常做选择即可累积。");
+            else foreach (string line in recent) GUILayout.Label("· " + line, style.Description);
             Section("高级工具（诊断与强制事件）");
             Unported("检查点更新提醒（剧情标记，不是存档点）", "尚需剧情诊断与强制事件接口。");
             Unported("强制事件 / 取消待执行事件与任务", "跳过前置条件会直接影响剧情走向，需实机验证后再开放。");
