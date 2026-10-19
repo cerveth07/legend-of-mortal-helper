@@ -1,0 +1,9 @@
+artifacts/
+.local/
+__pycache__/
+*.user
+*.dll
+*.exe
+*.pdb
+*.zip
+
