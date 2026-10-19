@@ -7,30 +7,56 @@ using UnityEngine;
 
 namespace MortalHelper.Game
 {
-    // Playback half of precise recovery: restore the recorded baseline save, then
-    // inject the recorded dice results and option choices in order until the stop
-    // point, and finally compare a state summary. Any mismatch aborts instead of
-    // guessing, because continuing on a desynced replay corrupts progress quietly.
+    // Playback half of precise recovery, driven by RecoveryController so the phase
+    // order, order/key checks and failure locking also protect the real path.
+    // The baseline is the recorded save JSON; after loading it the game is brought
+    // into that scene exactly like the load panel does, then recorded events are
+    // injected and the state summary is verified.
     internal static class StoryReplay
     {
-        internal static bool Active { get; private set; }
-        internal static RecoveryDocument Document { get; private set; }
-        internal static int Position { get; private set; }
-        internal static string Status { get; private set; } = "未开始";
-
-        internal static RecordedEvent Next =>
-            Document != null && Position < Document.Events.Count ? Document.Events[Position] : null;
-
-        internal static int? PendingDice { get; private set; }
-        private static float lastProgress;
+        private const float VerifyDelay = 1f;
         private const float StallSeconds = 120f;
 
-        internal static string ExpectedChoice
+        private static RecoveryController controller;
+        private static string status = "未开始";
+        private static int diceOrdinal;
+        private static string diceScript;
+        private static float lastProgress, verifyAt;
+        private static bool clicking;
+
+        internal static bool Active => controller != null && (controller.Replaying || controller.Finished);
+        internal static int Position { get; private set; }
+        internal static int? PendingDice { get; private set; }
+        internal static string Status => status;
+
+        internal sealed class Host : IReplayHost
         {
-            get
+            public string Client => "lom:" + Application.version;
+
+            public void LoadBaseline(string baseline)
             {
-                var next = Next;
-                return next != null && next.Kind == EventKind.Choice ? next.Data : null;
+                var save = JsonUtility.FromJson<GameSave>(baseline);
+                if (save == null) throw new InvalidDataException("基线存档无法解析。");
+                if (save.TimeTick <= 0 || string.IsNullOrEmpty(save.CurrentStoryScript))
+                    throw new InvalidDataException("基线存档解析后缺少关键字段（TimeTick=" + save.TimeTick +
+                        "，脚本=" + (save.CurrentStoryScript ?? "null") + "）。");
+                var load = AccessTools.Method(typeof(SaveSystem), "ExecuteLoadGameData");
+                if (load == null) throw new InvalidOperationException("找不到游戏读档方法。");
+                load.Invoke(SaveSystem.Instance, new object[] { save });
+                // Applying data alone never changes scene; the load panel does these
+                // three calls afterwards, so replay must do the same.
+                SaveSystem.Instance.SaveUniverseData();
+                if (MissionManagerData.Instance != null) MissionManagerData.Instance.UpdateCheckMissions();
+                if (SceneController.Instance != null) SceneController.Instance.LoadCurrentScene();
+                Log("baseline applied tick=" + save.TimeTick + " scene=" + (save.CurrentScene ?? "null"));
+            }
+
+            public string CaptureState() { return StoryRecovery.Summary(); }
+
+            public void Abort(string reason)
+            {
+                Log("abort: " + reason);
+                if (string.IsNullOrEmpty(status)) status = reason;
             }
         }
 
@@ -43,7 +69,8 @@ namespace MortalHelper.Game
             {
                 string folder = StoryRecovery.Directory;
                 if (folder == null) return "找不到记录目录";
-                if (!File.Exists(Path.Combine(folder, "slot-" + slot.ToString("D3") + ".mhr"))) return "槽位 " + slot + " 还没有检查点";
+                if (!File.Exists(Path.Combine(folder, "slot-" + slot.ToString("D3") + ".mhr")))
+                    return "槽位 " + slot + " 还没有检查点";
             }
             catch (Exception) { return "读取记录目录失败"; }
             return "";
@@ -51,36 +78,22 @@ namespace MortalHelper.Game
 
         internal static bool Start(int slot)
         {
-            if (Active) { Status = "已经在重放中。"; return false; }
-            if (StoryRecovery.Recording) { Status = "请先停止记录再恢复。"; return false; }
+            if (controller != null && controller.Replaying) { status = "已经在重放中。"; return false; }
+            if (StoryRecovery.Recording) { status = "请先停止记录再恢复。"; return false; }
             try
             {
                 string folder = StoryRecovery.Directory;
-                if (folder == null) { Status = "找不到记录目录。"; return false; }
+                if (folder == null) { status = "找不到记录目录。"; return false; }
                 var store = new ArchiveStore(folder);
                 var document = store.Load(slot);
-                if (document == null || document.Kind != RecoveryKind.Story) { Status = "该槽位不是剧情检查点。"; return false; }
-                var save = JsonUtility.FromJson<GameSave>(document.Baseline);
-                if (save == null) { Status = "基线存档无法解析。"; return false; }
-                // Sanity check: a parsed baseline must at least carry the values the
-                // game itself writes, otherwise JsonUtility silently produced defaults.
-                if (save.TimeTick <= 0 || string.IsNullOrEmpty(save.CurrentStoryScript))
-                {
-                    Status = "基线存档解析后缺少关键字段（TimeTick=" + save.TimeTick + "，脚本=" + (save.CurrentStoryScript ?? "null") +
-                        "），已中止以免用不完整数据读档。";
-                    Log(Status);
-                    return false;
-                }
-                Log("parsed baseline tick=" + save.TimeTick + " script=" + save.CurrentStoryScript + " scene=" + save.CurrentScene);
-                Active = true; Document = document; Position = 0; PendingDice = null;
-                lastProgress = UnityEngine.Time.unscaledTime;
-                var load = AccessTools.Method(typeof(SaveSystem), "ExecuteLoadGameData");
-                if (load == null) { Stop("找不到游戏读档方法，已中止。"); return false; }
-                Log("baseline " + document.Baseline.Length + " chars, events " + document.Events.Count);
-                load.Invoke(SaveSystem.Instance, new object[] { save });
-                Status = "已载入基线，开始重放（" + document.Events.Count + " 个事件）。请等待剧情自动推进。";
-                Log("baseline applied");
-                if (document.Events.Count == 0) Finish();
+                if (document == null || document.Kind != RecoveryKind.Story) { status = "该槽位不是剧情检查点。"; return false; }
+                controller = new RecoveryController();
+                controller.Start(document, new Host());
+                Position = 0; diceOrdinal = 0; diceScript = null; PendingDice = null;
+                verifyAt = 0f; lastProgress = Time.unscaledTime;
+                status = "已载入基线，开始重放 " + document.Events.Count + " 个事件。";
+                Log("started: " + document.Events.Count + " events, checkpoint=" + document.Checkpoint);
+                if (document.Events.Count == 0) ScheduleVerify();
                 return true;
             }
             catch (Exception error)
@@ -90,87 +103,96 @@ namespace MortalHelper.Game
             }
         }
 
-        // Playback only stops itself; if the story never reaches the next recorded
-        // interaction the player is left with injections pending, so give up loudly.
+        internal static void Stop(string reason)
+        {
+            if (controller != null && controller.Replaying) controller.Cancel(reason);
+            controller = null;
+            PendingDice = null;
+            status = reason ?? "重放已停止。";
+            Log("stopped: " + status);
+        }
+
         internal static void Tick()
         {
-            if (!Active) return;
-            if (Position > 0) { /* progress resets the clock in Take/Choice */ }
-            if (UnityEngine.Time.unscaledTime - lastProgress > StallSeconds)
+            if (controller == null) return;
+            if (verifyAt > 0f)
+            {
+                if (Time.unscaledTime >= verifyAt) VerifyNow();
+                return;
+            }
+            if (!controller.Replaying) { controller = null; return; }
+            if (Time.unscaledTime - lastProgress > StallSeconds)
                 Stop("超过 " + (int)StallSeconds + " 秒没有匹配到记录的交互，重放已中止。");
         }
 
-        internal static void Stop(string reason)
+        private static void ScheduleVerify()
         {
-            Active = false; PendingDice = null;
-            Status = reason;
-            Log("stopped: " + reason);
+            verifyAt = Time.unscaledTime + VerifyDelay;
+            status = "事件已全部注入，等待状态校验…";
         }
 
-        internal static void Finish()
+        private static void VerifyNow()
         {
-            string expected = Document == null ? "" : Document.ExpectedState;
-            string actual = StoryRecovery.Summary();
-            Active = false; PendingDice = null;
-            Status = expected == actual
-                ? "已到达检查点并通过状态校验；控制权交还给你。"
-                : "已到达检查点，但状态摘要与记录不一致（记录 " + expected + " / 现在 " + actual + "）。";
-            Log("finish: " + Status);
+            verifyAt = 0f;
+            var current = controller;
+            controller = null;
+            try
+            {
+                current.VerifyAtEnd();
+                status = "已到达检查点并通过状态校验；控制权交还给你。";
+            }
+            catch (Exception error)
+            {
+                status = "校验失败：" + error.Message;
+            }
+            Log(status);
         }
 
-        // Called by the dice adapter when a roll dialog opens during playback.
-        internal static bool TakeDice()
+        // Called when a roll dialog opens; consumes the matching recorded event.
+        internal static void TakeDice()
         {
-            var next = Next;
-            if (next == null || next.Kind != EventKind.Dice) return false;
-            PendingDice = next.Integer;
+            if (controller == null || !controller.Replaying) return;
+            string script = StoryRecovery.CurrentScript;
+            if (script != diceScript) { diceScript = script; diceOrdinal = 0; }
+            string key = StoryRecovery.DiceKey(script, ++diceOrdinal);
+            RecordedEvent consumed;
+            if (!controller.TryConsume(EventKind.Dice, key, out consumed))
+            {
+                Stop("判定「" + key + "」与记录不一致，重放已中止。");
+                return;
+            }
             Position++;
-            lastProgress = UnityEngine.Time.unscaledTime;
-            Log("inject dice=" + next.Integer + " (" + Position + "/" + Document.Events.Count + ")");
-            if (Position >= Document.Events.Count) { /* finish after the roll resolves */ }
-            return true;
+            lastProgress = Time.unscaledTime;
+            PendingDice = consumed.Integer;
+            Log("dice " + consumed.Integer + " (" + Position + ")");
+            if (controller.Finished) ScheduleVerify();
         }
 
-        // Called when an option with this text appears during playback.
-        internal static bool TakeChoice(string text)
-        {
-            var next = Next;
-            if (next == null || next.Kind != EventKind.Choice) return false;
-            if (!string.Equals(next.Data, text, StringComparison.Ordinal)) return false;
-            Position++;
-            Log("inject choice=" + text + " (" + Position + "/" + Document.Events.Count + ")");
-            if (Position >= Document.Events.Count) Finish();
-            return true;
-        }
-
-        private static bool clicking;
-
-        // Called when a normal option is rendered during playback. The native click
-        // is what advances the story, so the game stays in charge of its own flow.
+        // Called when a story option is rendered; clicks it when it matches the tape.
         internal static void TryChoice(UnityEngine.UI.Button button, string text)
         {
-            if (!Active || clicking || button == null) return;
-            var next = Next;
-            if (next == null || next.Kind != EventKind.Choice) return;
-            if (!string.Equals(next.Data, text, StringComparison.Ordinal)) return;
+            if (controller == null || !controller.Replaying || clicking || button == null) return;
+            string key = StoryRecovery.ChoiceKey(StoryRecovery.CurrentScript, text);
+            RecordedEvent consumed;
+            if (!controller.TryConsume(EventKind.Choice, key, out consumed))
+            {
+                Stop("选项「" + text + "」与记录不一致，重放已中止。");
+                return;
+            }
             clicking = true;
-            lastProgress = UnityEngine.Time.unscaledTime;
             try
             {
                 Position++;
-                Log("click choice=" + text + " (" + Position + "/" + Document.Events.Count + ")");
+                lastProgress = Time.unscaledTime;
+                Log("choice " + text + " (" + Position + ")");
                 button.onClick.Invoke();
-                if (Position >= Document.Events.Count) Finish();
+                if (controller.Finished) ScheduleVerify();
             }
             catch (Exception error) { Stop("选择注入失败：" + error.Message); }
             finally { clicking = false; }
         }
 
-        internal static void AfterDice()
-        {
-            PendingDice = null;
-            if (Active && Position >= Document.Events.Count) Finish();
-        }
+        internal static void AfterDice() { PendingDice = null; }
 
         private static void Log(string message)
         {

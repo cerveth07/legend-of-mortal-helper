@@ -170,6 +170,23 @@ internal static class Contracts
         controller.Start(Story(),fake);controller.Cancel("player left the scene");
         Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"cancel did not abort host");
 
+        // VerifyAtEnd covers recordings that stopped without a pending interaction.
+        controller=new RecoveryController();fake=new FakeHost();
+        controller.Start(Story(),fake);
+        Reject(()=>controller.VerifyAtEnd(),"verify-at-end ran before any event");
+        controller.TryConsume(EventKind.Dialogue,"line-1",out _);
+        Reject(()=>controller.VerifyAtEnd(),"verify-at-end ran with events left");
+        controller.TryConsume(EventKind.Random,"rand:1",out _);
+        Check(controller.Finished,"finished flag stayed false");
+        controller.VerifyAtEnd();
+        Check(controller.Phase==RecoveryPhase.Idle && fake.Aborts==0,"verify-at-end did not settle");
+
+        controller=new RecoveryController();fake=new FakeHost{State="hp=3"};
+        controller.Start(Story(),fake);
+        controller.TryConsume(EventKind.Dialogue,"line-1",out _);controller.TryConsume(EventKind.Random,"rand:1",out _);
+        Reject(()=>controller.VerifyAtEnd(),"verify-at-end accepted a mismatched state");
+        Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"verify-at-end mismatch did not abort");
+
         string folder=Path.Combine(Path.GetTempPath(),"mortal-helper-tests-"+Guid.NewGuid().ToString("N"));
         try
         {

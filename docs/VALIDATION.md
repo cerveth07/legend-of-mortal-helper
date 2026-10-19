@@ -92,3 +92,17 @@
 第一次测量（4 秒窗口）曾出现物品与商店库存差异，把窗口缩到 0.5 秒后消失，说明那是这几秒里剧情真的在跑，不是还原丢失。
 
 探测代码保留为 Diagnostics/SelfTest（默认关闭，开启后仅在失焦时也需要运行时才会设置 Application.runInBackground），可作为后续回归工具。
+## 恢复播放接线（2026-10-19）
+
+按基线探测结论把播放侧接到 RecoveryController（方案 A）：
+
+- 记录键改为可复现标识：选项 C␁脚本名␁选项文本，判定 D␁脚本名␁脚本内第 N 次判定；
+- StoryReplay 不再自己维护游标：Start 走 RecoveryController.Start（预检 → Host.LoadBaseline → 重放），事件用 TryConsume(kind,key) 消费，key 不符立即中止；
+- Host.LoadBaseline 按实测得到的读档流程执行：JsonUtility.FromJson → 私有 ExecuteLoadGameData → SaveUniverseData → UpdateCheckMissions → LoadCurrentScene；
+- 新增 RecoveryController.VerifyAtEnd()：没有停点交互的记录在重放结束后直接比对状态摘要；失败锁门并回调中止；
+- 每次重放结束后重算摘要，TimeTick 不参与比较（探测已证明它每次应用都会刷新）；
+- 场景切换与 120 秒停滞仍会中止重放。
+
+离线验证：新增 6 条断言（VerifyAtEnd 的时序、完成标志、摘要不一致中止），累计 **248 项** 通过。
+
+仍未验证：真实剧情中的注入顺序与停点行为；旧 .mhr 记录的键是自增序号，与新键不兼容（格式版本未变，但恢复会因 key 不符直接中止，不会静默错位）。

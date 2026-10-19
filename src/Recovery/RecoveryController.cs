@@ -21,6 +21,30 @@ namespace MortalHelper.Recovery
         public string Reason => gate.Reason;
         public bool Replaying => gate.Phase == RecoveryPhase.Replaying;
 
+        // True when every recorded event has been consumed; the caller then verifies.
+        public bool Finished => Replaying && cursor.Complete;
+
+        // Recordings that stopped without a pending interaction are verified directly
+        // after the last event instead of waiting at a stop-point interaction.
+        public void VerifyAtEnd()
+        {
+            if (!Replaying) throw new InvalidOperationException("当前不在恢复阶段。");
+            if (!cursor.Complete) throw new InvalidOperationException("记录尚未重放完。");
+            string expected = document.ExpectedState;
+            string state;
+            try { state = host.CaptureState(); }
+            catch (Exception error) { Abort("读取恢复后状态失败：" + error.Message); throw; }
+            gate.Advance(RecoveryPhase.Verifying);
+            if (state != expected)
+            {
+                Abort("恢复后的状态与保存时不一致。");
+                throw new InvalidDataException("恢复后的状态与保存时不一致。");
+            }
+            gate.Advance(RecoveryPhase.Idle);
+            document = null;
+            host = null;
+        }
+
         public void Start(RecoveryDocument candidate, IReplayHost target)
         {
             if (!gate.CanInteract) throw new InvalidOperationException("上一次恢复尚未处理完。");

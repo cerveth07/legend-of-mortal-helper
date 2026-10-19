@@ -18,9 +18,11 @@ namespace MortalHelper.Game
         private const string Folder = "mhr";
         private static readonly List<RecordedEvent> Events = new List<RecordedEvent>();
         private static string baseline, client, script;
-        private static int serial;
+        private static string scriptForDice;
+        private static int diceOrdinal;
 
         internal static bool Recording { get; private set; }
+        internal static string ClientId => client;
         internal static int Count => Events.Count;
         internal static string LastFile { get; private set; } = "";
         internal static string Status { get; set; } = "尚未记录";
@@ -49,10 +51,10 @@ namespace MortalHelper.Game
             if (string.IsNullOrEmpty(json)) { Status = "当前没有可记录的进度（需要进入周目且已完成加载）。"; return false; }
             if (json.Length > MaximumBaseline) { Status = "当前进度快照过大（" + json.Length + " 字符），超过上限。"; return false; }
             baseline = json;
-            client = "lom:" + Application.version + ":" + json.Length;
+            client = "lom:" + Application.version;
             script = string.IsNullOrEmpty(HintAdapter.ScriptName) ? "unknown" : HintAdapter.ScriptName;
             Events.Clear();
-            serial = 0;
+            scriptForDice = null; diceOrdinal = 0;
             Recording = true;
             Status = "已开始记录（脚本 " + script + "）";
             return true;
@@ -64,14 +66,34 @@ namespace MortalHelper.Game
             Status = "已停止记录，共 " + Events.Count + " 个事件。";
         }
 
+        // Keys must be reproducible at replay time, so they are derived from the live
+        // script name plus either the option text or the dice ordinal inside it.
+        internal static string ChoiceKey(string scriptName, string text)
+        {
+            string script = string.IsNullOrEmpty(scriptName) ? "unknown" : scriptName;
+            string option = (text ?? "").Trim();
+            if (option.Length > 160) option = option.Substring(0, 160);
+            return "C\u0001" + script + "\u0001" + option;
+        }
+
+        internal static string DiceKey(string scriptName, int ordinal)
+        {
+            string script = string.IsNullOrEmpty(scriptName) ? "unknown" : scriptName;
+            return "D\u0001" + script + "\u0001" + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        internal static string CurrentScript => string.IsNullOrEmpty(HintAdapter.ScriptName) ? "unknown" : HintAdapter.ScriptName;
+
         internal static void NoteDice(int value)
         {
-            Add(EventKind.Dice, "dice:" + (++serial), value);
+            string script = CurrentScript;
+            if (script != scriptForDice) { scriptForDice = script; diceOrdinal = 0; }
+            Add(EventKind.Dice, DiceKey(script, ++diceOrdinal), value);
         }
 
         internal static void NoteChoice(string text)
         {
-            Add(EventKind.Choice, "choice:" + (++serial), 1);
+            Add(EventKind.Choice, ChoiceKey(CurrentScript, text), 1);
             if (!string.IsNullOrEmpty(text)) Events[Events.Count - 1].Data = text.Length > 200 ? text.Substring(0, 200) : text;
         }
 
