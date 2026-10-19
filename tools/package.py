@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 
 VERSION = "0.1.0"
-NAME = "活侠万象录"
+NAME = "mortal-helper"  # ASCII on purpose: the zip name ends up in URLs
 
 USAGE = """活侠·万象录 {version} —— 使用说明
 ================================================
