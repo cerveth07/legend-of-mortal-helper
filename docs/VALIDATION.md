@@ -37,6 +37,8 @@
 
 这类检查能发现明显的错误打包或依赖回流，不能独自证明全部代码的法律独立性。
 
+`tools/provenance_scan.py` 对 17 个新 C# 文件与旧仓库 91 个源文件做了 token shingle 与最长公共片段比对：最高包含率 10.8%，且最长公共片段是 Harmony 目标签名；其余集中在 `using` 指令、Unity UI 赋值和“写临时文件再替换”惯用法。逐文件结果见 [PROVENANCE.md](../PROVENANCE.md)。
+
 ## 未覆盖
 
 - 未启动游戏；本机所给游戏目录没有 BepInEx 加载器。

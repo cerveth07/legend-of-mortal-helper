@@ -39,6 +39,26 @@
 
 MIT 存档槽扩展可依法保留原作者署名；知天命的 GPLv3 代码如决定复用，则另行评估并遵守 GPL。当前源码没有引入它们。无需为了采用相同功能思想而删除对原作者的历史致谢，但致谢不能替代授权。
 
+## 相似度核查（可复现）
+
+工具：`tools/provenance_scan.py`。它去掉注释，按标识符与标点切词，对每个新文件计算与旧仓库每个 `.cs` 的 8-token shingle 包含率，并给出最长公共 token 片段。命令：
+
+```powershell
+python tools/provenance_scan.py --new . --old <旧仓库>\源码\src
+```
+
+2026-10-19 对 17 个 C# 文件（`src` 16 个 + `tests` 1 个）的结果：
+
+| 新文件 | 最高包含率 | 最相似旧文件 | 最长公共片段性质 |
+|---|---|---|---|
+| `src/Game/NativeLoadBoundary.cs` | 10.8% | `FreeSave/Patches.cs` | 就是 Harmony 目标签名 `[HarmonyPatch(typeof(SaveSystem), "ExecuteLoadGameData")]`，属互操作必需事实 |
+| `src/Recovery/ArchiveStore.cs` | 6.8% | `FreeSave/LomsSave.cs` 6.8%、`SaveSlotExpander/AtomicFile.cs` 6.4% | 通用“写临时文件后替换”惯用法（`FileStream(...FileMode.CreateNew...){ stream.Write(...); stream.Flush(true); }`） |
+| `src/Game/DiceWidget.cs` | 5.0% | `FateHelper/DiceMaster/NativeDiceControls.cs` | Unity UI 赋值惯用法（`anchorMin = anchorMax = new Vector2(.5f, ...)`） |
+| `src/Game/GameAccess.cs` | 4.3% | `FreeSave/LomsRuntime.cs` | `using` 指令序列 |
+| 其余 13 个文件 | 0.3%–3.6% | — | `using` 指令、空行与括号密度 |
+
+`ArchiveStore` 与原 MIT 的 `SaveSlotExpander/AtomicFile.cs` 在写入惯用法上重合最多。本工程没有引入其源文件；若复核者认为表达仍过近，补 MIT 署名或改写该写入路径都可行。工具输出只是启发式证据：它既不证明独立开发，也不能反过来当作侵权认定。
+
 ## 发布前仍须审查
 
 从本工程自己的根提交发布，不将旧仓库作为父提交或合并历史。不带上旧分支、标签、Release、构建缓存、夹具和游戏资源。确认实际二进制由本工程源码重新编译，依赖清单和许可证与分发内容相符。来源比对工具只能提供辅助证据，不能作法律结论。
