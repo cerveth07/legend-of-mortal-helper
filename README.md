@@ -104,11 +104,27 @@
 
 ## 二、安装
 
-当前**没有**一键安装包。要求：Windows x64 + 正版游戏 + BepInEx 6（Mono）。
+发行包分两种，**都不需要安装器**：文件放进游戏目录就生效。要求 Windows x64 + 正版游戏。
 
+| 包 | 适用 | 做法 |
+|---|---|---|
+| **整合包**（`活侠万象录-<版本>-full.zip`，约 0.6 MB） | 没装过 BepInEx 的人 | 解压后把里面的**全部内容**复制进游戏根目录（与 `Mortal.exe` 同级），允许合并 |
+| **仅插件包**（`-plugin.zip`，约 57 KB） | 已有 BepInEx 6 Mono 的人 | 把 `BepInEx\plugins\cerveth.mortal.helper\MortalHelper.dll` 放进现有 `BepInEx\plugins\` |
+
+整合包内含 BepInEx 6.0.0-be.692（Unity Mono x64，LGPL-2.1，来源与许可见包内「第三方组件说明」）与本插件。
+
+**已验证**：把游戏目录原有的加载器整组移走后，只解压整合包即可正常启动并加载插件（日志 `活侠·万象录 0.1.0 初始化完成`）。
+
+制作与自建包：
+```powershell
+python build.py --game "<游戏目录>" --loader "<BepInEx core 目录>" --compiler "<csc.dll>" --test
+python tools\package.py --plugin artifacts\MortalHelper.dll --loader "<含 winhttp.dll 的加载器目录>" --out dist
+```
+
+如果你更愿意自己装：
 1. **完全退出游戏**，把存档目录整体备份（通常为 `%USERPROFILE%\AppData\LocalLow\Obb Studio\Mortal\<SteamID>`）。
 2. 安装 [BepInEx 6.0.0-be.692](https://github.com/BepInEx/BepInEx)（Unity Mono x64）到游戏目录：解压后应存在 `winhttp.dll`、`doorstop_config.ini`、`.doorstop_version`、`BepInEx\`。
-3. 把编译产物 `MortalHelper.dll` 放进 `BepInEx\plugins\`（子目录也可以，例如 `BepInEx\plugins\cerveth.mortal.helper\`）。
+3. 把 `MortalHelper.dll` 放进 `BepInEx\plugins\`（子目录也可以，例如 `BepInEx\plugins\cerveth.mortal.helper\`）。
 4. 从 Steam 启动游戏，等待加载完成后按 `Tab`。
 
 正确层级：
@@ -132,7 +148,7 @@ LegendOfMortal/
 
 - **备份**：退出游戏后复制完整存档目录、`BepInEx\config`（含本插件的 `cerveth.mortal.helper.cfg`、`*.choices.txt`、`*.slots.txt`、`mhr\`）、以及 `BepInEx\plugins` 下的插件。
 - **升级**：替换 `MortalHelper.dll` 即可；配置与记录文件保留。
-- **卸载**：移走 `MortalHelper.dll`（并清理 `BepInEx\config\cerveth.mortal.helper.*` 可选）；不需要改动存档。关闭开关 **不会** 撤销已写入的数值，也不会删除已保存的备注/分支记录。
+- **卸载**：整合包装的删掉 `winhttp.dll`、`doorstop_config.ini`、`.doorstop_version` 与整个 `BepInEx\`；仅插件包装的只移走 `MortalHelper.dll`。配置与记录在 `BepInEx\config\cerveth.mortal.helper.*`，留着即可。存档不受影响；关闭开关 **不会** 撤销已写入的数值，也不会删除已保存的备注/分支记录。
 
 ## 四、配置文件
 
