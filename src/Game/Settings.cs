@@ -10,6 +10,7 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<string> Point;
         public readonly ConfigEntry<KeyCode> Toggle;
         public readonly ConfigEntry<float> X, Y, Width, Height;
+        public readonly ConfigEntry<float> Speed;
 
         public Settings(ConfigFile config)
         {
@@ -26,6 +27,9 @@ namespace MortalHelper.Game
             Y = config.Bind("Window", "Y", 64f, "窗口上边距。");
             Width = config.Bind("Window", "Width", 640f, "窗口宽度。");
             Height = config.Bind("Window", "Height", 580f, "窗口高度。");
+            Speed = config.Bind("Edits", "GameSpeed", 1f,
+                new ConfigDescription("游戏速度倍率，1 为默认。原生暂停与慢动作由游戏自己管理。",
+                    new AcceptableValueRange<float>(0.25f, 5f)));
         }
     }
 }

@@ -75,11 +75,21 @@ namespace MortalHelper.Game
 
         private bool guiError;
         internal void Log(string message) { Logger.LogInfo(message); }
+
+        // Applied only when the value changes: forcing timeScale every frame would
+        // fight the game's own pause and slow-motion handling.
+        internal void ApplySpeed(float value)
+        {
+            value = Mathf.Clamp(value, 0.25f, 5f);
+            Options.Speed.Value = value;
+            Time.timeScale = value;
+        }
         private void SceneChanged(Scene previous, Scene next) { DiceAdapter.Close(); HintAdapter.Clear(); Panel?.ClearSelection(); }
         private void OnDestroy()
         {
             SceneManager.activeSceneChanged -= SceneChanged;
             DiceAdapter.Close(); HintAdapter.Clear();
+            if (Options.Speed.Value != 1f) Time.timeScale = 1f;
             Panel?.Dispose(); patches?.UnpatchSelf(); Config.Save();
             Instance = null;
         }

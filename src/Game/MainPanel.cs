@@ -20,6 +20,7 @@ namespace MortalHelper.Game
         private ItemData selectedItem;
         private int expectedItemCount;
         private string itemValue = "", itemSearch = "";
+        private bool showAllItems;
         private string value = "", search = "";
         private RelationshipStat relationship;
         private string relationshipValue = "";
@@ -105,7 +106,7 @@ namespace MortalHelper.Game
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("收起",GUILayout.Width(70))) Visible = false;
             GUILayout.EndHorizontal();
-            page = GUILayout.Toolbar(page, new[] { "剧情", "单挑", "属性", "关系", "物品", "开发状态" });
+            page = GUILayout.Toolbar(page, new[] { "剧情", "单挑", "属性", "关系", "数值", "开发状态" });
             scroll = GUILayout.BeginScrollView(scroll);
             bool previousEnabled = GUI.enabled;
             if (page != 5) GUI.enabled = plugin.Options.Enabled.Value && plugin.Gate.CanInteract;
@@ -113,7 +114,7 @@ namespace MortalHelper.Game
             else if (page == 1) Duel();
             else if (page == 2) Stats();
             else if (page == 3) Relationships();
-            else if (page == 4) Items();
+            else if (page == 4) Edits();
             else Diagnostics();
             GUI.enabled = previousEnabled;
             GUILayout.EndScrollView();
@@ -189,21 +190,31 @@ namespace MortalHelper.Game
             }
         }
 
-        private void Items()
+        private void Edits()
         {
+            GUILayout.Label("游戏速度", GUILayout.Width(80));
+            GUILayout.BeginHorizontal();
+            float speed = GUILayout.HorizontalSlider(plugin.Options.Speed.Value, 0.25f, 5f);
+            GUILayout.Label(speed.ToString("0.00") + " 倍", GUILayout.Width(70));
+            if (GUILayout.Button("恢复 1 倍", GUILayout.Width(90))) plugin.ApplySpeed(1f);
+            else if (Mathf.Abs(speed - plugin.Options.Speed.Value) > 0.02f) plugin.ApplySpeed(speed);
+            GUILayout.EndHorizontal();
+            GUILayout.Label("只改引擎时间倍率；原生暂停、慢动作与快进各有自己的状态，不能当成所有场景都加速。", Wrap());
+            GUILayout.Space(16);
             GUILayout.Label("物品数量会直接影响剧情、交易与战斗；请使用备份周目。当前仅在自由活动界面空闲时开放。", Wrap());
             if (!GameAccess.CanEdit) { GUILayout.Label("请先进入自由活动场景并关闭游戏内交互面板。",Wrap()); selectedItem = null; return; }
             var database = ItemDatabase.Instance;
             if (database == null) { GUILayout.Label("物品数据库尚未就绪。",Wrap()); return; }
             int tab = GUILayout.Toolbar((int)itemType - 1, new[] { "書籍", "雜物", "貴重品", "消耗品" });
             itemType = (GameItemType)(tab + 1);
+            showAllItems = GUILayout.Toggle(showAllItems, "也列出数量为 0 的物品（等于直接生成）");
             GUILayout.BeginHorizontal(); GUILayout.Label("筛选",GUILayout.Width(45)); itemSearch = GUILayout.TextField(itemSearch,80); GUILayout.EndHorizontal();
             ItemDataCollection collection = tab == 0 ? database.Books : tab == 1 ? database.Miscs
                 : tab == 2 ? database.Special : database.Consumables;
             if (collection == null || collection.List == null) { GUILayout.Label("该分类物品列表尚未就绪。",Wrap()); return; }
             foreach (var item in collection.List)
             {
-                if (item == null) continue;
+                if (item == null || (!showAllItems && item.CurrentCount <= 0)) continue;
                 string label = ItemName(item) + "   " + item.CurrentCount;
                 if (!string.IsNullOrEmpty(itemSearch) && label.IndexOf(itemSearch,StringComparison.OrdinalIgnoreCase)<0) continue;
                 if (GUILayout.Button((selectedItem == item ? "● " : "") + label))
