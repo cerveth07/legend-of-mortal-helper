@@ -5,7 +5,7 @@ import subprocess
 
 root = pathlib.Path(__file__).resolve().parents[1]
 files = [p for p in root.rglob('*') if p.is_file() and not any(
-    part in {'.git', 'artifacts', '.local', '__pycache__'} for part in p.relative_to(root).parts)]
+    part in {'.git', 'artifacts', 'dist', '.local', '__pycache__'} for part in p.relative_to(root).parts)]
 errors = []
 for path in files:
     if path.suffix.lower() in {'.dll', '.exe', '.zip', '.lua', '.dat', '.loms', '.duel', '.asset', '.bundle'}:
