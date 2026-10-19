@@ -9,7 +9,7 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
         public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage;
         public readonly ConfigEntry<bool> GroupHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
-        public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge;
+        public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge, PracticeLimit, CheckpointLog;
         public readonly ConfigEntry<string> Point;
         public readonly ConfigEntry<int> Mode;
         public readonly ConfigEntry<KeyCode> Toggle;
@@ -46,6 +46,8 @@ namespace MortalHelper.Game
             ForgeFree = config.Bind("Progression", "ForgeFree", false, "锻造炼丹不扣点数与金钱；不解锁研发条件。");
             FastSkill = config.Bind("Progression", "FastSkill", false, "每次练功完成当前一级的剩余进度。");
             FastForge = config.Bind("Progression", "FastForge", false, "每次锻造炼丹完成当前一级的剩余进度。");
+            PracticeLimit = config.Bind("Edits", "PracticeLimit", false, "解除修炼点数消耗上限；仍按现有武学点数扣减。");
+            CheckpointLog = config.Bind("Story", "CheckpointLog", false, "剧情标记（检查点）更新时在状态行提示；这是剧情标记，不是存档点。");
             X = config.Bind("Window", "X", 36f, "窗口左边距。");
             Y = config.Bind("Window", "Y", 64f, "窗口上边距。");
             Width = config.Bind("Window", "Width", 640f, "窗口宽度。");

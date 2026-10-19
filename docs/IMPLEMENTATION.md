@@ -16,7 +16,7 @@
 - 心上人：十项候选写入 `GameStatType.愛人`（值取 `RelationshipStatType` 编号）；未实机验证。
 - 快速练功 / 快速锻造炼丹：在 `Book.Learn` / `UpgradeItemData.Upgrade` 前缀里把本次消耗替换为当前级剩余点数，动画与升级奖励仍走原生。
 - 物品选取路径：`ItemStatPanel.OnItemSelected` 记录游戏物品面板里选中的物品，数值编辑页可直接编辑该物品；读档时清空记录。
-- 存档设置：格数在 `SaveGamePanel`/`LoadGamePanel.CreateSlot` 前缀里改 `_slotCount`；备注存配置目录的纯文本并在 `SetupText` 后追加到槽位标题，`SelectButton` 记录当前槽位、F2 打开编辑器；排序在 `LoadGamePanel.UpdateSlot` 后按 `GameSave.TimeTick` 重排子节点，F3 切换。以上均未实机验证，改格数前请备份存档。\n- 分支记录：`NormalOptionButton` 上挂 `BranchMarker`，显示〔已走〕/〔未记录〕并在点击时记录；键为「脚本名 + 选项文本」，保存在配置目录的纯文本文件；面板可清空并列出最近记录。高级工具（检查点提醒、强制事件）仍未接入。
+- 解除修炼点数消耗上限：`MartialPanel.StartHandleUpgarde` 前缀把消耗夹到当前可用武学点数，`CanUseLearnButton` 放行、`UpdateMartialPointInfo` 显示「不限」。\n- 检查点提醒：`MissionManagerData.AddFlag/SetFlag` 后读 `GetFlag(name).State`，写入「上次操作」。\n- 精确恢复（仅记录）：`StoryRecovery` 用 `SaveSystem.GetCurrentSaveData()` 的 JSON 作基线，记录骰子结果与选项点击，经 `Archive.Encode` 写成配置目录 `mhr\\slot-00N.mhr`；播放（写回基线并重放事件）尚未实现。\n- 存档设置：格数在 `SaveGamePanel`/`LoadGamePanel.CreateSlot` 前缀里改 `_slotCount`；备注存配置目录的纯文本并在 `SetupText` 后追加到槽位标题，`SelectButton` 记录当前槽位、F2 打开编辑器；排序在 `LoadGamePanel.UpdateSlot` 后按 `GameSave.TimeTick` 重排子节点，F3 切换。以上均未实机验证，改格数前请备份存档。\n- 分支记录：`NormalOptionButton` 上挂 `BranchMarker`，显示〔已走〕/〔未记录〕并在点击时记录；键为「脚本名 + 选项文本」，保存在配置目录的纯文本文件；面板可清空并列出最近记录。高级工具（检查点提醒、强制事件）仍未接入。
 - 界面：透明度 40%～100%；四边/角落拖拽缩放（原始鼠标轮询 + 高亮边）；标题栏拖动。
 - 群战辅助（`Mortal.Battle`，全部默认关闭）：生命 `Character.TakeDamage` 前缀、气力 `CharacterMana.Modify` 补满、技能 `SkillButton.CanProcess` 放行、剩余时间 `GameLevelManager._currentSessionTime` 维持在最大值、敌方受伤即倒地。玩家/敌人用 `Character._entity.CurrentType` 区分，避免误伤友军与中立单位。四个补丁目标在本机启动日志中解析成功，但**战斗内的实际效果尚未验证**。
 - 固定字段 `.mhr` 格式；文件预算、严格长度、事件枚举与有限数值检查，截断/损坏拒绝；单文件写入和显式备份读取；原子替换不可用时回退为复制，且损坏主档不会被提升为备份。

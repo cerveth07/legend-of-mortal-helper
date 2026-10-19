@@ -151,6 +151,7 @@ namespace MortalHelper.Game
         {
             if (Enabled && Session.Phase == RollPhase.Committed && result != null && Session.RequestedOption.HasValue)
                 result.Result = Session.RequestedOption.Value;
+            if (result != null) StoryRecovery.NoteDice(result.Result);
             Session.Resolved();
         }
     }

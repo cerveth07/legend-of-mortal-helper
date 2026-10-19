@@ -146,7 +146,9 @@ namespace MortalHelper.Game
         public void OnPointerClick(PointerEventData data)
         {
             if (data == null || data.button != PointerEventData.InputButton.Left) return;
-            if (!BranchHistory.Enabled || source == null) return;
+            if (source == null) return;
+            StoryRecovery.NoteChoice(source.text);
+            if (!BranchHistory.Enabled) return;
             BranchHistory.Record(script, source.text);
         }
     }

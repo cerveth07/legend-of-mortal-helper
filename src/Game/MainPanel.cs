@@ -58,6 +58,7 @@ namespace MortalHelper.Game
         private string itemValue = "", itemSearch = "", value = "", search = "";
         private bool showAllItems, loggedBadge;
         private string slotComment = "", commentSlot, slotCountText = "";
+        private int recoverySlot = 1;
         private RelationshipStat relationship;
         private string relationshipValue = "";
         private int expectedRelationship;
@@ -472,8 +473,30 @@ namespace MortalHelper.Game
             var recent = BranchHistory.Recent(12);
             if (recent.Count == 0) Note("还没有记录；开启标记后正常做选择即可累积。");
             else foreach (string line in recent) GUILayout.Label("· " + line, style.Description);
+            Section("精确恢复（实验）");
+            GUILayout.BeginHorizontal();
+            if (!StoryRecovery.Recording)
+            {
+                if (GUILayout.Button("开始记录", style.ButtonStyle, GUILayout.Width(90f * scale))) StoryRecovery.Begin();
+            }
+            else
+            {
+                if (GUILayout.Button("保存检查点", style.ButtonStyle, GUILayout.Width(110f * scale))) StoryRecovery.Save(recoverySlot);
+                if (GUILayout.Button("停止记录", style.SubtleStyle, GUILayout.Width(90f * scale))) StoryRecovery.Stop();
+            }
+            recoverySlot = Mathf.Clamp(recoverySlot, 1, 9);
+            GUILayout.Label("槽位", style.Description, GUILayout.Width(40f * scale));
+            if (GUILayout.Button("－", style.SubtleStyle, GUILayout.Width(28f * scale))) recoverySlot--;
+            GUILayout.Label(recoverySlot.ToString(), style.Entry, GUILayout.Width(24f * scale));
+            if (GUILayout.Button("＋", style.SubtleStyle, GUILayout.Width(28f * scale))) recoverySlot++;
+            GUILayout.EndHorizontal();
+            Note("记录中：" + (StoryRecovery.Recording ? "是" : "否") + " · 已记录事件 " + StoryRecovery.Count + " 个");
+            Note(StoryRecovery.Status);
+            Note("本阶段只做记录：基线是当前存档的 JSON，事件是骰子结果与选项点击；文件写到配置目录 mhr\\slot-00N.mhr。");
+            Note("播放尚未实现——恢复需要把基线写回游戏再重放事件，必须实机逐步验证后才开放，避免把进度改坏。");
             Section("高级工具（诊断与强制事件）");
-            Unported("检查点更新提醒（剧情标记，不是存档点）", "尚需剧情诊断与强制事件接口。");
+            plugin.Options.CheckpointLog.Value = DrawSwitchRow("检查点更新提醒（剧情标记，不是存档点）", plugin.Options.CheckpointLog.Value,
+                "剧情标记变化时在「上次操作」提示名称与值。");
             Unported("强制事件 / 取消待执行事件与任务", "跳过前置条件会直接影响剧情走向，需实机验证后再开放。");
             Note("开发状态：主面板、骰子控制、受限提示、属性/好感/物品/速度、单挑与群战辅助已接入；恢复适配未完成。");
         }
@@ -594,7 +617,8 @@ namespace MortalHelper.Game
             GUILayout.EndHorizontal();
             Note("只改引擎时间倍率；原生暂停、慢动作与快进各有自己的状态。");
             Section("其他");
-            Unported("解除修炼点数消耗上限", "旧版数值编辑项，尚未接入。");
+            plugin.Options.PracticeLimit.Value = DrawSwitchRow("解除修炼点数消耗上限", plugin.Options.PracticeLimit.Value,
+                "练功面板不再限制单次消耗，按现有武学点数扣减；研究条件与升级奖励不变。");
         }
 
         private void StatsBody()

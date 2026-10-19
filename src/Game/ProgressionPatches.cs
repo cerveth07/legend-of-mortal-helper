@@ -144,4 +144,87 @@ namespace MortalHelper.Game
             if (maximum > 0 && __instance.Value < maximum) __instance.SetValue(maximum);
         }
     }
+
+    // Removes the per-session practice spend cap: the panel may still show a limit,
+    // but the spend handed to the game is clamped to the points actually available.
+    internal static class PracticeLimitState
+    {
+        internal static bool On => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.PracticeLimit.Value;
+    }
+
+    [HarmonyPatch(typeof(MartialPanel), "StartHandleUpgarde")]
+    internal static class PracticeLimitSpendPatch
+    {
+        private static void Prefix(MartialPanel __instance, ref int point)
+        {
+            if (!PracticeLimitState.On) return;
+            try
+            {
+                var stat = GameAccess.Field<GameStat>(__instance, "_martialPoint");
+                int available = stat != null ? stat.FinalValue : 0;
+                if (available > 0 && point > available) point = available;
+            }
+            catch (System.Exception) { }
+        }
+    }
+
+    [HarmonyPatch(typeof(MartialPanel), "CanUseLearnButton")]
+    internal static class PracticeLimitButtonPatch
+    {
+        private static void Postfix(MartialPanel __instance, ref bool __result)
+        {
+            if (!PracticeLimitState.On || __result) return;
+            try
+            {
+                var stat = GameAccess.Field<GameStat>(__instance, "_martialPoint");
+                if (stat != null && stat.FinalValue > 0) __result = true;
+            }
+            catch (System.Exception) { }
+        }
+    }
+
+    [HarmonyPatch(typeof(MartialPanel), "UpdateMartialPointInfo")]
+    internal static class PracticeLimitLabelPatch
+    {
+        private static void Postfix(MartialPanel __instance)
+        {
+            if (!PracticeLimitState.On) return;
+            try
+            {
+                var text = GameAccess.Field<UnityEngine.UI.Text>(__instance, "_maxCountText");
+                if (text != null) text.text = "不限";
+            }
+            catch (System.Exception) { }
+        }
+    }
+
+    // Checkpoint reminders: story flags are markers, not save points. Read only.
+    internal static class CheckpointState
+    {
+        internal static bool On => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.CheckpointLog.Value;
+
+        internal static void Changed(MissionManagerData manager, string name)
+        {
+            if (!On || manager == null || string.IsNullOrEmpty(name)) return;
+            try
+            {
+                var flag = manager.GetFlag(name);
+                if (flag == null) return;
+                Plugin.Instance.Status = "检查点更新：" + flag.name + "=" + flag.State;
+            }
+            catch (System.Exception) { }
+        }
+    }
+
+    [HarmonyPatch(typeof(MissionManagerData), "AddFlag")]
+    internal static class CheckpointAddPatch
+    {
+        private static void Postfix(MissionManagerData __instance, string __1) { CheckpointState.Changed(__instance, __1); }
+    }
+
+    [HarmonyPatch(typeof(MissionManagerData), "SetFlag")]
+    internal static class CheckpointSetPatch
+    {
+        private static void Postfix(MissionManagerData __instance, string __1) { CheckpointState.Changed(__instance, __1); }
+    }
 }
