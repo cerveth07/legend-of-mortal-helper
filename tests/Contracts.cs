@@ -125,6 +125,44 @@ internal static class Contracts
         Reject(()=>recorder.Begin(invalidSeed),"invalid baseline accepted");
         Check(!recorder.Valid,"old baseline survived a failed new baseline");
 
+        // Recovery controller: the phase sequence the Unity adapter will call.
+        var controller=new RecoveryController();var fake=new FakeHost();
+        Check(!controller.TryConsume(EventKind.Dialogue,"line-1",out _),"idle controller consumed replay input");
+        controller.Start(Story(),fake);
+        Check(controller.Replaying && fake.Baseline==Story().Baseline,"baseline not loaded before replay");
+        Check(!controller.IsStopPoint(EventKind.Choice,"menu-2"),"stop point recognised with events left");
+        Check(controller.TryConsume(EventKind.Dialogue,"line-1",out _),"dialogue replay refused");
+        Check(controller.TryConsume(EventKind.Random,"rand:1",out _),"random replay refused");
+        Check(controller.IsStopPoint(EventKind.Choice,"menu-2"),"stop point not recognised");
+        Check(!controller.TryConsume(EventKind.Choice,"menu-2",out _),"stop point consumed as replay");
+        controller.Verify();
+        Check(controller.Phase==RecoveryPhase.Idle && fake.Aborts==0,"verified replay stayed open");
+        Check(fake.States==1,"state captured a wrong number of times");
+
+        // Wrong order locks the gate and releases the host exactly once.
+        controller=new RecoveryController();fake=new FakeHost();
+        controller.Start(Story(),fake);
+        Check(!controller.TryConsume(EventKind.Choice,"menu-2",out _),"out of order replay accepted");
+        Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"failed replay did not abort host");
+        Check(!controller.TryConsume(EventKind.Dialogue,"line-1",out _),"failed replay kept consuming");
+        Reject(()=>controller.Start(Story(),fake),"locked gate accepted a new replay");
+        controller.Acknowledge();Check(controller.Phase==RecoveryPhase.Idle,"acknowledged failure stayed locked");
+
+        // A different post-replay state is a failure, not a warning.
+        controller=new RecoveryController();fake=new FakeHost{State="hp=3"};
+        controller.Start(Story(),fake);
+        controller.TryConsume(EventKind.Dialogue,"line-1",out _);controller.TryConsume(EventKind.Random,"rand:1",out _);
+        Reject(()=>controller.Verify(),"mismatched state passed verification");
+        Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"state mismatch did not abort host");
+
+        // Baseline load failure and explicit cancel both release the host.
+        controller=new RecoveryController();fake=new FakeHost{BaselineFails=true};
+        Reject(()=>controller.Start(Story(),fake),"failing baseline load accepted");
+        Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"baseline failure did not abort host");
+        controller=new RecoveryController();fake=new FakeHost();
+        controller.Start(Story(),fake);controller.Cancel("player left the scene");
+        Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"cancel did not abort host");
+
         string folder=Path.Combine(Path.GetTempPath(),"mortal-helper-tests-"+Guid.NewGuid().ToString("N"));
         try
         {
@@ -152,5 +190,31 @@ internal static class Contracts
     private static void Resign(byte[] data)
     {
         using(var sha=SHA256.Create())Array.Copy(sha.ComputeHash(data,40,data.Length-40),0,data,8,32);
+    }
+
+    private static RecoveryDocument Story()
+    {
+        var d=new RecoveryDocument{Kind=RecoveryKind.Story,Client="game-build-1",Script="story.lua",Scene="Story",
+            Checkpoint="2:menu-2",Baseline="{\"native\":1}",ExpectedState="hp=10"};
+        d.Events.Add(new RecordedEvent{Kind=EventKind.Dialogue,Key="line-1"});
+        d.Events.Add(new RecordedEvent{Kind=EventKind.Random,Key="rand:1",Number=.25});
+        return d;
+    }
+
+    private sealed class FakeHost : IReplayHost
+    {
+        public string Baseline;
+        public bool BaselineFails;
+        public int Aborts;
+        public int States;
+        public string State="hp=10";
+        public string Client => "game-build-1";
+        public void LoadBaseline(string baseline)
+        {
+            if(BaselineFails) throw new InvalidOperationException("原生档读取失败");
+            Baseline=baseline;
+        }
+        public string CaptureState() { States++; return State; }
+        public void Abort(string reason) { Aborts++; }
     }
 }
