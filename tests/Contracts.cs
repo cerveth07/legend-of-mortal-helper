@@ -136,6 +136,14 @@ internal static class Contracts
             File.WriteAllBytes(store.PathFor(1),new byte[]{1,2});
             Reject(()=>store.Load(1),"corrupt primary silently loaded backup");
             Check(store.Load(1,true).ExpectedState=="state-2","backup unavailable after corruption");
+            var recovered=Document();recovered.ExpectedState="after-corrupt";store.Save(1,recovered);
+            Check(store.Load(1).ExpectedState=="after-corrupt","save over corrupt primary failed");
+            Check(store.Load(1,true).ExpectedState=="state-2","corrupt primary promoted to backup");
+            ArchiveStore.ForceCopyFallback=true;
+            var copied=Document();copied.ExpectedState="after-second";store.Save(1,copied);
+            Check(store.Load(1).ExpectedState=="after-second","copy fallback did not update primary");
+            Check(store.Load(1,true).ExpectedState=="after-corrupt","copy fallback lost previous primary");
+            ArchiveStore.ForceCopyFallback=false;
         }
         finally { if(Directory.Exists(folder))Directory.Delete(folder,true); }
         Console.WriteLine("PASS: "+passed+" contract checks; no Unity runtime or player save accessed.");
