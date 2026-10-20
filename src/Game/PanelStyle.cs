@@ -161,10 +161,10 @@ namespace MortalHelper.Game
             Skin.horizontalSliderThumb.normal.background = SliderThumb;
             Skin.horizontalSliderThumb.fixedWidth = 18f * Scale; Skin.horizontalSliderThumb.fixedHeight = 18f * Scale;
             Skin.verticalScrollbar.normal.background = Transparent;
-            Skin.verticalScrollbarThumb.normal.background = Hairline;
-            Skin.verticalScrollbarThumb.hover.background = AccentSoft;
-            Skin.verticalScrollbarThumb.fixedWidth = 5f * Scale;
-            Skin.verticalScrollbar.fixedWidth = 6f * Scale;
+            Skin.verticalScrollbarThumb.normal.background = AccentSoft;
+            Skin.verticalScrollbarThumb.hover.background = Accent;
+            Skin.verticalScrollbarThumb.fixedWidth = 7f * Scale;
+            Skin.verticalScrollbar.fixedWidth = 8f * Scale;
 
             Segment.font = UiFont; Segment.fontSize = SubTab.fontSize;
             Segment.padding = new RectOffset(8, 8, 3, 3); Segment.margin = new RectOffset(2, 2, 0, 0);

@@ -20,9 +20,10 @@ namespace MortalHelper.Game
         private const float MinHeight = 600f;
 
         private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "存档设置" };
-        private static readonly string[] StoryViews = { "剧情辅助", "单挑回想" };
+        private static readonly string[] StoryViews = { "剧情", "回想" };
+        private static readonly string[] ItemViews = { "书籍", "杂物", "贵重品", "消耗品" };
         private static readonly string[] BattleViews = { "单挑", "群战" };
-        private static readonly string[] GrowthViews = { "养成辅助", "人际关系" };
+        private static readonly string[] GrowthViews = { "养成", "人际" };
         private static readonly string[] Lovers = { "自己", "小师妹", "瑞杏", "叶云裳", "虞小梅", "上官萤", "夏侯兰", "郁竹", "魏菊", "龙湘" };
         private static readonly HashSet<string> Editable = new HashSet<string>(new[] {
             "銀兩","個人貢獻度","門派資產","門派名聲","門派人數","向心力","心理衛生","武學點數","鍛造","毒藥",
@@ -423,17 +424,36 @@ namespace MortalHelper.Game
             GUILayout.Space(8f * s);
 
             bool features = plugin.Options.Enabled.Value;
+            if (page != lastPage) { scroll[page] = Vector2.zero; lastPage = page; }
+
+            // Wide windows keep one fixed content column, centred. Stretching rows was
+            // the "wide panel looks empty" report; margins read as deliberate instead.
+            float contentWidth = ContentWidth();
+            float horizontalPadding = style.Skin != null ? style.Skin.window.padding.horizontal : 32f;
+            float sideMargin = Mathf.Max(0f, (shownRect.width - horizontalPadding - contentWidth) * .5f);
+            GUILayout.BeginHorizontal(GUILayout.ExpandHeight(true));
+            if (sideMargin > .5f) GUILayout.Space(sideMargin);
+            GUILayout.BeginVertical(GUILayout.Width(contentWidth), GUILayout.ExpandHeight(true));
+
+            // Constant height status slot: appearing and vanishing used to shift every
+            // control on the page up and down by a line.
+            float statusHeight = style.Description.CalcHeight(new GUIContent("上次操作：测"), contentWidth) +
+                                 style.Notice.padding.vertical + 6f * s;
             if (!string.IsNullOrEmpty(plugin.Status))
             {
                 GUILayout.BeginVertical(style.Notice);
                 Color before = GUI.color;
                 GUI.color = StatusLooksBad(plugin.Status) ? new Color(1f, .80f, .74f) : new Color(.98f, .90f, .70f);
                 GUILayout.Label("上次操作：" + plugin.Status, style.Description);
+                GUI.color = before;
                 GUILayout.EndVertical();
                 GUILayout.Space(7f * s);
             }
+            else
+            {
+                GUILayout.Space(statusHeight + 7f * s);
+            }
             if (!features) GUILayout.Label("万象录辅助功能已暂停；已接入的功能不生效。", style.Description);
-            if (page != lastPage) { scroll[page] = Vector2.zero; lastPage = page; }
             // Only show the scrollbar when the page actually overflows; the always-on
             // track drew a gold hairline down the right edge of every page.
             scroll[page] = GUILayout.BeginScrollView(scroll[page], false, false, GUIStyle.none,
@@ -452,6 +472,8 @@ namespace MortalHelper.Game
             GUILayout.Space(16f * s);
             Mark("content-end");
             GUILayout.EndScrollView();
+            GUILayout.EndVertical();
+            GUILayout.EndHorizontal();
             DrawBottomBar();
             Mark("bottombar"); FlushMarks();
         }
@@ -544,7 +566,7 @@ namespace MortalHelper.Game
 
         private void StoryPage()
         {
-            int view = GUILayout.Toolbar(storyView, StoryViews, style.Segment, GUILayout.Height(30f * scale));
+            int view = ViewTabs(storyView, StoryViews);
             if (view != storyView) { storyView = view; scroll[0] = Vector2.zero; }
             GUILayout.Space(8f * scale);
             if (storyView == 1) { Recall(); return; }
@@ -589,9 +611,9 @@ namespace MortalHelper.Game
             Mark("row3");
             GUILayout.BeginHorizontal();
             recoverySlot = Mathf.Clamp(recoverySlot, 1, 9);
-            if (GUILayout.Button("－", style.SubtleStyle, GUILayout.Width(30f * scale))) recoverySlot--;
+            if (GUILayout.Button("减少", style.SubtleStyle, GUILayout.Width(56f * scale))) recoverySlot--;
             GUILayout.Label("槽位 " + recoverySlot, style.Entry, GUILayout.Width(64f * scale));
-            if (GUILayout.Button("＋", style.SubtleStyle, GUILayout.Width(30f * scale))) recoverySlot++;
+            if (GUILayout.Button("增加", style.SubtleStyle, GUILayout.Width(56f * scale))) recoverySlot++;
             string blocker = StoryReplay.Blocker(recoverySlot);
             bool canRestore = GUI.enabled;
             GUI.enabled = canRestore && blocker.Length == 0;
@@ -616,14 +638,17 @@ namespace MortalHelper.Game
 
         private void BattlePage()
         {
-            int view = GUILayout.Toolbar(battleView, BattleViews, style.Segment, GUILayout.Height(30f * scale));
+            int view = ViewTabs(battleView, BattleViews);
             if (view != battleView) { battleView = view; scroll[1] = Vector2.zero; }
             GUILayout.Space(8f * scale);
             bool duel = battleView == 0;
             Note(duel ? "以下 7 项只影响单挑，群战另有一页。" : "以下 5 项只影响群战，单挑另有一页。");
+            // Small right-aligned actions: the view switcher above already owns the
+            // full-width bar look, so these must not compete with it.
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("全部开启", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) SetBattle(duel, true);
-            if (GUILayout.Button("全部关闭", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) SetBattle(duel, false);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("全部开启", style.SubtleStyle, GUILayout.Width(84f * scale), GUILayout.Height(24f * scale))) SetBattle(duel, true);
+            if (GUILayout.Button("全部关闭", style.SubtleStyle, GUILayout.Width(84f * scale), GUILayout.Height(24f * scale))) SetBattle(duel, false);
             GUILayout.EndHorizontal();
             Mark("row-batch");
             if (duel) DuelSection(); else GroupSection();
@@ -687,7 +712,7 @@ namespace MortalHelper.Game
 
         private void GrowthPage()
         {
-            int view = GUILayout.Toolbar(growthView, GrowthViews, style.Segment, GUILayout.Height(30f * scale));
+            int view = ViewTabs(growthView, GrowthViews);
             if (view != growthView) { growthView = view; scroll[2] = Vector2.zero; }
             GUILayout.Space(8f * scale);
             if (growthView == 1) { Relationships(); return; }
@@ -826,8 +851,11 @@ namespace MortalHelper.Game
                 string buffer;
                 if (!statEdits.TryGetValue(key, out buffer)) { buffer = stat.Value.ToString(); statEdits[key] = buffer; }
                 GUILayout.BeginHorizontal();
+                Color statColor = GUI.color;
+                if (Flashing("stat:" + key)) GUI.color = new Color(1f, .90f, .66f);
                 GUILayout.Label(Fit(name, style.Entry, Col(.40f) - 34f * scale) +
                     "  <color=#B7AE98>" + stat.Value + "</color>", style.Entry, GUILayout.Width(Col(.40f)));
+                GUI.color = statColor;
                 GUILayout.Label(stat.Min + "～" + stat.Max, style.Tight, GUILayout.Width(Col(.24f)));
                 if (!editable)
                 {
@@ -851,6 +879,7 @@ namespace MortalHelper.Game
                         statEdits[key] = stat.Value.ToString();
                         Record("属性 " + name + " " + old + "→" + stat.Value, () => stat.SetValue(old));
                         plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。";
+                        Flash("stat:" + key);
                     }
                 }
                 GUILayout.EndHorizontal();
@@ -865,7 +894,7 @@ namespace MortalHelper.Game
             if (!editable) Note("当前不能修改（战斗中 / 加载中 / 恢复中）；下面是只读预览。");
             var database = ItemDatabase.Instance;
             if (database == null) { Note("物品数据库尚未就绪。"); return; }
-            int tab = GUILayout.Toolbar((int)itemType - 1, new[] { "書籍", "雜物", "貴重品", "消耗品" }, style.Segment, GUILayout.Height(30f * scale));
+            int tab = ViewTabs((int)itemType - 1, ItemViews);
             itemType = (GameItemType)(tab + 1);
             showAllItems = DrawSwitchRow("也列出数量为 0 的物品", showAllItems, "勾选后可以给未持有的物品直接设置数量，等同于生成。");
             GUILayout.BeginHorizontal();
@@ -890,7 +919,10 @@ namespace MortalHelper.Game
                 string buffer;
                 if (!itemEdits.TryGetValue(key, out buffer)) { buffer = item.CurrentCount.ToString(); itemEdits[key] = buffer; }
                 GUILayout.BeginHorizontal();
+                Color itemColor = GUI.color;
+                if (Flashing("item:" + key)) GUI.color = new Color(1f, .90f, .66f);
                 GUILayout.Label(Fit(name, style.Entry, Col(.44f)), style.Entry, GUILayout.Width(Col(.44f)));
+                GUI.color = itemColor;
                 GUILayout.Label("×" + item.CurrentCount, style.Tight, GUILayout.Width(Col(.16f)));
                 buffer = GUILayout.TextField(buffer, 7, GUILayout.Width(Col(.20f)), GUILayout.Height(RowH));
                 itemEdits[key] = buffer;
@@ -907,6 +939,7 @@ namespace MortalHelper.Game
                         itemEdits[key] = item.CurrentCount.ToString();
                         Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => item.SetCount(previous));
                         plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。";
+                        Flash("item:" + key);
                     }
                 }
                 GUILayout.EndHorizontal();
@@ -972,8 +1005,8 @@ namespace MortalHelper.Game
                 GUILayout.BeginHorizontal();
                 if (GUILayout.Button("保存备注", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
                 { SaveSlotComments.Set(selected, slotComment); plugin.Status = "备注已保存。"; }
-                if (GUILayout.Button("清除", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
-                { Defer(() => { SaveSlotComments.Set(selected, ""); slotComment = ""; plugin.Status = "备注已清除。"; }); }
+                if (GUILayout.Button("清空", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
+                { Defer(() => { SaveSlotComments.Set(selected, ""); slotComment = ""; plugin.Status = "备注已清空。"; }); }
                 GUILayout.EndHorizontal();
             }
             Mark("row8");
@@ -997,7 +1030,7 @@ namespace MortalHelper.Game
                     GUILayout.BeginHorizontal();
                     GUILayout.Label(pair.Key, style.Entry, GUILayout.Width(44f * scale));
                     GUILayout.Label(pair.Value, style.Description, GUILayout.ExpandWidth(true));
-                    if (GUILayout.Button("删", style.DangerStyle, GUILayout.Width(36f * scale), GUILayout.Height(RowH)))
+                    if (GUILayout.Button("删除", style.DangerStyle, GUILayout.Width(52f * scale), GUILayout.Height(RowH)))
                     { string slot = pair.Key; Defer(() => { SaveSlotComments.Set(slot, ""); plugin.Status = "已删除槽位 " + slot + " 的备注。"; }); }
                     GUILayout.EndHorizontal();
                 }
@@ -1223,6 +1256,37 @@ namespace MortalHelper.Game
             Mark("section:" + title);
         }
 
+        // View switcher drawn as underlined text tabs. GUI.Toolbar fills the whole
+        // width with solid bars, which read like the action buttons right below it.
+        private int ViewTabs(int current, string[] labels)
+        {
+            int chosen = current;
+            GUILayout.BeginHorizontal();
+            float height = 30f * scale;
+            for (int i = 0; i < labels.Length; i++)
+            {
+                bool active = i == current;
+                Rect rect = GUILayoutUtility.GetRect(1f, height, GUILayout.Width(96f * scale), GUILayout.Height(height));
+                bool hover = rect.Contains(Event.current.mousePosition);
+                if (Event.current.type == EventType.MouseDown && hover) { chosen = i; Event.current.Use(); }
+                if (Event.current.type == EventType.Repaint)
+                {
+                    Color before = GUI.color;
+                    GUI.color = active ? new Color(.95f, .91f, .82f)
+                        : hover ? new Color(.86f, .81f, .70f) : new Color(.68f, .64f, .56f);
+                    GUI.Label(rect, labels[i], style.Tab);
+                    GUI.color = before;
+                    if (active)
+                        GUI.DrawTexture(new Rect(rect.x + 10f * scale, rect.yMax - 2f * scale,
+                            Mathf.Max(1f, rect.width - 20f * scale), Mathf.Max(2f, 2f * scale)), style.Accent);
+                }
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            GUILayout.Space(6f * scale);
+            return chosen;
+        }
+
         private void Rule()
         {
             Rect r = GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true), GUILayout.Height(1f));
@@ -1312,6 +1376,13 @@ namespace MortalHelper.Game
         private float RowH => Mathf.Max(24f, Mathf.Round(27f * scale));
 
         private float Col(float fraction) { return ContentWidth() * fraction; }
+
+        // Brief row highlight after a successful write, so the eye lands on the row
+        // that changed instead of only noticing the status line.
+        private string flashKey;
+        private float flashUntil;
+        private void Flash(string key) { flashKey = key; flashUntil = Time.unscaledTime + .3f; }
+        private bool Flashing(string key) { return key != null && key == flashKey && Time.unscaledTime < flashUntil; }
 
         private float ContentWidth()
         {
