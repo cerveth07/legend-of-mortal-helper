@@ -112,13 +112,21 @@ namespace MortalHelper.Game
         {
             if (!Enabled || Dialog == null) return true;
             int? point;
-            return queuedOption.HasValue || Session.RequestedOption.HasValue || InteractionSession.ParsePoint(Plugin.Instance.Options.Point.Value,
-                GameAccess.Field<int>(Dialog, "_diceMin"), GameAccess.Field<int>(Dialog, "_diceMax"), out point);
+            // When a tape is being injected, the user's saved BasePoint is not
+            // authoritative (it may be stale or outside this roll's legal range).
+            string pointValue = StoryReplay.PendingDice.HasValue
+                ? StoryReplay.PendingDice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : Plugin.Instance.Options.Point.Value;
+            return queuedOption.HasValue || Session.RequestedOption.HasValue ||
+                InteractionSession.ParsePoint(pointValue,
+                    GameAccess.Field<int>(Dialog, "_diceMin"),
+                    GameAccess.Field<int>(Dialog, "_diceMax"), out point);
         }
 
         internal static void Choose(ChoicePointer pointer)
         {
-            if (!Ready || pointer.Owner != Dialog || pointer.Generation != Session.Generation) return;
+            if (!Ready || StoryReplay.Active || !Plugin.Instance.Gate.CanInteract ||
+                pointer.Owner != Dialog || pointer.Generation != Session.Generation) return;
             Button[] buttons = Dialog.CachedButtons;
             int index = Array.FindIndex(buttons, b => b != null && b.gameObject == pointer.gameObject);
             if (index < 0 || !pointer.gameObject.activeInHierarchy) return;
@@ -140,7 +148,9 @@ namespace MortalHelper.Game
         internal static bool Commit()
         {
             if (!Enabled || Dialog == null) return true;
-            if (!Ready || (!nativeInvocation && !replaySubmitting &&
+            if (!Ready || (StoryReplay.Active && !replaySubmitting) ||
+                (!StoryReplay.Active && !Plugin.Instance.Gate.CanInteract) ||
+                (!nativeInvocation && !replaySubmitting &&
                 (GameAccess.Typing || Plugin.Instance.Panel.Visible))) return false;
             string error;
             string pointValue = ReplayPoint.HasValue ? ReplayPoint.Value.ToString() : Plugin.Instance.Options.Point.Value;
@@ -154,7 +164,9 @@ namespace MortalHelper.Game
         internal static bool AllowShortcut(bool reroll)
         {
             if (!Enabled || Dialog == null) return true;
-            return Ready && ValidInput() && (nativeInvocation || (!GameAccess.Typing && !Plugin.Instance.Panel.Visible)) && (!reroll || CanReroll());
+            return Ready && Plugin.Instance.Gate.CanInteract && ValidInput() &&
+                (nativeInvocation || (!GameAccess.Typing && !Plugin.Instance.Panel.Visible)) &&
+                (!reroll || CanReroll());
         }
 
         internal static void BeforeRoll(ref int random)
@@ -163,12 +175,22 @@ namespace MortalHelper.Game
             // Covers the native automatic-dice route without depending on a click event.
             if (Session.Phase == RollPhase.Input && !Commit()) return;
             if (Session.Phase != RollPhase.Committed) return;
+            bool authorizedReplay = StoryReplay.Active && StoryReplay.PendingDice.HasValue &&
+                Session.RequestedPoint.HasValue &&
+                Session.RequestedPoint.Value == StoryReplay.PendingDice.Value &&
+                !Session.RequestedOption.HasValue;
+            if (Session.HasOverride && !authorizedReplay && !Plugin.Instance.Gate.CanInteract)
+            {
+                StoryReplay.Stop("恢复锁定中收到非预期的掷骰修改请求。");
+                return;
+            }
             if (Session.RequestedPoint.HasValue)
             {
                 random = Session.RequestedPoint.Value;
                 GameAccess.Set(Dialog, "_currentRandomValue", random);
             }
-            if (Session.HasOverride) Plugin.Instance.Gate.NotifyMutation("判定结果被修改");
+            if (Session.HasOverride && !authorizedReplay)
+                Plugin.Instance.Gate.NotifyMutation("判定结果被修改");
         }
 
         internal static void AfterRoll(DiceCheckResult result)
@@ -201,7 +223,7 @@ namespace MortalHelper.Game
 
         public void OnPointerEnter(PointerEventData data)
         {
-            if (!DiceAdapter.Ready) return;
+            if (!DiceAdapter.Ready || StoryReplay.Active || !Plugin.Instance.Gate.CanInteract) return;
             Natively(true);
         }
 
@@ -213,7 +235,8 @@ namespace MortalHelper.Game
 
         public void OnPointerClick(PointerEventData data)
         {
-            if (data.button != PointerEventData.InputButton.Left || choosing || !DiceAdapter.Ready) return;
+            if (data.button != PointerEventData.InputButton.Left || choosing || !DiceAdapter.Ready ||
+                StoryReplay.Active || !Plugin.Instance.Gate.CanInteract) return;
             choosing = true;
             Natively(true);
             StartCoroutine(Pick());
@@ -222,7 +245,8 @@ namespace MortalHelper.Game
         private System.Collections.IEnumerator Pick()
         {
             yield return new WaitForSecondsRealtime(.1f);
-            if (!DiceAdapter.Ready) { choosing = false; Natively(false); yield break; }
+            if (!DiceAdapter.Ready || StoryReplay.Active || !Plugin.Instance.Gate.CanInteract)
+            { choosing = false; Natively(false); yield break; }
             DiceAdapter.Choose(this);
             yield return new WaitForSecondsRealtime(.3f);
             Natively(false);

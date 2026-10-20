@@ -8,10 +8,18 @@ namespace MortalHelper.Game
     {
         private static void Prefix()
         {
-            Plugin.Instance?.Panel.ClearSelection();
+            Plugin.Instance?.Panel?.ClearSelection();
             DuelTools.Dialogue.Clear();
             DiceAdapter.Close();
             HintAdapter.Clear();
+        }
+
+        // Prefix runs for baseline and native loads. Only a *successful* external
+        // native load is allowed to clear a failed experimental recovery.
+        private static void Postfix()
+        {
+            if (!StoryReplay.LoadingBaseline)
+                StoryReplay.OnNativeLoadCompleted();
         }
     }
 }

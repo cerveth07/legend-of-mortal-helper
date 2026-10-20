@@ -15,7 +15,7 @@ namespace MortalHelper.Game
         internal static void Maintain()
         {
             var plugin = Plugin.Instance;
-            if (plugin == null || !Plugin.Active) return;
+            if (plugin == null || !Plugin.CanModifyProgress) return;
             if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "Free") return;
             if (plugin.Options.UnlimitedActions.Value) KeepActionPoint();
             if (plugin.Options.MaxAffection.Value) HoldAffection();

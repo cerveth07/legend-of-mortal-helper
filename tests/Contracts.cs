@@ -160,6 +160,42 @@ internal static class Contracts
         Check(controller.Phase==RecoveryPhase.Idle && fake.Aborts==0,"verified replay stayed open");
         Check(fake.States==1,"state captured a wrong number of times");
 
+        // The Unity adapter and controller must use the SAME operation gate.
+        var sharedGate=new OperationGate();
+        var sharedController=new RecoveryController(sharedGate);
+        var sharedHost=new FakeHost();
+        sharedController.Start(Story(),sharedHost);
+        Check(sharedGate.Phase==RecoveryPhase.Replaying && !sharedGate.CanInteract,
+            "shared mutation gate was not locked by recovery");
+        Reject(()=>sharedGate.NotifyMutation("manual edit"),
+            "shared gate permitted an edit during replay");
+        sharedController.Cancel("simulated scene switch");
+        Check(sharedGate.Phase==RecoveryPhase.Failed && !sharedGate.CanInteract,
+            "shared gate forgot failed state");
+        Reject(()=>new RecoveryController(sharedGate).Start(Story(),new FakeHost()),
+            "fresh controller bypassed shared failure gate");
+        sharedGate.NativeLoadCompleted();
+        Check(sharedGate.CanInteract,"successful native load did not unlock shared gate");
+
+        // A digest of live game state may never degrade to a shared error
+        // marker: different item/flag values must cause different fingerprints.
+        var liveA=new[]{"stat:Money=3","relation:A=5","item:book:x=1"};
+        var liveB=new[]{"item:book:x=1","stat:Money=3","relation:A=5"};
+        string fingerprint=ReplayStateDigest.Create("{\"game\":1}","{\"flag\":1}",liveA);
+        Check(fingerprint.StartsWith(ReplayStateDigest.Prefix,StringComparison.Ordinal),
+            "state fingerprint has no version");
+        Check(fingerprint==ReplayStateDigest.Create("{\"game\":1}","{\"flag\":1}",liveB),
+            "state fingerprint depends on list order");
+        Check(fingerprint!=ReplayStateDigest.Create("{\"game\":1}","{\"flag\":2}",liveA),
+            "changed story flag kept the same fingerprint");
+        Check(fingerprint!=ReplayStateDigest.Create("{\"game\":1}","{\"flag\":1}",
+            new[]{"stat:Money=3","relation:A=5","item:book:x=2"}),
+            "changed inventory kept the same fingerprint");
+        Reject(()=>ReplayStateDigest.Create("{\"game\":1}","{}",liveA),
+            "unavailable mission state passed validation");
+        Reject(()=>ReplayStateDigest.Create(null,"{\"flag\":1}",liveA),
+            "missing native state passed validation");
+
         // Wrong order locks the gate and releases the host exactly once.
         controller=new RecoveryController();fake=new FakeHost();
         controller.Start(Story(),fake);

@@ -14,12 +14,12 @@ namespace MortalHelper.Game
         internal static int CraftPoint = -1;
         internal static int CraftMoney = -1;
 
-        internal static bool FreeSkill => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.SkillFree.Value;
-        internal static bool FreeForge => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.ForgeFree.Value;
-        internal static bool EndlessActions => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.UnlimitedActions.Value;
-        internal static bool MaxAffection => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.MaxAffection.Value;
-        internal static bool FastSkill => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.FastSkill.Value;
-        internal static bool FastForge => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.FastForge.Value;
+        internal static bool FreeSkill => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.SkillFree.Value;
+        internal static bool FreeForge => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.ForgeFree.Value;
+        internal static bool EndlessActions => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.UnlimitedActions.Value;
+        internal static bool MaxAffection => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.MaxAffection.Value;
+        internal static bool FastSkill => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.FastSkill.Value;
+        internal static bool FastForge => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.FastForge.Value;
 
         private static GameStat Stat(object panel, string name)
         {
@@ -149,7 +149,7 @@ namespace MortalHelper.Game
     // but the spend handed to the game is clamped to the points actually available.
     internal static class PracticeLimitState
     {
-        internal static bool On => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.PracticeLimit.Value;
+        internal static bool On => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.PracticeLimit.Value;
     }
 
     [HarmonyPatch(typeof(MartialPanel), "StartHandleUpgarde")]
@@ -201,7 +201,7 @@ namespace MortalHelper.Game
     // Checkpoint reminders: story flags are markers, not save points. Read only.
     internal static class CheckpointState
     {
-        internal static bool On => Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.CheckpointLog.Value;
+        internal static bool On => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.CheckpointLog.Value;
 
         internal static void Changed(MissionManagerData manager, string name)
         {

@@ -212,6 +212,9 @@ namespace MortalHelper.Game
         }
 
         internal void Report(Exception error) { Status = error.Message; Logger.LogError(error); }
-        internal static bool Active => Instance != null && Instance.Options.Enabled.Value && Instance.Gate.CanInteract;
+        // Installed/active is distinct from permission to mutate progress.
+        // Dice playback still requires the native adapters while the shared gate is locked.
+        internal static bool Active => Instance != null && Instance.Options.Enabled.Value;
+        internal static bool CanModifyProgress => Active && Instance.Gate.CanInteract;
     }
 }

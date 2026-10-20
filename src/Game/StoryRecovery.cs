@@ -46,6 +46,8 @@ namespace MortalHelper.Game
         internal static bool Begin()
         {
             if (Recording) { Status = "已经在记录中。"; return false; }
+            if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
+            { Status = "恢复锁定期间不能录制；请先正常读档。"; return false; }
             string json;
             try { json = SaveSystem.Instance == null ? null : SaveSystem.Instance.GetCurrentSaveData(); }
             catch (Exception error) { Status = "读取当前进度失败：" + error.Message; return false; }
@@ -108,33 +110,68 @@ namespace MortalHelper.Game
             return true;
         }
 
-        // Summary of the values that a replayed event sequence reproduces. Volatile
-        // stats are deliberately excluded: 行動次數 drains with free-scene actions and
-        // 命運 is spent on rerolls, so keeping them made verification report a mismatch
-        // after replays that actually worked.
+        // Strict fingerprint: the native save JSON (including story data), serialised
+        // mission flags, and *live* stats, relationships and inventory. Missing
+        // sources fail closed, never returning a shared success-shaped "unknown".
+        // TimeTick and other native volatile fields are not silently stripped:
+        // this can reject an otherwise usable replay, but cannot falsely certify it.
         internal static string Summary()
         {
-            try
+            var save = SaveSystem.Instance;
+            var player = PlayerStatManagerData.Instance;
+            var mission = MissionManagerData.Instance;
+            var items = ItemDatabase.Instance;
+            if (save == null || player == null || mission == null || items == null ||
+                player.Stats == null || player.Stats.List == null ||
+                player.Relationships == null || player.Relationships.List == null)
+                throw new InvalidDataException("必要的原生状态源未初始化，无法验证精确恢复。");
+
+            string nativeJson = save.GetCurrentSaveData();
+            string missionJson = JsonUtility.ToJson(mission);
+            var facts = new List<string>
             {
-                var stats = PlayerStatManagerData.Instance.Stats;
-                var builder = new System.Text.StringBuilder();
-                foreach (GameStatType type in new[]
-                {
-                    GameStatType.銀兩, GameStatType.體力, GameStatType.內力,
-                    GameStatType.學問, GameStatType.武學點數, GameStatType.道德
-                })
-                {
-                    var stat = stats.Get(type);
-                    builder.Append(type).Append('=').Append(stat == null ? "-1" : stat.Value).Append(';');
-                }
-                return builder.ToString();
+                "scene=" + UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
+                "script=" + CurrentScript
+            };
+            foreach (var stat in player.Stats.List)
+            {
+                if (stat == null) throw new InvalidDataException("原生属性列表包含空项。");
+                string type = stat.StatType.ToString();
+                // These two volatile stats are deliberately covered by the native
+                // snapshot, but omitted from the separately captured live values.
+                if (type == "行動次數" || type == "命運") continue;
+                facts.Add("stat:" + type + "=" + stat.Value);
             }
-            catch (Exception) { return "unknown"; }
+            foreach (var relation in player.Relationships.List)
+            {
+                if (relation == null) throw new InvalidDataException("角色关系列表包含空项。");
+                facts.Add("relation:" + relation.Type + "=" + relation.Value +
+                    ":" + relation.Active);
+            }
+            AddItems(facts, "book", items.Books);
+            AddItems(facts, "misc", items.Miscs);
+            AddItems(facts, "special", items.Special);
+            AddItems(facts, "consumable", items.Consumables);
+            return ReplayStateDigest.Create(nativeJson, missionJson, facts);
+        }
+
+        private static void AddItems(List<string> facts, string kind, ItemDataCollection collection)
+        {
+            if (collection == null || collection.List == null)
+                throw new InvalidDataException("物品清单缺失：" + kind);
+            foreach (var item in collection.List)
+            {
+                if (item == null || string.IsNullOrEmpty(item.Id))
+                    throw new InvalidDataException("物品清单存在无效条目：" + kind);
+                facts.Add("item:" + kind + ":" + item.Id + "=" + item.CurrentCount);
+            }
         }
 
         internal static bool Save(int slot)
         {
             if (!Recording) { Status = "先开始记录再保存检查点。"; return false; }
+            if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
+            { Status = "恢复锁定期间不能保存检查点。"; return false; }
             string folder = Directory;
             if (folder == null) { Status = "无法创建记录目录。"; return false; }
             try

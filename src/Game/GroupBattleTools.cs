@@ -35,7 +35,7 @@ namespace MortalHelper.Game
     {
         private static void Prefix(Character __instance, ref int __0)
         {
-            if (__0 <= 0 || __instance.IsDead || !Plugin.Active) return;
+            if (__0 <= 0 || __instance.IsDead || !Plugin.CanModifyProgress) return;
             if (GroupBattleTools.Is(__instance, EntityType.Player) && Plugin.Instance.Options.GroupHealth.Value)
                 __0 = 0;
             else if (GroupBattleTools.Is(__instance, EntityType.Enemy) && Plugin.Instance.Options.GroupDown.Value &&
@@ -49,7 +49,7 @@ namespace MortalHelper.Game
     {
         private static void Postfix(CharacterMana __instance)
         {
-            if (!Plugin.Active || !Plugin.Instance.Options.GroupMana.Value) return;
+            if (!Plugin.CanModifyProgress || !Plugin.Instance.Options.GroupMana.Value) return;
             var player = GroupBattleTools.Player();
             if (player == null || __instance.gameObject != player.gameObject) return;
             // The setter is private; Modify is the game's own path and keeps the UI
@@ -64,7 +64,7 @@ namespace MortalHelper.Game
     {
         private static void Postfix(ref bool __result)
         {
-            if (Plugin.Active && Plugin.Instance.Options.GroupCooldown.Value) __result = true;
+            if (Plugin.CanModifyProgress && Plugin.Instance.Options.GroupCooldown.Value) __result = true;
         }
     }
 
@@ -73,7 +73,7 @@ namespace MortalHelper.Game
     {
         private static void Postfix(GameLevelManager __instance)
         {
-            if (!Plugin.Active || !Plugin.Instance.Options.GroupFreeze.Value) return;
+            if (!Plugin.CanModifyProgress || !Plugin.Instance.Options.GroupFreeze.Value) return;
             try
             {
                 int maximum = GameAccess.Field<int>(__instance, "_maxSessionTime");

@@ -857,7 +857,8 @@ namespace MortalHelper.Game
         {
             var player = PlayerStatManagerData.Instance;
             if (player == null) { Note("尚未进入游戏进度；读档后这里会列出可改的属性。"); return; }
-            bool editable = GameAccess.CanEditValues || (plugin != null && plugin.Options.PreviewEditable.Value);
+            bool editable = GameAccess.CanEditValues ||
+                (plugin != null && plugin.Gate.CanInteract && plugin.Options.PreviewEditable.Value);
             if (!editable) Note("当前不能修改（战斗中 / 加载中 / 恢复中）；下面是只读预览。");
             GUILayout.BeginHorizontal();
             GUILayout.Label("筛选", style.Description, GUILayout.Width(45f * scale));
@@ -888,7 +889,8 @@ namespace MortalHelper.Game
                 if (GUILayout.Button("应用", style.ButtonStyle, GUILayout.Width(Col(.14f)), GUILayout.Height(RowH)))
                 {
                     int number;
-                    if (!player.Stats.List.Contains(stat)) plugin.Status = "属性列表已变化，请重新打开本页。";
+                    if (!GameAccess.CanEditValues) plugin.Status = "预览或恢复锁定中：不能修改属性。";
+                    else if (!player.Stats.List.Contains(stat)) plugin.Status = "属性列表已变化，请重新打开本页。";
                     else if (!int.TryParse(buffer, out number) || number < stat.Min || number > stat.Max)
                         plugin.Status = name + " 必须在 " + stat.Min + "～" + stat.Max + " 之间。";
                     else
@@ -909,7 +911,8 @@ namespace MortalHelper.Game
 
         private void ItemsBody()
         {
-            bool editable = GameAccess.CanEditValues || (plugin != null && plugin.Options.PreviewEditable.Value);
+            bool editable = GameAccess.CanEditValues ||
+                (plugin != null && plugin.Gate.CanInteract && plugin.Options.PreviewEditable.Value);
             if (!editable) Note("当前不能修改（战斗中 / 加载中 / 恢复中）；下面是只读预览。");
             var database = ItemDatabase.Instance;
             if (database == null) { Note("物品数据库尚未就绪。"); return; }
@@ -947,7 +950,8 @@ namespace MortalHelper.Game
                 if (GUILayout.Button("应用", style.ButtonStyle, GUILayout.Width(Col(.14f)), GUILayout.Height(RowH)))
                 {
                     int number;
-                    if (!int.TryParse(buffer, out number) || number < 0 || number > 999999)
+                    if (!GameAccess.CanEditValues) plugin.Status = "预览或恢复锁定中：不能修改物品。";
+                    else if (!int.TryParse(buffer, out number) || number < 0 || number > 999999)
                         plugin.Status = name + " 的数量必须在 0～999999 之间。";
                     else
                     {
@@ -1349,7 +1353,16 @@ namespace MortalHelper.Game
                     if (!GameAccess.CanEditValues) plugin.Status = "当前场景不能撤销修改。";
                     else Defer(() =>
                     {
-                        try { item.Undo(); editLog.Remove(item); plugin.Status = "已撤销：" + item.Label; }
+                        if (!GameAccess.CanEditValues)
+                        {
+                            plugin.Status = "恢复或加载已开始，撤销请求已取消。";
+                            return;
+                        }
+                        try
+                        {
+                            plugin.Gate.NotifyMutation("撤销数值修改");
+                            item.Undo(); editLog.Remove(item); plugin.Status = "已撤销：" + item.Label;
+                        }
                         catch (Exception error) { plugin.Status = "撤销失败：" + error.Message; }
                     });
                 }

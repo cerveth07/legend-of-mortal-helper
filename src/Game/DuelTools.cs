@@ -7,13 +7,13 @@ namespace MortalHelper.Game
     internal static class DuelTools
     {
         internal static readonly Queue<string> Dialogue = new Queue<string>();
-        internal static bool IsPlayer(CombatStatController controller) => Plugin.Active && CombatManager.Instance != null &&
+        internal static bool IsPlayer(CombatStatController controller) => Plugin.CanModifyProgress && CombatManager.Instance != null &&
             CombatManager.Instance.PlayerAction != null && CombatManager.Instance.PlayerAction.Stat == controller;
-        internal static bool IsEnemy(CombatStatController controller) => Plugin.Active && CombatManager.Instance != null &&
+        internal static bool IsEnemy(CombatStatController controller) => Plugin.CanModifyProgress && CombatManager.Instance != null &&
             CombatManager.Instance.EnemyAction != null && CombatManager.Instance.EnemyAction.Stat == controller;
         internal static void AddLine(string speaker, string text)
         {
-            if (!Plugin.Active || string.IsNullOrWhiteSpace(text)) return;
+            if (!Plugin.CanModifyProgress || string.IsNullOrWhiteSpace(text)) return;
             Dialogue.Enqueue((speaker ?? "") + "：" + text);
             while (Dialogue.Count > 500) Dialogue.Dequeue();
         }
@@ -24,7 +24,7 @@ namespace MortalHelper.Game
     {
         private static void Prefix(CombatStatController __instance, ref int __0)
         {
-            if (__0 >= 0 || !Plugin.Active) return;
+            if (__0 >= 0 || !Plugin.CanModifyProgress) return;
             if (DuelTools.IsPlayer(__instance) && Plugin.Instance.Options.DuelHealth.Value) __0 = 0;
             // Zero damage mirrors the kill switch: the enemy cannot lose health at
             // all (damage over time included), which keeps the fight going.
@@ -72,7 +72,7 @@ namespace MortalHelper.Game
         internal static bool Wanted(CombatActionController attacker)
         {
             var options = Plugin.Instance.Options;
-            if (!Plugin.Active || (!options.DuelDamage.Value && !options.DuelAlwaysHit.Value)) return false;
+            if (!Plugin.CanModifyProgress || (!options.DuelDamage.Value && !options.DuelAlwaysHit.Value)) return false;
             var manager = CombatManager.Instance;
             return manager != null && manager.PlayerAction != null && attacker == manager.PlayerAction;
         }
@@ -113,7 +113,7 @@ namespace MortalHelper.Game
     {
         private static void Postfix(CombatActionController __instance, ref float __result)
         {
-            if (!Plugin.Active || __instance == null || __instance.Stat == null) return;
+            if (!Plugin.CanModifyProgress || __instance == null || __instance.Stat == null) return;
             var options = Plugin.Instance.Options;
             if (DuelTools.IsPlayer(__instance.Stat))
             {
@@ -134,7 +134,7 @@ namespace MortalHelper.Game
         private static void Postfix(CombatActionController __instance, CombatActionResult __0, CombatActionResult __1,
             CombatActionController __2)
         {
-            if (!Plugin.Active || __instance == null || __instance.Stat == null || __2 == null || __2.Stat == null) return;
+            if (!Plugin.CanModifyProgress || __instance == null || __instance.Stat == null || __2 == null || __2.Stat == null) return;
             var options = Plugin.Instance.Options;
             if (!options.DuelFirstStrike.Value && !options.DuelDamage.Value) return;
             if (__0 == null || __1 == null) return;

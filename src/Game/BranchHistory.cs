@@ -164,6 +164,7 @@ namespace MortalHelper.Game
                 if (source == null) return;
                 var marker = __instance.GetComponent<BranchMarker>() ?? __instance.gameObject.AddComponent<BranchMarker>();
                 marker.Bind(source, HintAdapter.ScriptName);
+                StoryReplay.NoteOptionContentUpdated();
                 // Never click from UpdateContent: the game may still be building
                 // a multi-option menu. StoryReplay inspects it from Update later.
             }

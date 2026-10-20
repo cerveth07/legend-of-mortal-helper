@@ -11,12 +11,17 @@ namespace MortalHelper.Recovery
     // presented as a normal save.
     public sealed class RecoveryController
     {
-        private readonly OperationGate gate = new OperationGate();
+        private readonly OperationGate gate;
         private readonly ReplayCursor cursor;
         private RecoveryDocument document;
         private IReplayHost host;
 
-        public RecoveryController() { cursor = new ReplayCursor(gate); }
+        public RecoveryController() : this(new OperationGate()) { }
+        public RecoveryController(OperationGate sharedGate)
+        {
+            gate = sharedGate ?? throw new ArgumentNullException(nameof(sharedGate));
+            cursor = new ReplayCursor(gate);
+        }
         public RecoveryPhase Phase => gate.Phase;
         public string Reason => gate.Reason;
         public bool Replaying => gate.Phase == RecoveryPhase.Replaying;

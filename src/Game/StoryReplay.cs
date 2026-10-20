@@ -28,8 +28,10 @@ namespace MortalHelper.Game
         private static string diceScript;
         private static float lastProgress, verifyAt;
         private static bool clicking;
-        private static string choiceSnapshot, lastClickedSnapshot;
+        private static string choiceSnapshot;
         private static int choiceStableFrame, startFrame;
+        private static long menuGeneration, clickedMenuGeneration = -1;
+        private static int clickedEventPosition = -1;
         private static float choiceStableAt;
         private static bool loadingBaseline, baselineScenePending;
         private static string baselineScene;
@@ -57,6 +59,28 @@ namespace MortalHelper.Game
         internal static int Position { get; private set; }
         internal static int? PendingDice { get; private set; }
         internal static string Status => status;
+        internal static bool LoadingBaseline => loadingBaseline;
+
+        // Native option content changes mark a new menu population. Even when
+        // the same MenuDialog instance and the same text are reused, a newly
+        // rendered menu may contain the next distinct recorded choice.
+        internal static void NoteOptionContentUpdated()
+        {
+            if (controller == null || !controller.Replaying) return;
+            menuGeneration++;
+            choiceSnapshot = null; // wait for the new menu to settle
+        }
+
+        // Called only after the game's native ExecuteLoadGameData successfully
+        // returned. Never unlock on our own baseline load.
+        internal static void OnNativeLoadCompleted()
+        {
+            if (loadingBaseline || Plugin.Instance == null) return;
+            if (controller != null) Stop("已使用原生存档替代实验恢复。");
+            if (!Plugin.Instance.Gate.CanInteract)
+                Plugin.Instance.Gate.NativeLoadCompleted();
+            status = "原生存档已载入；实验恢复锁已解除。";
+        }
 
         internal sealed class Host : IReplayHost
         {
@@ -100,6 +124,8 @@ namespace MortalHelper.Game
         internal static string Blocker(int slot, bool fromBackup = false)
         {
             if (Active) return "正在重放中";
+            if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
+                return "恢复锁定中；请从原生存档重新读档后再试";
             if (StoryRecovery.Recording) return "正在记录，请先停止记录";
             try
             {
@@ -116,6 +142,8 @@ namespace MortalHelper.Game
         internal static bool Start(int slot, bool fromBackup = false)
         {
             if (controller != null && controller.Replaying) { status = "已经在重放中。"; return false; }
+            if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
+            { status = "恢复操作被锁定；请先通过游戏原生读档恢复安全状态。"; return false; }
             if (StoryRecovery.Recording) { status = "请先停止记录再恢复。"; return false; }
             try
             {
@@ -124,10 +152,18 @@ namespace MortalHelper.Game
                 var store = new ArchiveStore(folder);
                 var document = store.Load(slot, fromBackup);
                 if (document == null || document.Kind != RecoveryKind.Story) { status = "该槽位不是剧情检查点。"; return false; }
+                if (document.ExpectedState == null ||
+                    !document.ExpectedState.StartsWith(ReplayStateDigest.Prefix, StringComparison.Ordinal))
+                {
+                    status = "该检查点使用旧版六属性摘要，无法验证完整状态；请重新录制后再恢复。";
+                    return false;
+                }
                 Position = 0; diceOrdinal = 0; diceScript = null; PendingDice = null;
                 verifyAt = 0f; lastProgress = Time.unscaledTime; startFrame = Time.frameCount;
-                choiceSnapshot = null; lastClickedSnapshot = null; baselineScenePending = false;
-                controller = new RecoveryController();
+                choiceSnapshot = null; menuGeneration = 0;
+                clickedMenuGeneration = -1; clickedEventPosition = -1;
+                baselineScenePending = false;
+                controller = new RecoveryController(Plugin.Instance.Gate);
                 controller.Start(document, new Host());
                 status = "已载入" + (fromBackup ? "历史备份" : "基线") + "，开始重放 " + document.Events.Count + " 个事件。";
                 Log("started: " + document.Events.Count + " events, checkpoint=" + document.Checkpoint);
@@ -147,7 +183,7 @@ namespace MortalHelper.Game
             controller = null;
             PendingDice = null;
             baselineScenePending = false;
-            choiceSnapshot = null; lastClickedSnapshot = null;
+            choiceSnapshot = null; clickedMenuGeneration = -1; clickedEventPosition = -1;
             status = reason ?? "重放已停止。";
             Log("stopped: " + status);
         }
@@ -254,7 +290,7 @@ namespace MortalHelper.Game
             if (menu == null || !menu.IsActive())
             {
                 choiceSnapshot = null;
-                lastClickedSnapshot = null;
+                clickedMenuGeneration = -1; clickedEventPosition = -1;
                 return;
             }
             var buttons = menu.GetComponentsInChildren<NormalOptionButton>(false);
@@ -291,8 +327,12 @@ namespace MortalHelper.Game
                 return;
             }
             if (Time.frameCount - choiceStableFrame < 2 ||
-                Time.unscaledTime - choiceStableAt < 0.15f ||
-                string.Equals(lastClickedSnapshot, snapshot, StringComparison.Ordinal)) return;
+                Time.unscaledTime - choiceStableAt < 0.15f) return;
+            // Block a second click on the *same population* of the native
+            // menu, but allow the next recorded event after UpdateContent or
+            // a hide/show cycle, even when text and menu instance are identical.
+            if (clickedEventPosition == Position - 1 &&
+                clickedMenuGeneration == menuGeneration) return;
             if (matches == 0) return; // No target in this menu; never consume another option.
             if (matches > 1)
             {
@@ -307,7 +347,8 @@ namespace MortalHelper.Game
             }
             // Mark before invoking: a synchronous game callback can construct the
             // next menu, and the previous one must never be clicked twice.
-            lastClickedSnapshot = snapshot;
+            clickedMenuGeneration = menuGeneration;
+            clickedEventPosition = Position;
             clicking = true;
             try
             {
