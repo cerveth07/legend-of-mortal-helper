@@ -67,3 +67,9 @@
 ## 第三阶段：公开仓库尚未创建
 
 用户名与名称沿用用户指定目标：`cerveth07/legend-of-the-mortal-helper`。只从审核后的新 Git 根历史发布；旧仓库保留私有。公开源码、制作玩家安装包和发布稳定版本分别记录，不互相冒充。
+
+## 构建开关（2026-10-19）
+
+- 默认构建排除 `src/Game/Probe.cs` 并定义 `NO_PROBE`：发布 DLL 不含无头探测，`Diagnostics/SelfTest` 键也不存在。
+- `python build.py ... --diagnostics` 才编译 Probe；两套构建均已在本地验证通过。
+- 同时移除了布局探针遗留（空的 `Mark`/`FlushMarks` 与未使用的 `Diagnostics/LayoutProbe` 键）、未使用的样式/纹理（`Header`/`SubTab`/`Overlay`/`BambooTag`/`Flash` 及 `MakeBamboo`）。

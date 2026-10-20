@@ -176,7 +176,7 @@ LegendOfMortal/
 | Edits | `PracticeLimit` / `GameSpeed` | false / 1 | 修炼上限、游戏速度 |
 | Window | `X` `Y` `Width` `Height` `Opacity` `BadgeX` `BadgeY` | 自动保存 / 0.85 | 面板几何与透明度（0.40～1.00） |
 | Save | `SlotCount` / `SortRecent` | 0 / false | 存档格数（0 = 游戏默认）、排序开关 |
-| Diagnostics | `SelfTest` / `AutoTour` / `PreviewEditable` / `DiagnoseScript` | false | 无头功能探测、自动切视图截图（`BepInEx/config/mh/`）、只读渲染编辑表、切换剧本时输出脚本名与可解析分支数（这三类都没有面板入口） |
+| Diagnostics | `AutoTour` / `PreviewEditable` / `DiagnoseScript` | false | 自动切视图截图（`BepInEx/config/mh/`）、只读渲染编辑表、切换剧本时输出脚本名与可解析分支数（都没有面板入口）；`SelfTest` 只在 `--diagnostics` 开发构建里存在 |
 
 本插件写入的数据文件都在配置目录，**不写入存档目录**：`cerveth.mortal.helper.choices.txt`（分支记录）、`cerveth.mortal.helper.slots.txt`（存档备注）、`mhr\slot-00N.mhr`（检查点记录，固定字段格式，含基线 JSON 与事件，普通 SHA-256 仅用于检测损坏）。
 
@@ -194,7 +194,7 @@ LegendOfMortal/
   | 真实剧本上的选项提示与后果解析 | 存档界面实际槽位、`F2` / `F3` |
   | 基线存档可无损载回、载入后可进剧情 | 数值编辑实际落值 |
 - **存档安全**：不要加载来源不明的存档；本插件的 `mhr` 记录只用于自身恢复，不替代原生存档。
-- **`Diagnostics/SelfTest` 是开发用探测**：开启后会载入槽位 3 并自动推进剧情（只调游戏 API，不动鼠标），正常游玩请保持关闭。
+- **`Diagnostics/SelfTest` 是开发用探测**：只在 `--diagnostics` 构建里存在，开启后会载入槽位 3 并自动推进剧情（只调游戏 API，不动鼠标）。
 - **仓库为私有**：公开与否由作者决定。旧整合版曾打包第三方 DLL，本仓库没有引入，因此不承担其许可证义务；也正因如此，旧版用户无法用本仓库直接替换旧插件包。
 
 ## 六、构建与测试（开发）

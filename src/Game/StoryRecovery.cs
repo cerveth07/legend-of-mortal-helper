@@ -105,7 +105,10 @@ namespace MortalHelper.Game
             Events.Add(new RecordedEvent { Kind = kind, Key = key, Integer = value });
         }
 
-        // Deterministic summary of the values that influence later story state.
+        // Summary of the values that a replayed event sequence reproduces. Volatile
+        // stats are deliberately excluded: 行動次數 drains with free-scene actions and
+        // 命運 is spent on rerolls, so keeping them made verification report a mismatch
+        // after replays that actually worked.
         internal static string Summary()
         {
             try
@@ -114,8 +117,8 @@ namespace MortalHelper.Game
                 var builder = new System.Text.StringBuilder();
                 foreach (GameStatType type in new[]
                 {
-                    GameStatType.銀兩, GameStatType.體力, GameStatType.內力, GameStatType.命運,
-                    GameStatType.學問, GameStatType.武學點數, GameStatType.行動次數, GameStatType.道德
+                    GameStatType.銀兩, GameStatType.體力, GameStatType.內力,
+                    GameStatType.學問, GameStatType.武學點數, GameStatType.道德
                 })
                 {
                     var stat = stats.Get(type);

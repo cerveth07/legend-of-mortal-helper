@@ -13,11 +13,11 @@ namespace MortalHelper.Game
 
         internal Texture2D Dark, Panel, Surface, SurfaceAlt, Accent, AccentSoft, Hover, Transparent,
             Button, ButtonHover, ButtonActive, Input, SwitchOn, SwitchOff, SliderTrack, SliderFill,
-            SliderThumb, ScrollPaper, ScrollRoll, BambooTag, Border, Ink, Badge, BadgeHover, BadgeActive,
-            Hairline, Focus, Flash, SegOff;
+            SliderThumb, ScrollPaper, ScrollRoll, Border, Ink, Badge, BadgeHover, BadgeActive,
+            Hairline, Focus, SegOff;
 
-        internal GUIStyle Title, Header, SectionTitle, Tab, TabHover, TabHit, SubTab, Segment, Description, Tight,
-            Entry, SwitchTrack, SwitchState, SwitchOnLabel, SwitchOffLabel, DangerStyle, FooterLabel, FooterValue, ButtonStyle, SubtleStyle, IconButton, Notice, Overlay;
+        internal GUIStyle Title, SectionTitle, Tab, TabHover, TabHit, Segment, Description, Tight,
+            Entry, SwitchTrack, SwitchState, SwitchOnLabel, SwitchOffLabel, DangerStyle, FooterLabel, FooterValue, ButtonStyle, SubtleStyle, IconButton, Notice;
 
         private static readonly Color Primary = new Color(.92f, .88f, .79f, 1f);
         private static readonly Color Secondary = new Color(.76f, .72f, .63f, 1f);
@@ -40,7 +40,6 @@ namespace MortalHelper.Game
             Hairline = Solid(new Color(.78f, .62f, .36f, .22f));
             SegOff = Bordered(new Color(.16f, .14f, .11f, .55f), new Color(.55f, .42f, .26f, .45f));
             Focus = Bordered(new Color(0f, 0f, 0f, 0f), new Color(.83f, .64f, .35f, .95f));
-            Flash = Solid(new Color(.83f, .64f, .35f, .30f));
             Transparent = Solid(new Color(0f, 0f, 0f, 0f));
             SwitchOff = MakeSwitch(72, 34, false);
             SwitchOn = MakeSwitch(72, 34, true);
@@ -49,7 +48,6 @@ namespace MortalHelper.Game
             SliderThumb = MakeCircle(24, 24, new Color(.94f, .82f, .59f, 1f), new Color(.52f, .39f, .22f, .95f));
             ScrollPaper = Solid(new Color(.78f, .69f, .50f, .97f));
             ScrollRoll = MakeRoll(18, 34);
-            BambooTag = MakeBamboo(72, 32);
             Border = Solid(new Color(.55f, .42f, .25f, .78f));
             Ink = MakeInk(240, 180);
             Badge = Solid(new Color(.045f, .038f, .03f, .80f));
@@ -57,12 +55,10 @@ namespace MortalHelper.Game
             BadgeActive = Solid(new Color(.15f, .105f, .055f, .94f));
             BadgeFont = CreateBadgeFont();
             Title = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Normal, alignment = TextAnchor.MiddleCenter };
-            Header = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, wordWrap = true };
             SectionTitle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Normal, alignment = TextAnchor.MiddleLeft };
             Tab = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, clipping = TextClipping.Clip };
             TabHover = new GUIStyle(Tab);
             TabHit = new GUIStyle(GUIStyle.none);
-            SubTab = new GUIStyle(GUI.skin.button);
             Segment = new GUIStyle(GUI.skin.button);
             Description = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = false };
             Tight = new GUIStyle(GUI.skin.label) { wordWrap = false, richText = false, clipping = TextClipping.Clip };
@@ -76,11 +72,8 @@ namespace MortalHelper.Game
             ButtonStyle = new GUIStyle(GUI.skin.button);
             SubtleStyle = new GUIStyle(GUI.skin.button);
             IconButton = new GUIStyle(GUI.skin.button);
-            SubtleStyle = new GUIStyle(GUI.skin.button);
-            IconButton = new GUIStyle(GUI.skin.button);
             DangerStyle = new GUIStyle(GUI.skin.button);
             Notice = new GUIStyle(GUI.skin.box);
-            Overlay = new GUIStyle(GUI.skin.box) { wordWrap = true, alignment = TextAnchor.MiddleLeft };
         }
 
         internal void Refresh(float scale, Font uiFont)
@@ -88,21 +81,17 @@ namespace MortalHelper.Game
             Scale = scale;
             if (uiFont != null) UiFont = uiFont;
             int size = Mathf.Max(14, (int)(16 * Scale));
-            foreach (var style in new[] { Header, Tab, TabHover, SubTab, Description, Entry,
-                SwitchState, SwitchOnLabel, SwitchOffLabel, FooterLabel, FooterValue, ButtonStyle, IconButton, Notice, Overlay })
+            foreach (var style in new[] { Tab, TabHover, Description, Entry,
+                SwitchState, SwitchOnLabel, SwitchOffLabel, FooterLabel, FooterValue, ButtonStyle, IconButton, Notice })
                 style.font = UiFont;
             var headingFont = BadgeFont != null ? BadgeFont : UiFont;
 
             Title.fontSize = size + 4; Title.normal.textColor = Primary;
             Title.alignment = TextAnchor.MiddleCenter; Title.wordWrap = false; Title.clipping = TextClipping.Clip;
             Title.padding = new RectOffset(0, 0, 0, 0); Title.margin = new RectOffset(0, 0, 0, 0); Title.contentOffset = Vector2.zero;
-            Header.fontSize = size + 2; Header.normal.textColor = Primary;
             SectionTitle.fontSize = size + 1; SectionTitle.normal.textColor = AccentColor;
             Tab.fontSize = Mathf.Max(12, size - 2); Tab.normal.textColor = Secondary;
             TabHover.fontSize = Mathf.Max(12, size - 2); TabHover.normal.textColor = Primary;
-            SubTab.fontSize = Mathf.Max(12, size - 2);
-            SubTab.normal.background = Surface; SubTab.hover.background = Hover;
-            SubTab.onNormal.background = AccentSoft; SubTab.onHover.background = AccentSoft;
             Description.fontSize = Mathf.Max(12, size - 2); Description.normal.textColor = Secondary;
             Tight.font = UiFont; Tight.fontSize = Mathf.Max(12, size - 2); Tight.normal.textColor = Secondary;
             Entry.fontSize = size; Entry.normal.textColor = Primary;
@@ -166,7 +155,7 @@ namespace MortalHelper.Game
             Skin.verticalScrollbarThumb.fixedWidth = 7f * Scale;
             Skin.verticalScrollbar.fixedWidth = 8f * Scale;
 
-            Segment.font = UiFont; Segment.fontSize = SubTab.fontSize;
+            Segment.font = UiFont; Segment.fontSize = Mathf.Max(12, size - 2);
             Segment.padding = new RectOffset(8, 8, 3, 3); Segment.margin = new RectOffset(2, 2, 0, 0);
             Segment.normal.background = SegOff; Segment.hover.background = Hover;
             Segment.active.background = AccentSoft; Segment.focused.background = Hover;
@@ -176,15 +165,6 @@ namespace MortalHelper.Game
             Segment.active.textColor = Primary; Segment.focused.textColor = Primary;
             Segment.onNormal.textColor = Primary; Segment.onHover.textColor = Primary;
             Segment.onActive.textColor = Primary; Segment.onFocused.textColor = Primary;
-            SubTab.font = UiFont;
-            SubTab.normal.background = SegOff; SubTab.hover.background = Hover;
-            SubTab.active.background = AccentSoft; SubTab.focused.background = Hover;
-            SubTab.onNormal.background = AccentSoft; SubTab.onHover.background = AccentSoft;
-            SubTab.onActive.background = Accent; SubTab.onFocused.background = AccentSoft;
-            SubTab.normal.textColor = Secondary; SubTab.hover.textColor = Primary;
-            SubTab.active.textColor = Primary; SubTab.focused.textColor = Primary;
-            SubTab.onNormal.textColor = Primary; SubTab.onHover.textColor = Primary;
-            SubTab.onActive.textColor = Primary; SubTab.onFocused.textColor = Primary;
 
             ButtonStyle.font = UiFont; ButtonStyle.padding = new RectOffset(8, 8, 3, 3); ButtonStyle.fontSize = Mathf.Max(12, size - 2);
             ButtonStyle.normal.background = Button; ButtonStyle.hover.background = ButtonHover;
@@ -201,8 +181,6 @@ namespace MortalHelper.Game
             Notice.font = UiFont; Notice.padding = new RectOffset(10, 10, 6, 6);
             Notice.normal.background = SurfaceAlt; Notice.normal.textColor = AccentColor;
             Notice.fontSize = Mathf.Max(12, size - 2);
-            Overlay.font = UiFont; Overlay.fontSize = Mathf.Max(12, size - 2); Overlay.padding = new RectOffset(10, 10, 6, 6);
-            Overlay.normal.background = SurfaceAlt; Overlay.normal.textColor = Primary;
 
             SwitchTrack.font = UiFont; SwitchTrack.fixedWidth = 52f * Scale; SwitchTrack.fixedHeight = 25f * Scale;
             SwitchTrack.normal.background = SwitchOff; SwitchTrack.hover.background = SwitchOff; SwitchTrack.active.background = SwitchOff;
@@ -298,22 +276,6 @@ namespace MortalHelper.Game
             texture.SetPixels(pixels); texture.Apply(); return texture;
         }
 
-        private static Texture2D MakeBamboo(int width, int height)
-        {
-            var texture = new Texture2D(width, height, TextureFormat.RGBA32, false)
-            { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
-            var pixels = new Color[width * height];
-            for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
-                {
-                    float u = (x + .5f) / width;
-                    float fiber = .5f + .5f * Mathf.Sin(x * .56f + Mathf.Sin(y * .19f) * .65f);
-                    float rib = Mathf.Abs(u - .12f) < .017f || Mathf.Abs(u - .88f) < .017f ? .065f : 0f;
-                    float alpha = (.105f + .037f * fiber + rib) * (.85f + .15f * Mathf.Sin(u * Mathf.PI));
-                    pixels[y * width + x] = new Color(.76f, .62f, .40f, alpha);
-                }
-            texture.SetPixels(pixels); texture.Apply(false, false); return texture;
-        }
-
         private static Texture2D MakeInk(int width, int height)
         {
             var texture = new Texture2D(width, height, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
@@ -333,7 +295,7 @@ namespace MortalHelper.Game
         {
             foreach (var texture in new[] { Dark, Panel, Surface, SurfaceAlt, Accent, AccentSoft, Hover, Transparent,
                 Button, ButtonHover, ButtonActive, Input, SwitchOn, SwitchOff, SliderTrack, SliderFill, SliderThumb,
-                ScrollPaper, ScrollRoll, BambooTag, Border, Ink, Badge, BadgeHover, BadgeActive })
+                ScrollPaper, ScrollRoll, Border, Ink, Badge, BadgeHover, BadgeActive })
                 if (texture != null) Object.Destroy(texture);
             if (Skin != null) Object.Destroy(Skin);
             Skin = null;

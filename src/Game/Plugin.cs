@@ -26,7 +26,10 @@ namespace MortalHelper.Game
             // Self test needs Update to keep running while the window is unfocused.
             // Diagnostics (probe, layout tour, editable preview) need Update and OnGUI
             // to keep running while the window is unfocused; normal play does not.
-            if (Options.SelfTest.Value || Options.AutoTour.Value || Options.PreviewEditable.Value)
+#if !NO_PROBE
+            if (Options.SelfTest.Value) Application.runInBackground = true;
+#endif
+            if (Options.AutoTour.Value || Options.PreviewEditable.Value)
                 Application.runInBackground = true;
             Panel = new MainPanel(this);
             try
@@ -72,7 +75,13 @@ namespace MortalHelper.Game
                 Panel.Visible = !Panel.Visible;
                 Logger.LogInfo("Panel toggled: " + Panel.Describe());
             }
-            try { DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick(); Probe.Tick(); }
+            try
+            {
+                DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick();
+#if !NO_PROBE
+                Probe.Tick();
+#endif
+            }
             catch (Exception error) { DiceAdapter.Close(); Report(error); }
         }
 

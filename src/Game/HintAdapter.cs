@@ -67,6 +67,8 @@ namespace MortalHelper.Game
             return string.Join("\n", branch.Consequences.ToArray());
         }
 
+        private static GUIStyle overlayStyle;
+
         internal static void Draw()
         {
             var options = Plugin.Instance == null ? null : Plugin.Instance.Options;
@@ -99,12 +101,14 @@ namespace MortalHelper.Game
             }
             string text = output.ToString();
             if (string.IsNullOrWhiteSpace(text)) return;
-            var style = new GUIStyle(GUI.skin.box)
-            {
-                wordWrap = true, richText = false, alignment = TextAnchor.UpperLeft, fontSize = 18,
-                padding = new RectOffset(14, 14, 12, 12)
-            };
-            if (hovered.Source.font != null) style.font = hovered.Source.font;
+            if (overlayStyle == null)
+                overlayStyle = new GUIStyle(GUI.skin.box)
+                {
+                    wordWrap = true, richText = false, alignment = TextAnchor.UpperLeft, fontSize = 18,
+                    padding = new RectOffset(14, 14, 12, 12)
+                };
+            if (hovered.Source.font != null) overlayStyle.font = hovered.Source.font;
+            var style = overlayStyle;
             float width = Mathf.Min(360, Screen.width - 24);
             float height = style.CalcHeight(new GUIContent(text), width);
             if (width < 140 || height > Screen.height - 24) return;

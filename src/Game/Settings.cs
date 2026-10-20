@@ -16,8 +16,9 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<float> Speed;
         public readonly ConfigEntry<int> SlotCount;
         public readonly ConfigEntry<bool> SortRecent;
+#if !NO_PROBE
         public readonly ConfigEntry<bool> SelfTest;
-        public readonly ConfigEntry<bool> LayoutProbe;
+#endif
     public readonly ConfigEntry<bool> AutoTour;
     public readonly ConfigEntry<bool> PreviewEditable;
         internal readonly ConfigFile Config;
@@ -64,8 +65,9 @@ namespace MortalHelper.Game
             SlotCount = config.Bind("Save", "SlotCount", 0,
                 new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
+#if !NO_PROBE
             SelfTest = config.Bind("Diagnostics", "SelfTest", false, "无头检测：载入槽位 3，跑 API 项（备注/分支/速度/格数/控骰）并自动推进剧情记录交互；不移动鼠标、不抢焦点。");
-            LayoutProbe = config.Bind("Diagnostics", "LayoutProbe", false, "布局探针：每页把每个控件的矩形与溢出情况写进日志，供校准 UI 用。");
+#endif
         AutoTour = config.Bind("Diagnostics", "AutoTour", false, "自检巡视：打开面板后每 1.6 秒切一页并截图到配置目录 mh\\tour-*.png，用于实机校验布局。");
         PreviewEditable = config.Bind("Diagnostics", "PreviewEditable", false, "只读预览：把数值/物品/好感行按可编辑宽度绘制但不写入，供截图核对布局。");
             Speed = config.Bind("Edits", "GameSpeed", 1f,

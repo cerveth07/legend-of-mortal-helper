@@ -19,6 +19,8 @@ def main():
     parser.add_argument('--loader', required=True, type=pathlib.Path, help='BepInEx/core folder')
     parser.add_argument('--compiler', required=True, type=pathlib.Path, help='Roslyn csc.dll')
     parser.add_argument('--test', action='store_true')
+    parser.add_argument('--diagnostics', action='store_true',
+                        help='include the in-game probe (development builds only)')
     args = parser.parse_args()
     managed = args.game.resolve() / 'Mortal_Data' / 'Managed'
     compiler = args.compiler.resolve()
@@ -35,7 +37,11 @@ def main():
     base = ['-nologo', '-nostdlib+', '-langversion:latest', '-deterministic+', '-optimize+', '-warnaserror+']
     plugin = output / 'MortalHelper.dll'
     sources = sorted((ROOT / 'src').rglob('*.cs'))
-    run_compiler(compiler, base + ['-target:library', '-out:' + str(plugin)] +
+    defines = []
+    if not args.diagnostics:
+        sources = [p for p in sources if p.name != 'Probe.cs']
+        defines = ['-define:NO_PROBE']
+    run_compiler(compiler, base + defines + ['-target:library', '-out:' + str(plugin)] +
                  ['-r:' + str(p) for p in references.values()] + sources, output / 'plugin.rsp')
     manifest = {'plugin_sha256': hashlib.sha256(plugin.read_bytes()).hexdigest(),
                 'sources': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
