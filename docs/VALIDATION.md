@@ -57,7 +57,7 @@ python build.py --game "<游戏目录>" --loader "<BepInEx/core>" --compiler "<c
 
 ## 本轮来源复跑（2026-10-20）
 
-当前 30 个 C# 文件与原旧仓库参考树比对，8-token shingle 包含率最高 **32.0%**。`PanelStyle.cs` 对旧 `DicePlugin.cs` 为 32.0% / 最长 219 token；`MainPanel.cs` 为 12.0% / 206 token；`BranchHistory.cs` 为 18.1% / 84 token；`HintAdapter.cs` 为 15.3% / 84 token。来源权属仍待作者确认，不能把数字变化当作清权。
+当前 30 个 C# 文件与原旧仓库参考树比对，8-token shingle 包含率最高 **32.0%**。`PanelStyle.cs` 对旧 `DicePlugin.cs` 为 32.0% / 最长 219 token；`MainPanel.cs` 为 12.0% / 206 token；`BranchHistory.cs` 为 18.1% / 84 token；`HintAdapter.cs` 为 15.3% / 84 token。用户后续明确 UI 为本人自制，因此这些 UI 重合不再被直接归为第三方未授权代码；具体作者说明见 PROVENANCE.md。不能用比率代替归属。
 
 执行时复用了 `tools/provenance_scan.py` 的去注释、分词与 shingle 算法，仅在进程内把全矩阵最长公共片段动态规划替换为标准库 `difflib.SequenceMatcher(autojunk=False).find_longest_match`；对 100 组人工随机序列交叉比对片段长度一致。扫描脚本文件未改变，此优化只减少复跑时间，不修改包含率计算。
 
@@ -68,3 +68,9 @@ python build.py --game "<游戏目录>" --loader "<BepInEx/core>" --compiler "<c
 打包边界回归：`python -m unittest discover -s tests -p test_package.py`，覆盖版本路径逃逸拒绝、过期源码摘要拒绝、版本不一致拒绝，以及有效包校验和和禁止覆盖；使用临时目录与合成 DLL，无需游戏。
 
 补丁核对工具：`tools/check_game_contracts.ps1 -Game "<游戏目录>"`。当前 14 项原生签名/IL 前提断言通过，52 个具名补丁目标及计时协程 MoveNext 均存在（包含动态骰子目标，故不能直接与旧静态 46 项数字比较）。普通构建与包含只读 Probe 的诊断构建均通过，诊断包被打包器拒绝。
+
+## UI 作者归属更正
+
+用户于 2026-10-20 明确说明“UI 不是来源于 DiceMaster，是我自制的”。此前按参考文件所在目录推定 UI 作者的判断已撤回。由此产生的未提交界面简化也已撤回，保留原始自制 UI 和 main 中的功能修复。恢复后的全部 src 源码 SHA-256 与此前通过 292 项合同检查的构建清单一致，DLL 也恢复为原已验证候选。
+
+旧整合项目的其他功能代码仍按其实际第三方来源判断；不将 UI 作者确认扩展为对全部旧代码的授权，不以 UI 相似度为由要求重写整个 Git 历史。
