@@ -71,14 +71,12 @@ namespace MortalHelper.Game
             choiceSnapshot = null; // wait for the new menu to settle
         }
 
-        // Called only after the game's native ExecuteLoadGameData successfully
-        // returned. Never unlock on our own baseline load.
+        // Called after successful native data apply AND matching scene completion.
         internal static void OnNativeLoadCompleted()
         {
             if (loadingBaseline || Plugin.Instance == null) return;
             if (controller != null) Stop("已使用原生存档替代实验恢复。");
-            if (!Plugin.Instance.Gate.CanInteract)
-                Plugin.Instance.Gate.NativeLoadCompleted();
+            Plugin.Instance.Gate.NativeLoadCompleted();
             status = "原生存档已载入；实验恢复锁已解除。";
         }
 
@@ -102,8 +100,8 @@ namespace MortalHelper.Game
                 try
                 {
                     load.Invoke(SaveSystem.Instance, new object[] { save });
-                    // Follow the game's native post-load sequence, not a direct save write.
-                    SaveSystem.Instance.SaveUniverseData();
+                    // Rebuild missions and scene, but omit native SaveUniverseData:
+                    // an unverified experimental replay must not write game files.
                     if (MissionManagerData.Instance != null) MissionManagerData.Instance.UpdateCheckMissions();
                     if (SceneController.Instance != null) SceneController.Instance.LoadCurrentScene();
                     Log("baseline applied tick=" + save.TimeTick + " scene=" + (save.CurrentScene ?? "null"));
@@ -123,6 +121,8 @@ namespace MortalHelper.Game
         // Why a restore cannot start right now; empty means it can.
         internal static string Blocker(int slot, bool fromBackup = false)
         {
+            if (Plugin.Instance == null || !Plugin.Instance.Options.ExperimentalRecovery.Value)
+                return "实验恢复默认关闭；随机状态重放尚未通过实机验收（配置 Recovery/ExperimentalEnabled）";
             if (Active) return "正在重放中";
             if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
                 return "恢复锁定中；请从原生存档重新读档后再试";
@@ -141,6 +141,8 @@ namespace MortalHelper.Game
 
         internal static bool Start(int slot, bool fromBackup = false)
         {
+            if (Plugin.Instance == null || !Plugin.Instance.Options.ExperimentalRecovery.Value)
+            { status = "实验恢复默认关闭；请先阅读随机状态与实机验收限制，再在配置 Recovery/ExperimentalEnabled 中明确开启。"; return false; }
             if (controller != null && controller.Replaying) { status = "已经在重放中。"; return false; }
             if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
             { status = "恢复操作被锁定；请先通过游戏原生读档恢复安全状态。"; return false; }
@@ -155,7 +157,7 @@ namespace MortalHelper.Game
                 if (document.ExpectedState == null ||
                     !document.ExpectedState.StartsWith(ReplayStateDigest.Prefix, StringComparison.Ordinal))
                 {
-                    status = "该检查点使用旧版六属性摘要，无法验证完整状态；请重新录制后再恢复。";
+                    status = "该检查点使用旧版状态摘要；请重新录制后再恢复。";
                     return false;
                 }
                 Position = 0; diceOrdinal = 0; diceScript = null; PendingDice = null;

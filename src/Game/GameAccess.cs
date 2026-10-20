@@ -49,19 +49,9 @@ namespace MortalHelper.Game
             !SceneController.Instance.IsLoading && !SceneController.Instance.IsPrepare &&
             SceneManager.GetActiveScene().name != "Title";
 
-        // Stat, item and relationship edits only need a settled gameplay scene: the
-        // free-roam requirement made the whole page read as "not implemented".
-        public static bool CanEditValues
-        {
-            get
-            {
-                if (!Loaded || Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract) return false;
-                if (Mortal.Combat.CombatManager.Instance != null) return false;
-                if (Mortal.Battle.GameLevelManager.Instance != null) return false;
-                string scene = SceneManager.GetActiveScene().name;
-                return scene == "Free" || scene == "Story" || scene == "Break";
-            }
-        }
+        // Editing during story callbacks or free-roam processing can invalidate
+        // in-flight conditions and animation state. Use the native idle boundary.
+        public static bool CanEditValues => CanEdit;
         public static bool CanEdit => Loaded && Plugin.Instance != null && Plugin.Instance.Gate.CanInteract &&
             SceneManager.GetActiveScene().name == "Free" && Mortal.Free.FreeManager.Instance != null &&
             !Mortal.Free.FreeManager.Instance.IsProcessing && Mortal.Free.FreeManager.Instance.EnableHotKey;

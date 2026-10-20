@@ -326,7 +326,7 @@ namespace MortalHelper.Game
         private static void Postfix(DiceMenuDialog __instance, ref bool __result)
         {
             if (DiceAdapter.Enabled && __instance == DiceAdapter.Dialog)
-                __result = !GameAccess.Typing && DiceAdapter.ValidInput() && GameAccess.Field<bool>(__instance, "_pressStartButton");
+                __result = !GameAccess.Typing && DiceAdapter.ValidInput() && __result;
         }
     }
 

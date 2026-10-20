@@ -7,11 +7,8 @@ using UnityEngine;
 
 namespace MortalHelper.Game
 {
-    // Stage one of precise recovery: record what a checkpoint needs, namely the
-    // current native save serialised to JSON plus every dice result and option
-    // choice that happened after the recording started. Writing it back is NOT
-    // implemented: restoring a baseline has to feed the game its own save data and
-    // then replay events, which cannot be verified without playing the game.
+    // Record a native baseline and subsequent dice results and option choices.
+    // StoryReplay loads the baseline and verifies the replayed checkpoint state.
     internal static class StoryRecovery
     {
         private const int MaximumBaseline = 3500000;
@@ -45,6 +42,8 @@ namespace MortalHelper.Game
 
         internal static bool Begin()
         {
+            if (Plugin.Instance == null || !Plugin.Instance.Options.ExperimentalRecovery.Value)
+            { Status = "实验恢复默认关闭：随机状态重放尚未通过实机验收；如需测试，请在配置 Recovery/ExperimentalEnabled 中明确开启。"; return false; }
             if (Recording) { Status = "已经在记录中。"; return false; }
             if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
             { Status = "恢复锁定期间不能录制；请先正常读档。"; return false; }
@@ -113,8 +112,8 @@ namespace MortalHelper.Game
         // Strict fingerprint: the native save JSON (including story data), serialised
         // mission flags, and *live* stats, relationships and inventory. Missing
         // sources fail closed, never returning a shared success-shaped "unknown".
-        // TimeTick and other native volatile fields are not silently stripped:
-        // this can reject an otherwise usable replay, but cannot falsely certify it.
+        // Only the top-level wall-clock TimeTick is normalized by ReplayStateDigest;
+        // every other native field remains part of the strict comparison.
         internal static string Summary()
         {
             var save = SaveSystem.Instance;

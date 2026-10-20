@@ -9,7 +9,7 @@ using UnityEngine.SceneManagement;
 
 namespace MortalHelper.Game
 {
-    [BepInPlugin("cerveth.mortal.helper", "活侠·万象录", "0.1.0")]
+    [BepInPlugin("cerveth.mortal.helper", "活侠·万象录", "0.1.1")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal static Plugin Instance;
@@ -46,7 +46,7 @@ namespace MortalHelper.Game
                 patches = new Harmony("cerveth.mortal.helper");
                 patches.PatchAll(typeof(Plugin).Assembly);
                 SceneManager.activeSceneChanged += SceneChanged;
-                Logger.LogInfo("Independent helper 0.1.0 initialized; experimental build.");
+                Logger.LogInfo("Mortal helper 0.1.1 initialized; experimental build.");
                 Logger.LogInfo("Display: " + Panel.Describe());
             }
             catch (Exception error)
@@ -77,6 +77,11 @@ namespace MortalHelper.Game
             }
             try
             {
+                if (!Options.ExperimentalRecovery.Value)
+                {
+                    if (StoryRecovery.Recording) StoryRecovery.Stop();
+                    if (StoryReplay.Active) StoryReplay.Stop("实验恢复已停用；请通过原生读档解除保护锁。");
+                }
                 DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick();
 #if !NO_PROBE
                 Probe.Tick();
@@ -87,18 +92,18 @@ namespace MortalHelper.Game
 
         private void OnGUI()
         {
-            // An exception thrown here repeats every frame and is otherwise silent
-            // in the plugin log, so report the first one only.
+            // Keep rendering after transient game/UI errors and rate-limit logging.
             try { Panel?.Draw(); HintAdapter.Draw(); }
             catch (Exception error)
             {
-                if (guiError) return;
-                guiError = true;
+                if (error is ExitGUIException) throw;
+                if (Time.unscaledTime < nextGuiError) return;
+                nextGuiError = Time.unscaledTime + 5f;
                 Report(error);
             }
         }
 
-        private bool guiError;
+        private float nextGuiError;
         internal void Log(string message) { Logger.LogInfo(message); }
 
         // Applied only when the value changes: forcing timeScale every frame would

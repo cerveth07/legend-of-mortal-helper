@@ -15,6 +15,7 @@ namespace MortalHelper.Recovery
         private readonly ReplayCursor cursor;
         private RecoveryDocument document;
         private IReplayHost host;
+        private bool stopPointReached;
 
         public RecoveryController() : this(new OperationGate()) { }
         public RecoveryController(OperationGate sharedGate)
@@ -36,6 +37,8 @@ namespace MortalHelper.Recovery
         {
             if (!Replaying) throw new InvalidOperationException("当前不在恢复阶段。");
             if (!cursor.Complete) throw new InvalidOperationException("记录尚未重放完。");
+            if (!document.Checkpoint.StartsWith("manual:", StringComparison.Ordinal))
+                throw new InvalidOperationException("必须先确认记录的待处理交互停点。");
             string expected = document.ExpectedState;
             string state;
             try { state = host.CaptureState(); }
@@ -56,11 +59,15 @@ namespace MortalHelper.Recovery
             if (!gate.CanInteract) throw new InvalidOperationException("上一次恢复尚未处理完。");
             if (candidate == null) throw new ArgumentNullException(nameof(candidate));
             if (target == null) throw new ArgumentNullException(nameof(target));
-            cursor.Prepare(candidate, target.Client, candidate.Kind);
-            document = candidate;
+            // Freeze controller metadata as well as the cursor's event tape.
+            RecoveryDocument frozen;
+            using (var stream = new MemoryStream(Archive.Encode(candidate))) frozen = Archive.Decode(stream);
+            cursor.Prepare(frozen, target.Client, frozen.Kind);
+            document = frozen;
+            stopPointReached = false;
             host = target;
             gate.Advance(RecoveryPhase.Loading);
-            try { host.LoadBaseline(candidate.Baseline); }
+            try { host.LoadBaseline(document.Baseline); }
             catch (Exception error) { Abort("加载原生基线失败：" + error.Message); throw; }
             gate.Advance(RecoveryPhase.Replaying);
         }
@@ -71,7 +78,9 @@ namespace MortalHelper.Recovery
         public bool IsStopPoint(EventKind kind, string key)
         {
             if (!Replaying || !cursor.Complete) return false;
-            return CheckpointOf(kind, key) == document.Checkpoint;
+            bool matches = CheckpointOf(kind, key) == document.Checkpoint;
+            if (matches) stopPointReached = true;
+            return matches;
         }
 
         public bool TryConsume(EventKind kind, string key, out RecordedEvent consumed)
@@ -93,6 +102,7 @@ namespace MortalHelper.Recovery
         public void Verify()
         {
             if (!Replaying) throw new InvalidOperationException("当前不在恢复阶段。");
+            if (!stopPointReached) throw new InvalidOperationException("尚未确认目标交互停点。");
             string state;
             try { state = host.CaptureState(); }
             catch (Exception error) { Abort("读取恢复后状态失败：" + error.Message); throw; }
@@ -109,12 +119,12 @@ namespace MortalHelper.Recovery
             Abort(reason ?? "恢复已中止。");
         }
 
-        // Clears a failure only after the player has acknowledged it or loaded a
-        // native save. Silent recovery would hide a failed verification.
+        // Acknowledging an error cannot certify the partially replayed state.
+        // The native load boundary must apply data AND finish loading its scene.
         public void Acknowledge()
         {
             if (gate.Phase != RecoveryPhase.Failed) return;
-            gate.NativeLoadCompleted();
+            throw new InvalidOperationException("请通过游戏原生读档解除恢复锁。");
         }
 
         private void Abort(string reason)

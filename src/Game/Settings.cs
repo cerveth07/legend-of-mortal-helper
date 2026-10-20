@@ -5,6 +5,7 @@ namespace MortalHelper.Game
 {
     internal sealed class Settings
     {
+        public readonly ConfigEntry<bool> ExperimentalRecovery;
         public readonly ConfigEntry<bool> Enabled, Hints, ShowEffects, ShowConditions, ShowBranches, DiagnoseScript;
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
         public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage, DuelZeroDamage, DuelAlwaysHit, DuelFirstStrike;
@@ -27,6 +28,7 @@ namespace MortalHelper.Game
         {
             Config = config;
             Enabled = config.Bind("General", "Enabled", true, "启用本插件辅助；不会撤销已应用的修改。");
+            ExperimentalRecovery = config.Bind("Recovery", "ExperimentalEnabled", false, "实验恢复尚未通过完整游戏重放验收，默认关闭。仅限备份后的测试进度；随机状态仍可能导致严格校验失败。");
             Toggle = config.Bind("General", "PanelKey", KeyCode.Tab, "展开或收起面板。");
             Hints = config.Bind("Story", "EffectHints", false, "选项悬停提示总开关；关闭时保留两个子项偏好。");
             ShowEffects = config.Bind("Story", "ShowEffects", false, "悬停选项时显示可靠的选择效果，包含剧透。");
@@ -44,7 +46,7 @@ namespace MortalHelper.Game
             GroupHealth = config.Bind("GroupBattle", "KeepHealth", false, "群战主角生命不因普通伤害降低；仍可能硬直。");
             GroupMana = config.Bind("GroupBattle", "FullMana", false, "群战主角气力维持满值。");
             GroupCooldown = config.Bind("GroupBattle", "InstantCooldown", false, "群战技能栏不受冷却限制；保留原生施放条件。");
-            GroupFreeze = config.Bind("GroupBattle", "FreezeTime", false, "群战剩余时间维持最大值；靠倒计时归零获胜的关卡需关闭。");
+            GroupFreeze = config.Bind("GroupBattle", "FreezeTime", false, "冻结群战剩余时间；保留战斗事件进度，靠倒计时归零获胜的关卡需关闭。");
             GroupDown = config.Bind("GroupBattle", "DownOnHit", false, "群战敌方受到有效伤害即倒地；保留闪避与剧情无敌。");
             UnlimitedActions = config.Bind("Progression", "UnlimitedActions", false, "日常行动点至少为 1 且不减；日期不会因行动用完自动推进。");
             MaxAffection = config.Bind("Progression", "MaxAffection", false, "已登场角色维持各自好感上限；不解锁未登场角色。");
@@ -57,7 +59,7 @@ namespace MortalHelper.Game
             X = config.Bind("Window", "X", 36f, "窗口左边距。");
             Y = config.Bind("Window", "Y", 64f, "窗口上边距。");
             Width = config.Bind("Window", "Width", 640f, "窗口宽度。");
-            Height = config.Bind("Window", "Height", 580f, "窗口高度。");
+            Height = config.Bind("Window", "Height", 600f, "窗口高度。");
             Opacity = config.Bind("Window", "Opacity", 0.85f,
                 new ConfigDescription("面板背景透明度，范围 40%～100%。", new AcceptableValueRange<float>(0.4f, 1f)));
             BadgeX = config.Bind("Window", "BadgeX", 12f, "收起徽章左上角 X 坐标。");
@@ -66,10 +68,14 @@ namespace MortalHelper.Game
                 new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
 #if !NO_PROBE
-            SelfTest = config.Bind("Diagnostics", "SelfTest", false, "无头检测：载入槽位 3，跑 API 项（备注/分支/速度/格数/控骰）并自动推进剧情记录交互；不移动鼠标、不抢焦点。");
+            SelfTest = config.Bind("Diagnostics", "SelfTest", false, "只读检测：记录当前场景与 API 状态，不读档、不改进度或配置。");
 #endif
         AutoTour = config.Bind("Diagnostics", "AutoTour", false, "自检巡视：打开面板后每 1.6 秒切一页并截图到配置目录 mh\\tour-*.png，用于实机校验布局。");
         PreviewEditable = config.Bind("Diagnostics", "PreviewEditable", false, "只读预览：把数值/物品/好感行按可编辑宽度绘制但不写入，供截图核对布局。");
+            // Enforce exclusivity for both UI changes and live config reloads.
+            DuelDamage.SettingChanged += (sender, args) => { if (DuelDamage.Value) DuelZeroDamage.Value = false; };
+            DuelZeroDamage.SettingChanged += (sender, args) => { if (DuelZeroDamage.Value) DuelDamage.Value = false; };
+            if (DuelDamage.Value && DuelZeroDamage.Value) DuelZeroDamage.Value = false;
             Speed = config.Bind("Edits", "GameSpeed", 1f,
                 new ConfigDescription("游戏速度倍率，1 为默认。原生暂停与慢动作由游戏自己管理。",
                     new AcceptableValueRange<float>(0.25f, 5f)));

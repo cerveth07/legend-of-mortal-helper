@@ -1,181 +1,70 @@
-# 本轮验证记录
+# 验证记录与范围
 
-日期：2026-10-19。结论：**编译、离线合同检查与启动级实机验证通过；交互路径、辅助效果和恢复闭环仍未验证，不能发布为完整替代版。**
+更新：2026-10-20，0.1.1 开发候选。离线断言、元数据检查和真实游戏交互是不同层次的证据。
 
-## 构建
+## 2026-10-20 修复前审计
 
-- 本机游戏：Steam Build 26021712；引用 `Mortal_Data/Managed`，未复制游戏程序集进工程。
-- 加载器编译引用：BepInEx 6 Mono be.692 的 core 目录；未分发框架。
-- 编译器：Roslyn 4.12，运行于 .NET 8；开启警告视为错误。
-- 产物：`artifacts/MortalHelper.dll`。
-- SHA-256：`f99d838bf15a161b496ef4cfa4d515fd0b862c53f9f67ef6ad62dab92ed2297d`。
-- Python 构建脚本和源码检查脚本通过语法检查。
+审计对象 `main` @ `ae46ea2`，使用本机 Steam Build 26021712、Unity 2020.3.49f1、BepInEx 6.0.0-be.692 Mono/x64 与 Roslyn 4.12。以下数据为此前审计结果，不代表本轮修复后的游戏行为验收：
 
-## 离线行为检查
-
-`tests/Contracts.cs` 执行 **237 项断言**，0 失败。该数量包含对恢复文件每个截断位置的循环检查，不代表 237 个独立游戏场景。
-
-本机复核（2026-10-19 第二轮）：在受限沙箱下 `File.Replace` 会被拒绝，旧实现因此在这一步抛 `UnauthorizedAccessException`，最后一组存档槽断言跑不完。`ArchiveStore` 现按顺序处理三种情况：替换不可用时回退为“先复制旧主档到 `.bak`、再覆盖主档”；主档已损坏时不得提升为备份，保留更早的可用备份；测试用编译期接缝强制走回退分支。三者在同一份合同测试内覆盖，因此本机在受限环境下也能把断言跑满。
-
-覆盖：
-
-- 关闭/过期会话、重复提交、合法和非法点数、直接选项优先、结果清理、重掷时机。
-- Lua 条件语句、未知调用、非字面量、长注释和字符串、重复标识、未闭合字符串、过大输入、伪造行内标识。
-- 格式往返、全部截断位置、内容篡改、尾随数据、伪造正确哈希后的未知类型/超大字段、非法数值、错误场景、字段预算。
-- 客户端不匹配、恢复期间修改、跳过校验、恢复过程中替换记录、源对象突变、事件错位、失败后锁定。
-- 未完成交互不作为完成事件、非停点拒绝保存、嵌套交互/随机拒绝、过期完成通知、失败的新基线清除旧基线。
-- 主档替换和上一版本备份、非法槽号、损坏主档拒绝、显式备份读取。
-- 替换不可用时的复制回退（强制走回退分支后主档更新、备份保留）、损坏主档不会被写成备份、覆盖损坏主档后旧备份仍可读取。
-- 恢复控制器的阶段时序：原生基线先于重放加载；停点交互不会被当成重放事件消费；乱序、恢复后状态不符、基线加载失败、显式取消都只回调一次适配器中止并锁住操作；失败后必须显式确认才解锁。
-
-所有测试使用人工数据与临时文件夹，没有读取或修改玩家存档。未把旧工程的测试数字计入本报告。
-
-## 二进制与源码检查
-
-实际读取了新 DLL 的程序集引用：包含本机游戏、Unity、BepInEx、Harmony 与基础运行库；没有 `LOMSave2`、`MortalFateHelper` 或 DiceMaster 程序集引用。
-
-`tools/check_source.py` 检查源码和文档目录没有游戏/旧插件二进制、Lua 剧情资产、旧命名空间或 BinaryFormatter 代码。启动冲突检测中的旧 DLL 文件名是提示信息，不是依赖。
-
-这类检查能发现明显的错误打包或依赖回流，不能独自证明全部代码的法律独立性。
-
-`tools/provenance_scan.py` 对 17 个新 C# 文件与旧仓库 91 个源文件做了 token shingle 与最长公共片段比对：最高包含率 10.8%，且最长公共片段是 Harmony 目标签名；其余集中在 `using` 指令、Unity UI 赋值和“写临时文件再替换”惯用法。逐文件结果见 [PROVENANCE.md](../PROVENANCE.md)。
-
-## 实机启动验证（2026-10-19）
-
-安装位置：`D:\steam\steamapps\common\LegendOfMortal`。游戏 Unity 2020.3.49f1，加载器 BepInEx 6.0.0-be.692（Mono/x64），手工放入 `winhttp.dll`、`doorstop_config.ini`、`.doorstop_version` 与 `BepInEx\{core,config,plugins}`；新 DLL 位于 `BepInEx\plugins\cerveth.mortal.helper\MortalHelper.dll`。安装前该目录没有任何加载器文件；本工程未读写玩家存档目录。
-
-运行 1（`plugins` 内还留着旧整合版的四个插件）：本插件在 `Awake` 检测到旧插件后抛错停用，日志为 `System.InvalidOperationException: 检测到旧辅助插件 LOMSave2.dll；请先将其移出 plugins 后重启。`——启动冲突保护按设计生效。
-
-运行 2（`plugins` 内只留本工程 DLL）：`1 plugin to load`，出现 `Independent helper 0.1.0 initialized; experimental build.` 与 `Chainloader startup complete`，没有补丁错误、没有运行期异常。16 个 `[HarmonyPatch]` 目标全部解析成功（`DiceMenuDialog`、`CheckPointManager`、`LuaEnvironment`、`NormalOptionButton`、`DiceOption`、`CombatStatController`、`CombatDialogUI`、`CombatManager`、`SaveSystem`）。
-
-界面：向游戏窗口发送 Tab 后截图可见面板标题「活侠助手 · 独立重建 0.1.0」、启用复选框、剧情/单挑/属性/关闭标签页、轮盘与效果提示选项，中文正常渲染、无豆腐块。截图含游戏画面，只作本地证据、不进仓库（`outputs\实机验证-2026-10-19\`）。
-
-仍待人工验证：面板拖动缩放、点击标签页、轮盘在真实判定中的行为、提示文本正确性、单挑辅助效果、原生菜单与键盘输入共存，以及剧情/单挑恢复闭环。
-
-第二轮实机复核（2026-10-19，同一台机器）：
-
-- 插件新增画面与面板诊断日志。启动时报 `Display: visible=False bounds=36,64 640x580 screen=294x169`，面板首次绘制时报 `Hidden affordance ... screen=960x540`——`Awake` 时的 `Screen` 只是占位值，真实渲染分辨率是 960x540，窗口像素 493x306（DPI 缩放约 1.68）。
-- 连续两次 Tab 的日志为 `Panel toggled: visible=True` 与 `Panel toggled: visible=False`，展开与收起两个方向都真实生效。其中一次日志为 `bounds=36,0 640x540`：640x580 的默认高度被压到屏幕高度并把面板顶到 y=0。
-- 已改：面板在 `Screen` 变化时按 96% 画面重新适配，不再无条件顶到 y=0；收起状态的重开入口改成不依赖游戏皮肤与中文字体的半透明色块加 ASCII 文字（启动早期拿不到 CJK 字体时，原中文按钮会渲染成不可见）；`OnGUI` 异常现在会写一次插件日志，此前只进 Unity 的 `Player.log`。
-- 方法学限制：`PrintWindow` 对这个 DXGI 窗口经常返回陈旧帧（连续三帧同 SHA、状态已变而画面未变），本轮不再把截图当证据，只以插件日志与人工确认为准。自动输入同样只在游戏拿到前台焦点时有效（`AttachThreadInput + keybd_event` 成功过一次）；用户正在使用桌面，反复抢焦点不可接受，交互验证改为人工步骤。
-
-## 未覆盖
-
-- 未验证原生轮盘在真实判定中的布局与回调顺序、命运点消耗、动画连点与场景切换。
-- 未验证面板收起/拖动/缩放、点击标签页、按键与输入框共存。
-- 未验证单挑辅助实际效果、剧情强制结果和原生菜单输入共存。
-- 剧情/单挑恢复适配尚未完成（只有 `IReplayHost` 的测试假实现），因此没有真实存读闭环或旧附加档迁移。
-- 未创建公开 GitHub 仓库，未发布 Release。
-
-## 恢复基线自动探测（2026-10-19）
-
-为回答「记录下来的基线能不能原样载回」，在插件里加了一次性自检（Diagnostics/SelfTest，默认关闭），不需要人工操作：
-
-1. 用游戏读档面板的同一套调用顺序载入真实存档：SetSlot("003") → SoundManager.StopMusic() → LoadGameData() → SaveUniverseData() → MissionManagerData.UpdateCheckMissions() → SceneController.LoadCurrentScene()；
-2. 10 秒后取 SaveSystem.GetCurrentSaveData()（下称 A），并用播放路径重新应用：JsonUtility.FromJson<GameSave>(A) → 私有 ExecuteLoadGameData → SaveUniverseData → UpdateCheckMissions → LoadCurrentScene；
-3. 0.5 秒后取 B，逐字段比较 A 与 B。
-
-结果：
-
-- 原生读档后场景变为 **Story**，说明这套调用顺序确实能把玩家带进存档对应的剧情位置；
-- 重新应用后场景仍是 **Story**；
-- A 与 B 逐字段比较只剩 **5 处差异**：FreeRandomState 的 4 个字段与 TimeTick；
-- **剧情位置字段完全一致**：CurrentStoryScript、CurrentScene、CurrentSceneKey、CurrentNextScene、临时脚本、属性、物品、商店库存、关系全部相同。
-
-结论：
-
-1. 「存档 JSON 作基线」是可行的：ExecuteLoadGameData 能把数据原样装回，且没有丢字段；
-2. **只调用 ExecuteLoadGameData 不会切场景**，必须补 SaveUniverseData + UpdateCheckMissions + LoadCurrentScene（读档面板就是这么做的）；
-3. TimeTick 每次应用都会刷新为当前时间（CreateSaveData 里写 DateTime.Now.Ticks），比较时必须忽略；
-4. FreeRandomState（自由场景随机数）不会被还原成记录值，重放时不能假设随机一致——要么显式写回该字段，要么让重放不依赖自由场景随机。
-
-第一次测量（4 秒窗口）曾出现物品与商店库存差异，把窗口缩到 0.5 秒后消失，说明那是这几秒里剧情真的在跑，不是还原丢失。
-
-探测代码保留为 Diagnostics/SelfTest（默认关闭，开启后仅在失焦时也需要运行时才会设置 Application.runInBackground），可作为后续回归工具。
-## 恢复播放接线（2026-10-19）
-
-按基线探测结论把播放侧接到 RecoveryController（方案 A）：
-
-- 记录键改为可复现标识：选项 C␁脚本名␁选项文本，判定 D␁脚本名␁脚本内第 N 次判定；
-- StoryReplay 不再自己维护游标：Start 走 RecoveryController.Start（预检 → Host.LoadBaseline → 重放），事件用 TryConsume(kind,key) 消费，key 不符立即中止；
-- Host.LoadBaseline 按实测得到的读档流程执行：JsonUtility.FromJson → 私有 ExecuteLoadGameData → SaveUniverseData → UpdateCheckMissions → LoadCurrentScene；
-- 新增 RecoveryController.VerifyAtEnd()：没有停点交互的记录在重放结束后直接比对状态摘要；失败锁门并回调中止；
-- 每次重放结束后重算摘要，TimeTick 不参与比较（探测已证明它每次应用都会刷新）；
-- 场景切换与 120 秒停滞仍会中止重放。
-
-离线验证：新增 6 条断言（VerifyAtEnd 的时序、完成标志、摘要不一致中止），累计 **248 项** 通过。
-
-仍未验证：真实剧情中的注入顺序与停点行为；旧 .mhr 记录的键是自增序号，与新键不兼容（格式版本未变，但恢复会因 key 不符直接中止，不会静默错位）。
-## 无头功能检测（2026-10-19，不移动鼠标/不抢焦点）
-
-用 Probe.cs（配置项 Diagnostics/SelfTest，默认关闭）在游戏进程内做检测：只调用游戏与插件 API、程序化派发按钮事件，不使用任何 Win32 鼠标/焦点接口。
-
-| 项目 | 结果 |
+| 检查 | 审计结果 |
 |---|---|
-| 存档备注写入 + 文件回读 | PASS |
-| 分支记录写入/查询/文件 | PASS |
-| 真实菜单上派发 pointerClick 后「已走」记录 | PASS（ecorded=True） |
-| 游戏速度 2 倍 / 恢复 1 倍 | PASS |
-| 存档格数写入生效 | PASS |
-| 控骰配置（Mode=1 + Point="37"） | PASS |
-| **指定点数注入**：ange=0..99 时注入 37 | **PASS（掷出 37）** |
-| 选项提示：真实剧本 S8400_01/02 | 解析出 属性变化：mental，-20 / disposition，2 |
-| 后果扫描 | 解析出 剧情 S8400_02_001 |
-| 剧情自动推进 | 25+ 菜单、96+ 条提示 |
+| 完整插件编译 | 通过，警告视为错误，0 警告 |
+| Core/Recovery 离线合同 | `PASS: 266 contract checks` |
+| Harmony 目标元数据 | 46/46 类型和方法存在；不保证参数绑定或行为正确 |
+| 来源扫描，当时 30 个 C# 文件 | 最高 32.2%，最长连续公共片段 219 token，见 [来源说明](../PROVENANCE.md) |
+| 历史 v0.1.0 包 | SHA256SUMS 一致，但 DLL 落后 main 后续修复 |
 
-第二轮骰子测试记为 FAIL，原因是 Point 配置在两次判定之间被清空（探测自身的状态管理问题），不是注入缺陷。
+审计确认了时间戳导致状态指纹不稳定、群战冻结方向错误、flag 参数索引错误、心上人草稿被覆写等问题。报告中“没有 workflow 所以 Actions 不可能运行”不成立：workflow 后来被移除不能否定历史运行记录。
 
-同时修正一个真实缺陷：记录骰子时存的是 DiceCheckResult.Result（含加成后的结果），而重放注入的是 Random（原始点数）；现改为记录 Random。
+## 历史游戏验证（2026-10-19）
 
-仍未覆盖：单挑/群战辅助（需进战斗）、养成辅助（需练功/锻造操作）、存档面板实际槽位与 F2/F3、数值编辑落值、重放注入全链路。
----
+以下结论来自旧构建记录，本轮未重新完成全部游戏内回归：
 
-## 第六轮：界面布局实机核对（自拍巡视）
+- 加载器启动、旧插件冲突提示、Tab 打开收起与中文渲染曾验证；当时只有 16 个补丁，不能用这个数量代表当前版本。
+- 指定原始骰点 37（范围 0..99）、备注写入回读、分支记录、游戏速度、存档格数配置和真实脚本提示曾通过无头探测。探测会改测试配置/数据，只能在隔离环境使用。
+- UI 记录称做过 10 视图 × 4 尺寸巡视；仓库只包含五张示例截图，不能独立复核完整矩阵。详见 [UI 状态](UI-STATUS.md)。
+- 原生存档 JSON 载回探测中，TimeTick 与 FreeRandomState 不稳定；仅调用 ExecuteLoadGameData 不切换场景，必须补齐原生加载流程。不能据此宣称完整重放成功。
+- 恢复控制器已接入 StoryReplay.Host，不再只有测试假实现；完整原生剧情回放仍未验收。
 
-面板内置了一次性巡视流程（`Diagnostics/AutoTour`）：自动打开面板 → 依次切换 10 个视图 → 每个视图用 `ScreenCapture.CaptureScreenshot` 存图 → 自动关闭并复位配置。
-`Diagnostics/PreviewEditable` 可在不可编辑场景下按"可编辑宽度"绘制属性 / 物品 / 好感三张表（只读，不写入），用于拍摄最容易被挤的编辑行。
+## 当前构建与持续检查
 
-| 项 | 结果 |
-|---|---|
-| 控件计数在 Layout / Repaint 之间不一致（`ArgumentException: Getting control N's position...`） | **FIXED**：源码中已无 `GUILayoutUtility.GetLastRect()`；结构性状态变更统一 `Defer` 到 `Plugin.Update` |
-| 控件高度不足以容纳 14px 字形（按钮被压成一条、输入框数字被竖切） | **FIXED**：`RowH = max(24, round(27 × scale))`，内边距 5,5 → 3,3 |
-| 说明文字高度按估算宽度预留，偶尔多一行被压住 | **FIXED**：改为显式宽度绘制，量多少画多少 |
-| 编辑表固定列宽相加超过内容宽（381 > 377） | **FIXED**：名字列 `ExpandWidth`，其余列按内容宽比例 |
-| 收起徽章 `Tab` 标签被裁 | **FIXED**：徽章 58×168，标签区高度与字号由可用空间反推 |
-| 面板可拖到布局撑不住的尺寸 | **FIXED**：最小 420×600（scale>1 按比例放大），`Clamp()` 自愈 |
-| 10 视图 × 4 尺寸截图核对（420×600 / 420×611 / 420×631 / 640×800） | **PASS**，无内部截断、无重叠、无孤行标点 |
+```bash
+python build.py --test-only
+python tools/check_source.py
+```
 
-仍未覆盖：不同 DPI（scale 1.0 / 1.35）的实机截图；精确恢复的播放链路；数值编辑"落值 → 存档保留"链路；宽面板下的留白观感。
+第一条需要 .NET 8 SDK，无需游戏或 BepInEx。离线工作流模板位于 docs/ci/contracts.yml；当前 GitHub OAuth 缺少 workflow scope，服务器拒绝包含 .github/workflows/contracts.yml 的推送。因此模板暂未安装到 Actions 目录；取得对应权限后复制到该目录即可启用，不预先宣称远端通过。历史 `Recovery contract tests` 工作流曾有失败运行（例如 39377273456），已查运行 39377273456：任务未启动，GitHub 提示账户付款失败或需提高开支限额；这属于 Actions 账户额度问题，不是合同断言失败。
 
-详见 [界面状态](UI-STATUS.md)。
+完整插件编译使用用户本机游戏、加载器和 Roslyn：
 
-## 2026-10-20：前三阶段修复分支（尚未完成实机回归）
+```bash
+python build.py --game "<游戏目录>" --loader "<BepInEx/core>" --compiler "<csc.dll>" --test
+```
 
-分支：`fix/restore-foundations-stages-1-3`。本节记录代码改动，不宣称游戏内回归通过。
+构建前移除旧 DLL 与摘要；成功编译并通过请求的测试后才写出 build-manifest.json。打包器校验源码、测试、构建脚本与 DLL 的 SHA-256，拒绝诊断/未测试/过期产物；这不是对不可信构建机的签名认证。
 
-- **正常游戏流程**：新安装 `Story/BasePoint` 留空；既有配置值保留，用户需手动清空旧默认 50；未录制时剧情选项不再访问空事件列表。
-- **恢复文件**：首次保存读取主检查点完成完整性与关键字段复核，不再强读不存在的 `.bak`；历史备份有独立按钮、二次确认；允许原生骰点为 0，继续拒绝负骰点及非正整数选项编号。
-- **重放时序**：记录事件增加只读预览；不在 `NormalOptionButton.UpdateContent` 中触发点击；在 `Update` 中枚举活动菜单、等待 2 帧与 0.15 秒稳定、仅匹配唯一目标。原生骰子结果回调校验数值后才完成该事件，不能仅以 `PressStartButton` 返回为成功。
-- **隔离测试**：补充首次存储/备份不存在、零骰点/非法骰点/非法选项、预览不可变和不消耗事件等合同断言；新增 `tests/Contracts.csproj` 可独立在 .NET 8 下运行，无需游戏程序集。
-- **执行结果**：GitHub Actions 首次运行返回 `failure`，步骤日志未能获取，原因尚未确认；此处**不记为通过**。当前环境没有 Roslyn、游戏程序集或 .NET 运行时，未进行本次分支的新 DLL 编译及真实游戏回归。
+## 本轮必须完成的游戏回归
 
-合并前仍须用隔离原生存档复核：
-1. 所有辅助默认关闭时，普通选项、原生随机、首次存档、原生读档不回归。
-2. 0 点骰子的录制→覆盖保存→主文件读取→历史备份读取；损坏主档后保留可读备份。
-3. 同屏多个不同选项、相同文字歧义选项、连续选项、先选项后骰子、先骰子后选项、切场景、恢复取消和 120 秒超时。
-4. 记录与回放的原生随机结果、当前脚本及后续剧情保持一致；此版本状态摘要仍不足以保证精确恢复。
+1. 辅助全关：正常选项、自然随机、零命运、手动天命关闭、首次存档与原生读档。
+2. 恢复：同一状态仅 TimeTick 变化能一致；其他进度变化拒绝；首次保存、主文件与备份、相同菜单、零点骰子、歧义、取消、120 秒超时与失败后的原生读档解除锁定。
+3. 群战：冻结保留剩余时间、关闭后继续计时；技能冷却关闭后恢复正常；暂停/剧情演出不可被绕过。
+4. flag 提醒准确；心上人草稿跨帧保留且应用成功；关系/属性/物品写入失败后界面可继续使用。
+5. 修炼条件不能绕过；单挑互斥开关；不同分辨率与徽章可达性；备注原子保存与读档后槽位选择清理。
 
+当前随机状态已确认存在缺口：PlayerStatManagerData.Save 保存 UnityEngine.Random.state，但 Load 只更新缓存；ResetUnityRandom 使用 Environment.TickCount，FreeManager 另行构造 System.Random。因此没有通过删除随机字段来放松摘要，而是将实验恢复设置为默认停用、前后端显式检查 Recovery/ExperimentalEnabled。实验基线不再调用会写原生 universe 文件的 SaveUniverseData。此项仍需真实重放闭环验收。
 
-## 2026-10-20：审计后四项关键缺陷修复
+完成上述交互回归和来源权属确认后，才把 0.1.1 候选记录为发布就绪；当前文档不宣称这些项目已通过。
 
-分支：`fix/replay-gate-state-menu-dice-20261020`。仅代表代码修复和静态复核，不代表本机游戏验收。
+## 本轮来源复跑（2026-10-20）
 
-1. 恢复控制器与插件共用 `OperationGate`；复原期间禁用成长/战斗辅助修改、数值面板写入和延期撤销。只有已匹配录制事件的原生骰子注入可绕过普通写锁；失败锁仅在非基线的原生读档成功后清除。
-2. 检查点改用 `MHRSTATE2:` 版本化 SHA-256 状态指纹，覆盖原生进度 JSON、序列化任务/旗标、实时属性、物品数量与人物关系。任何数据源缺失、无法序列化或校验不一致均失败，不再用 `unknown` 冒充正常值。旧六属性检查点可保留但不再允许启动精确重放。
-3. 重复选择菜单通过 `UpdateContent` 更新计数和录制事件位置进行防连点判断；新菜单即使复用同一对象及文字也可再次匹配，旧菜单不因内容相同而重复点选。
-4. 重放待注入点数优先于已有用户 `BasePoint` 配置参与输入范围校验。重放时限制手动选项、快捷键与其他非授权数值注入。
-5. `tests/Contracts.cs` 增加共享锁的开始/失败/原生读档恢复、状态指纹的顺序独立与数据变化/缺失拒绝等断言。
+当前 30 个 C# 文件与原旧仓库参考树比对，8-token shingle 包含率最高 **32.0%**。`PanelStyle.cs` 对旧 `DicePlugin.cs` 为 32.0% / 最长 219 token；`MainPanel.cs` 为 12.0% / 206 token；`BranchHistory.cs` 为 18.1% / 84 token；`HintAdapter.cs` 为 15.3% / 84 token。来源权属仍待作者确认，不能把数字变化当作清权。
 
-**需要游戏内验收：** 任务管理器是否能通过 `JsonUtility.ToJson` 提供稳定且非空的旗标数据；原生 JSON 时间戳变化是否导致严格校验拒绝；连续相同菜单的真实回放；异常中断后由原生读档解除失败锁；用户已保存非法 `BasePoint` 时录制骰子正常注入。严格校验可能因为不可稳定序列化而拒绝恢复，但不应该错误宣布成功。
+执行时复用了 `tools/provenance_scan.py` 的去注释、分词与 shingle 算法，仅在进程内把全矩阵最长公共片段动态规划替换为标准库 `difflib.SequenceMatcher(autojunk=False).find_longest_match`；对 100 组人工随机序列交叉比对片段长度一致。扫描脚本文件未改变，此优化只减少复跑时间，不修改包含率计算。
 
-**未完成：** 本轮未在 Unity/BepInEx 环境编译或运行完整剧情回放。旧检查点拒绝重放只影响实验 `.mhr`，不删除文件、不改原生游戏存档。
+## 当前本地结果（2026-10-20）
+
+本轮完整插件构建使用本机游戏与加载器、Roslyn 4.12，经 WSL 调用 Windows .NET：**编译通过，0 警告，`PASS: 292 contract checks`**。该结果验证代码编译与隔离逻辑，不替代上面的游戏交互清单。
+
+打包边界回归：`python -m unittest discover -s tests -p test_package.py`，覆盖版本路径逃逸拒绝、过期源码摘要拒绝、版本不一致拒绝，以及有效包校验和和禁止覆盖；使用临时目录与合成 DLL，无需游戏。
+
+补丁核对工具：`tools/check_game_contracts.ps1 -Game "<游戏目录>"`。当前 14 项原生签名/IL 前提断言通过，52 个具名补丁目标及计时协程 MoveNext 均存在（包含动态骰子目标，故不能直接与旧静态 46 项数字比较）。普通构建与包含只读 Probe 的诊断构建均通过，诊断包被打包器拒绝。

@@ -64,6 +64,8 @@ namespace MortalHelper.Game
         private float tabTransition = 1f;
         private int page, storyView, battleView, growthView, loverIndex;
         private int lastPage = -1;
+        private bool loverDraftLoaded;
+        private Font ownedBodyFont;
         private readonly Queue<Action> deferred = new Queue<Action>();
         private string searchEdit = "", itemSearchEdit = "";
         private readonly Vector2[] scroll = new Vector2[5];
@@ -74,11 +76,11 @@ namespace MortalHelper.Game
         private int recoverySlot = 1;
         private GameObject blocker;
         private RectTransform blockerRect;
-        private bool resizing, draggingBadge, badgeMoved, draggingWindow;
+        private bool draggingBadge, badgeMoved, draggingWindow;
         private int resizeEdges, hoverEdges;
         private Vector2 dragStartMouse;
         private Rect dragStartRect;
-        private Vector2 dragStart, sizeStart;
+        private Vector2 dragStart;
         private int lastWidth, lastHeight;
 
         internal bool Visible
@@ -89,6 +91,7 @@ namespace MortalHelper.Game
                 if (value)
                 {
                     if (open) return;
+                    loverDraftLoaded = false;
                     animFrom = BadgeRect();
                     animTo = ClampWindow();
                     open = true;
@@ -128,7 +131,7 @@ namespace MortalHelper.Game
             windowRect = new Rect(plugin.Options.X.Value, plugin.Options.Y.Value,
                 Mathf.Max(MinWidth, plugin.Options.Width.Value), Mathf.Max(MinHeight, plugin.Options.Height.Value));
             badgePosition = new Vector2(plugin.Options.BadgeX.Value, plugin.Options.BadgeY.Value);
-            opacity = Mathf.Clamp(plugin.Options.Opacity.Value, .4f, 1f);
+            opacity = Mathf.Clamp(Finite(plugin.Options.Opacity.Value, .85f), .4f, 1f);
         }
 
         // Runs outside OnGUI: applying state changes here keeps every frame's
@@ -159,7 +162,7 @@ namespace MortalHelper.Game
         internal int Page
         {
             get { return page; }
-            set { page = Mathf.Clamp(value, 0, Pages.Length - 1); scroll[page] = Vector2.zero; lastPage = page; }
+            set { loverDraftLoaded = false; page = Mathf.Clamp(value, 0, Pages.Length - 1); scroll[page] = Vector2.zero; lastPage = page; }
         }
 
         internal void Drain()
@@ -184,9 +187,9 @@ namespace MortalHelper.Game
                 initialized = true;
             }
             EnsureScale();
-            if (opacity != Mathf.Clamp(plugin.Options.Opacity.Value, .65f, 1f))
+            if (opacity != Mathf.Clamp(Finite(plugin.Options.Opacity.Value, .85f), .4f, 1f))
             {
-                opacity = Mathf.Clamp(plugin.Options.Opacity.Value, .4f, 1f);
+                opacity = Mathf.Clamp(Finite(plugin.Options.Opacity.Value, .85f), .4f, 1f);
                 style.SetOpacity(opacity);
             }
             GUISkin previous = GUI.skin;
@@ -217,7 +220,7 @@ namespace MortalHelper.Game
         // The game ships only a calligraphic CJK font plus Arial, and Unity does not
         // fall back glyphs for dynamic fonts. Load a normal sans CJK face from the
         // OS for panel text; the Kai font stays on the vertical badge title.
-        private static Font CreateBodyFont()
+        private Font CreateBodyFont()
         {
             try
             {
@@ -226,7 +229,7 @@ namespace MortalHelper.Game
                     "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑", "SimHei", "黑体",
                     "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Meiryo", "Yu Gothic UI"
                 }, 18);
-                if (font != null) return font;
+                if (font != null) { ownedBodyFont = font; return font; }
             }
             catch (Exception) { }
             return FindGameFont();
@@ -251,11 +254,19 @@ namespace MortalHelper.Game
             return lower.Contains("kai") || lower.Contains("brush") || lower.Contains("callig") || name.Contains("楷") || name.Contains("行書") || name.Contains("行书");
         }
 
+        private static float Finite(float value, float fallback)
+        {
+            return float.IsNaN(value) || float.IsInfinity(value) ? fallback : value;
+        }
+
         private Rect BadgeRect()
         {
-            return new Rect(badgePosition.x, badgePosition.y,
-                Mathf.Min(BadgeWidth * scale, Mathf.Max(1f, Screen.width - 16f)),
-                Mathf.Min(BadgeHeight * scale, Mathf.Max(1f, Screen.height - 16f)));
+            float badgeScale = scale > 0f ? scale : 1f;
+            float width = Mathf.Min(BadgeWidth * badgeScale, Mathf.Max(1f, Screen.width - 16f));
+            float height = Mathf.Min(BadgeHeight * badgeScale, Mathf.Max(1f, Screen.height - 16f));
+            badgePosition.x = Mathf.Clamp(Finite(badgePosition.x, 12f), 8f, Mathf.Max(8f, Screen.width - width - 8f));
+            badgePosition.y = Mathf.Clamp(Finite(badgePosition.y, 12f), 8f, Mathf.Max(8f, Screen.height - height - 8f));
+            return new Rect(badgePosition.x, badgePosition.y, width, height);
         }
 
         private Rect ClampWindow() { return Clamp(windowRect); }
@@ -264,7 +275,8 @@ namespace MortalHelper.Game
             float designScale = Mathf.Max(1f, scale);
             float minWidth = Mathf.Min(MinWidth * designScale, Mathf.Max(1f, Screen.width - 24f));
             float minHeight = Mathf.Min(MinHeight * designScale, Mathf.Max(1f, Screen.height - 24f));
-            Rect rect = source;
+            Rect rect = new Rect(Finite(source.x, 36f), Finite(source.y, 64f),
+                Finite(source.width, 640f), Finite(source.height, MinHeight));
             rect.width = Mathf.Clamp(rect.width, minWidth, Mathf.Max(minWidth, Screen.width - 24f));
             rect.height = Mathf.Clamp(rect.height, minHeight, Mathf.Max(minHeight, Screen.height - 24f));
             rect.x = Mathf.Clamp(rect.x, 8f, Mathf.Max(8f, Screen.width - rect.width - 8f));
@@ -425,7 +437,7 @@ namespace MortalHelper.Game
             GUILayout.Space(8f * s);
 
             bool features = plugin.Options.Enabled.Value;
-            if (page != lastPage) { scroll[page] = Vector2.zero; lastPage = page; }
+            if (page != lastPage) { loverDraftLoaded = false; scroll[page] = Vector2.zero; lastPage = page; }
 
             // Wide windows keep one fixed content column, centred. Stretching rows was
             // the "wide panel looks empty" report; margins read as deliberate instead.
@@ -598,6 +610,11 @@ namespace MortalHelper.Game
 
             recoveryOpen = Fold("精确恢复（实验）", recoveryOpen, () => recoveryOpen = !recoveryOpen);
             if (!recoveryOpen) return;
+            if (!plugin.Options.ExperimentalRecovery.Value)
+            {
+                Note("精确恢复默认停用：随机状态与完整重放尚未完成实机验收。仅供备份后的测试进度显式启用。");
+                return;
+            }
             Note("记录中：" + (StoryRecovery.Recording ? "是" : "否") + " · 事件 " + StoryRecovery.Count
                 + " 个 · 槽位 " + recoverySlot);
             GUILayout.BeginHorizontal();
@@ -687,7 +704,7 @@ namespace MortalHelper.Game
                 plugin.Options.DuelDodge.Value = on;
                 plugin.Options.DuelAlwaysHit.Value = on;
                 plugin.Options.DuelFirstStrike.Value = on;
-                plugin.Options.DuelZeroDamage.Value = on;
+                plugin.Options.DuelZeroDamage.Value = false;
                 plugin.Options.DuelDamage.Value = on;
             }
             else
@@ -699,7 +716,7 @@ namespace MortalHelper.Game
                 plugin.Options.GroupDown.Value = on;
             }
             plugin.Options.Config.Save();
-            plugin.Status = (duel ? "单挑" : "群战") + (on ? "辅助已全部开启。" : "辅助已全部关闭。");
+            plugin.Status = (duel ? "单挑" : "群战") + (on ? (duel ? "辅助已开启（伤害模式选用一击必杀）。" : "辅助已全部开启。") : "辅助已全部关闭。");
         }
 
         private void DuelSection()
@@ -737,7 +754,7 @@ namespace MortalHelper.Game
         private void GrowthPage()
         {
             int view = ViewTabs(growthView, GrowthViews);
-            if (view != growthView) { growthView = view; scroll[2] = Vector2.zero; }
+            if (view != growthView) { growthView = view; loverDraftLoaded = false; scroll[2] = Vector2.zero; }
             GUILayout.Space(8f * scale);
             if (growthView == 1) { Relationships(); return; }
             Note("以下选项只在自由活动场景空闲时生效；练功与锻造炼丹两组按操作前后恢复点数与金钱。");
@@ -768,7 +785,10 @@ namespace MortalHelper.Game
                 loverIndex = GUILayout.SelectionGrid(loverIndex, Lovers, 5, style.Segment);
                 GUILayout.Space(6f * scale);
                 if (GUILayout.Button("应用心上人", style.ButtonStyle, GUILayout.Height(RowH)))
+                {
                     plugin.Status = ProgressionTools.SetLover(loverIndex);
+                    loverDraftLoaded = false;
+                }
                 Note("可选九位候选或「自己」；不补齐结缘事件，正常存档后保留。");
             }
             else Note("当前场景不能修改：等加载完成、关闭游戏内面板，且不在战斗中。");
@@ -783,7 +803,10 @@ namespace MortalHelper.Game
                 Note("当前场景不能修改：等加载完成、关闭游戏内面板，且不在战斗中。");
                 return;
             }
-            var list = PlayerStatManagerData.Instance.Relationships.List;
+            var player = PlayerStatManagerData.Instance;
+            if (player == null || player.Relationships == null || player.Relationships.List == null)
+            { Note("角色数据尚未就绪。"); return; }
+            var list = player.Relationships.List;
             int shown = 0;
             foreach (var item in list)
             {
@@ -807,10 +830,14 @@ namespace MortalHelper.Game
                     else if (!GameAccess.CanEditValues) plugin.Status = "预览模式：只读，不写入。";
                     else
                     {
-                        plugin.Gate.NotifyMutation("修改角色好感");
-                        item.SetValue(parsed);
-                        relationshipEdits[key] = item.Value.ToString();
-                        plugin.Status = key + " 好感已改为 " + item.Value + "；正常存档后保留。";
+                        try
+                        {
+                            plugin.Gate.NotifyMutation("修改角色好感");
+                            item.SetValue(parsed);
+                            relationshipEdits[key] = item.Value.ToString();
+                            plugin.Status = key + " 好感已改为 " + item.Value + "；正常存档后保留。";
+                        }
+                        catch (Exception error) { plugin.Report(error); }
                     }
                 }
                 GUILayout.EndHorizontal();
@@ -819,14 +846,17 @@ namespace MortalHelper.Game
             else Note("只列已登场角色；不会补齐恋爱事件或解锁未登场角色。");
         }
 
-        // Keep the grid on the value the game actually holds instead of a stale pick.
+        // Initialize on entry; keep the user draft across Layout/Repaint events.
         private bool SyncLoverFromGame()
         {
-            if (!GameAccess.CanEditValues && !plugin.Options.PreviewEditable.Value) return false;
+            if (!GameAccess.CanEditValues && !plugin.Options.PreviewEditable.Value) { loverDraftLoaded = false; return false; }
             var stat = PlayerStatManagerData.Instance == null ? null : PlayerStatManagerData.Instance.Stats.Get(GameStatType.愛人);
-            if (stat == null) return false;
-            int index = Array.IndexOf(ProgressionTools.LoverIds, stat.Value);
-            if (index >= 0) loverIndex = index;
+            if (stat == null) { loverDraftLoaded = false; return false; }
+            if (!loverDraftLoaded)
+            {
+                loverIndex = Array.IndexOf(ProgressionTools.LoverIds, stat.Value);
+                loverDraftLoaded = true;
+            }
             return true;
         }
 
@@ -895,13 +925,17 @@ namespace MortalHelper.Game
                         plugin.Status = name + " 必须在 " + stat.Min + "～" + stat.Max + " 之间。";
                     else
                     {
-                        int old = stat.Value;
-                        plugin.Gate.NotifyMutation("修改属性 " + key);
-                        stat.SetValue(number);
-                        statEdits[key] = stat.Value.ToString();
-                        Record("属性 " + name + " " + old + "→" + stat.Value, () => stat.SetValue(old));
-                        plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。";
-                        Flash("stat:" + key);
+                        try
+                        {
+                            int old = stat.Value;
+                            plugin.Gate.NotifyMutation("修改属性 " + key);
+                            stat.SetValue(number);
+                            statEdits[key] = stat.Value.ToString();
+                            Record("属性 " + name + " " + old + "→" + stat.Value, () => stat.SetValue(old));
+                            plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。";
+                            Flash("stat:" + key);
+                        }
+                        catch (Exception error) { plugin.Report(error); }
                     }
                 }
                 GUILayout.EndHorizontal();
@@ -955,13 +989,17 @@ namespace MortalHelper.Game
                         plugin.Status = name + " 的数量必须在 0～999999 之间。";
                     else
                     {
-                        int previous = item.CurrentCount;
-                        plugin.Gate.NotifyMutation("修改物品 " + item.Id);
-                        item.SetCount(number);
-                        itemEdits[key] = item.CurrentCount.ToString();
-                        Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => item.SetCount(previous));
-                        plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。";
-                        Flash("item:" + key);
+                        try
+                        {
+                            int previous = item.CurrentCount;
+                            plugin.Gate.NotifyMutation("修改物品 " + item.Id);
+                            item.SetCount(number);
+                            itemEdits[key] = item.CurrentCount.ToString();
+                            Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => item.SetCount(previous));
+                            plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。";
+                            Flash("item:" + key);
+                        }
+                        catch (Exception error) { plugin.Report(error); }
                     }
                 }
                 GUILayout.EndHorizontal();
@@ -984,7 +1022,7 @@ namespace MortalHelper.Game
             if (GUILayout.Button("保存格数", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
             {
                 int parsed;
-                if (!int.TryParse(slotCountText, out parsed) || parsed < 2 || parsed > 999)
+                if (!int.TryParse(slotCountText, out parsed) || (parsed != 0 && parsed < 2) || parsed > 999)
                     plugin.Status = "格数必须是 2～999 的整数；0 表示使用游戏原值。";
                 else
                 {
@@ -1024,7 +1062,7 @@ namespace MortalHelper.Game
                 slotComment = GUILayout.TextField(slotComment, 60, GUILayout.Height(RowH));
                 GUILayout.BeginHorizontal();
                 if (GUILayout.Button("保存备注", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
-                { SaveSlotComments.Set(selected, slotComment); plugin.Status = "备注已保存。"; }
+                { string comment = slotComment; Defer(() => { SaveSlotComments.Set(selected, comment); plugin.Status = "备注已保存。"; }); }
                 if (GUILayout.Button("清空", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
                 { Defer(() => { SaveSlotComments.Set(selected, ""); slotComment = ""; plugin.Status = "备注已清空。"; }); }
                 GUILayout.EndHorizontal();
@@ -1101,19 +1139,6 @@ namespace MortalHelper.Game
                 GUI.DrawTexture(new Rect(x - inset - length, y - inset, Mathf.Max(2f, 2f * s), Mathf.Max(2f, 2f * s)), style.AccentSoft);
                 GUI.DrawTexture(new Rect(x - inset, y - inset - length, Mathf.Max(2f, 2f * s), Mathf.Max(2f, 2f * s)), style.AccentSoft);
             }
-            Vector2 mouse = Event.current.mousePosition;
-            Rect grip = new Rect(x - 26f * s, y - 26f * s, 26f * s, 26f * s);
-            if (Event.current.type == EventType.MouseDown && grip.Contains(mouse))
-            { resizing = true; dragStart = GUIUtility.GUIToScreenPoint(mouse); sizeStart = new Vector2(windowRect.width, windowRect.height); Event.current.Use(); }
-            if (resizing && Event.current.type == EventType.MouseDrag)
-            {
-                Vector2 delta = GUIUtility.GUIToScreenPoint(Event.current.mousePosition) - dragStart;
-                windowRect.width = Mathf.Max(MinWidth * scale, sizeStart.x + delta.x);
-                windowRect.height = Mathf.Max(MinHeight * scale, sizeStart.y + delta.y);
-                Event.current.Use();
-            }
-            if (resizing && Event.current.type == EventType.MouseUp)
-            { resizing = false; SaveGeometry(); Event.current.Use(); }
         }
 
         private void DrawBadge()
@@ -1498,11 +1523,17 @@ namespace MortalHelper.Game
             plugin.Options.BadgeY.Value = badgePosition.y;
             plugin.Options.Config.Save();
         }
-        internal void ClearSelection() { statEdits.Clear(); itemEdits.Clear(); }
+        internal void ClearSelection()
+        {
+            statEdits.Clear(); itemEdits.Clear(); relationshipEdits.Clear();
+            editLog.Clear(); loverDraftLoaded = false;
+            SaveSlotComments.Selected = null; commentSlot = null;
+        }
         internal void Dispose()
         {
             if (blocker != null) UnityEngine.Object.Destroy(blocker);
             style.Dispose();
+            if (ownedBodyFont != null) UnityEngine.Object.Destroy(ownedBodyFont);
         }
     }
 }

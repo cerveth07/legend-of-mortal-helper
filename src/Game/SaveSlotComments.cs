@@ -63,32 +63,48 @@ namespace MortalHelper.Game
         private static void Load()
         {
             if (loaded) return;
-            loaded = true;
             try
             {
                 string path = FilePath;
-                if (path == null || !File.Exists(path)) return;
+                if (path == null) throw new IOException("无法定位备注文件。");
+                if (!File.Exists(path)) { loaded = true; return; }
                 foreach (string line in File.ReadAllLines(path, Utf8))
                 {
                     int tab = line.IndexOf('\t');
                     if (tab <= 0) continue;
                     Map[line.Substring(0, tab)] = line.Substring(tab + 1);
                 }
+                loaded = true;
             }
-            catch (Exception) { }
+            catch
+            {
+                Map.Clear(); loaded = false;
+                throw;
+            }
         }
 
         private static void Save()
         {
+            string path = FilePath;
+            if (path == null) throw new IOException("无法定位备注文件。");
+            string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                string path = FilePath;
-                if (path == null) return;
                 var builder = new StringBuilder();
                 foreach (var pair in Map) builder.Append(pair.Key).Append('\t').Append(pair.Value).Append('\n');
-                File.WriteAllText(path, builder.ToString(), Utf8);
+                byte[] bytes = Utf8.GetBytes(builder.ToString());
+                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                { stream.Write(bytes, 0, bytes.Length); stream.Flush(true); }
+                if (File.Exists(path)) File.Replace(temporary, path, null);
+                else File.Move(temporary, path);
             }
-            catch (Exception) { }
+            catch
+            {
+                // Reload the last committed map rather than show an unsaved edit.
+                Map.Clear(); loaded = false;
+                throw;
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
     }
 

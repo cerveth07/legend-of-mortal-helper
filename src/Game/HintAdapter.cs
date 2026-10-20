@@ -29,7 +29,14 @@ namespace MortalHelper.Game
 
         internal static void Load(string source, string name)
         {
-            Revision++; hovered = null; ScriptName = name ?? ""; branches = ScriptHints.Read(source);
+            Revision++; hovered = null; ScriptName = name ?? "";
+            branches.Clear();
+            try { branches = ScriptHints.Read(source); }
+            catch (Exception error)
+            {
+                // Hints are optional: a parser failure must never stop native Lua loading.
+                Plugin.Instance?.Report(error);
+            }
             if (Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.DiagnoseScript.Value)
                 Plugin.Instance.Status = "剧情脚本：" + (string.IsNullOrEmpty(ScriptName) ? "(未命名)" : ScriptName) +
                     " · 可对应分支 " + branches.Count;

@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using Mortal.Battle;
 
@@ -59,28 +62,54 @@ namespace MortalHelper.Game
         }
     }
 
-    [HarmonyPatch(typeof(SkillButton), "CanProcess")]
+    [HarmonyPatch(typeof(SkillButton), "Update")]
     internal static class GroupCooldownPatch
     {
-        private static void Postfix(ref bool __result)
+        private static void Prefix(SkillButton __instance)
         {
-            if (Plugin.CanModifyProgress && Plugin.Instance.Options.GroupCooldown.Value) __result = true;
+            if (Plugin.CanModifyProgress && Plugin.Instance.Options.GroupCooldown.Value)
+                GameAccess.Set(__instance, "_currentCooldownTime", 0f);
+            // Native Update still checks pause/readiness/game-over/event/active and
+            // completes the cooldown through its own UI and state transitions.
         }
     }
 
-    [HarmonyPatch(typeof(GameLevelManager), "Update")]
+    [HarmonyPatch]
     internal static class GroupTimePatch
     {
-        private static void Postfix(GameLevelManager __instance)
+        private static MethodBase TargetMethod() =>
+            AccessTools.EnumeratorMoveNext(AccessTools.Method(typeof(GameLevelManager), "StartSessionTime"));
+
+        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
-            if (!Plugin.CanModifyProgress || !Plugin.Instance.Options.GroupFreeze.Value) return;
-            try
+            var elapsed = AccessTools.Field(typeof(GameLevelManager), "_currentSessionTime");
+            var setter = AccessTools.Method(typeof(GroupTimePatch), "SetElapsed");
+            int replaced = 0;
+            foreach (var instruction in instructions)
             {
-                int maximum = GameAccess.Field<int>(__instance, "_maxSessionTime");
-                int current = GameAccess.Field<int>(__instance, "_currentSessionTime");
-                if (current < maximum) GameAccess.Set(__instance, "_currentSessionTime", maximum);
+                if (instruction.opcode == OpCodes.Stfld && Equals(instruction.operand, elapsed))
+                {
+                    instruction.opcode = OpCodes.Call;
+                    instruction.operand = setter;
+                    replaced++;
+                }
+                yield return instruction;
             }
-            catch (Exception) { }
+            if (replaced != 1)
+                throw new InvalidOperationException("群战计时器版本不兼容：未找到唯一的已用时间更新。");
+        }
+
+        private static void SetElapsed(GameLevelManager manager, int value)
+        {
+            int previous = GameAccess.Field<int>(manager, "_currentSessionTime");
+            if (Plugin.CanModifyProgress && Plugin.Instance.Options.GroupFreeze.Value &&
+                !manager.IsGameOver && value > previous)
+            {
+                int maximum = GameAccess.Field<int>(manager, "_maxSessionTime");
+                GameAccess.Set(manager, "_maxSessionTime", (int)Math.Min(int.MaxValue, (long)maximum + value - previous));
+            }
+            // Preserve elapsed time so timed battle events still run once each.
+            GameAccess.Set(manager, "_currentSessionTime", value);
         }
     }
 }

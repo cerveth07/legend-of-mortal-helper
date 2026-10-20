@@ -120,7 +120,11 @@ internal static class Contracts
         gate.Advance(RecoveryPhase.Loading);gate.Advance(RecoveryPhase.Replaying);
         Reject(()=>cursor.Consume(EventKind.Choice,"wrong"),"mismatched replay continued");
         Check(gate.Phase==RecoveryPhase.Failed && !gate.CanInteract,"failure did not remain locked");
+        Reject(()=>gate.NativeLoadCompleted(),"failed gate unlocked without native load start");
+        gate.NativeLoadStarted();
+        Reject(()=>gate.NotifyMutation("edit during native load"),"native load permitted edits");
         gate.NativeLoadCompleted();Check(gate.CanInteract,"native load did not reset failure");
+        Reject(()=>gate.NativeLoadCompleted(),"idle gate accepted duplicate native completion");
 
         var recorder=new RecordingSession();
         Reject(()=>recorder.Capture("state"),"capture without baseline allowed");
@@ -165,6 +169,8 @@ internal static class Contracts
         var sharedController=new RecoveryController(sharedGate);
         var sharedHost=new FakeHost();
         sharedController.Start(Story(),sharedHost);
+        Reject(()=>sharedGate.NativeLoadCompleted(),"native completion bypassed active replay");
+        Reject(()=>sharedGate.NativeLoadStarted(),"native load did not require replay cancellation");
         Check(sharedGate.Phase==RecoveryPhase.Replaying && !sharedGate.CanInteract,
             "shared mutation gate was not locked by recovery");
         Reject(()=>sharedGate.NotifyMutation("manual edit"),
@@ -174,6 +180,8 @@ internal static class Contracts
             "shared gate forgot failed state");
         Reject(()=>new RecoveryController(sharedGate).Start(Story(),new FakeHost()),
             "fresh controller bypassed shared failure gate");
+        Reject(()=>sharedGate.NativeLoadCompleted(),"shared gate unlocked before native load start");
+        sharedGate.NativeLoadStarted();
         sharedGate.NativeLoadCompleted();
         Check(sharedGate.CanInteract,"successful native load did not unlock shared gate");
 
@@ -181,20 +189,35 @@ internal static class Contracts
         // marker: different item/flag values must cause different fingerprints.
         var liveA=new[]{"stat:Money=3","relation:A=5","item:book:x=1"};
         var liveB=new[]{"item:book:x=1","stat:Money=3","relation:A=5"};
-        string fingerprint=ReplayStateDigest.Create("{\"game\":1}","{\"flag\":1}",liveA);
+        string fingerprint=ReplayStateDigest.Create("{\"TimeTick\":100,\"game\":1}","{\"flag\":1}",liveA);
         Check(fingerprint.StartsWith(ReplayStateDigest.Prefix,StringComparison.Ordinal),
             "state fingerprint has no version");
-        Check(fingerprint==ReplayStateDigest.Create("{\"game\":1}","{\"flag\":1}",liveB),
+        Check(fingerprint==ReplayStateDigest.Create("{\"TimeTick\":100,\"game\":1}","{\"flag\":1}",liveB),
             "state fingerprint depends on list order");
-        Check(fingerprint!=ReplayStateDigest.Create("{\"game\":1}","{\"flag\":2}",liveA),
+        Check(fingerprint!=ReplayStateDigest.Create("{\"TimeTick\":100,\"game\":1}","{\"flag\":2}",liveA),
             "changed story flag kept the same fingerprint");
-        Check(fingerprint!=ReplayStateDigest.Create("{\"game\":1}","{\"flag\":1}",
+        Check(fingerprint!=ReplayStateDigest.Create("{\"TimeTick\":100,\"game\":1}","{\"flag\":1}",
             new[]{"stat:Money=3","relation:A=5","item:book:x=2"}),
             "changed inventory kept the same fingerprint");
-        Reject(()=>ReplayStateDigest.Create("{\"game\":1}","{}",liveA),
+        Reject(()=>ReplayStateDigest.Create("{\"TimeTick\":100,\"game\":1}","{}",liveA),
             "unavailable mission state passed validation");
         Reject(()=>ReplayStateDigest.Create(null,"{\"flag\":1}",liveA),
             "missing native state passed validation");
+
+        // Only the native save's top-level wall-clock integer may be ignored.
+        Check(fingerprint==ReplayStateDigest.Create("{\"TimeTick\":999999,\"game\":1}","{\"flag\":1}",liveA),
+            "fresh native timestamp changed checkpoint fingerprint");
+        Check(fingerprint!=ReplayStateDigest.Create("{\"TimeTick\":100,\"game\":2}","{\"flag\":1}",liveA),
+            "changed native game field escaped strict verification");
+        string nested=ReplayStateDigest.Create("{\"TimeTick\":100,\"nested\":{\"TimeTick\":1},\"text\":\"TimeTick\"}","{\"flag\":1}",liveA);
+        Check(nested==ReplayStateDigest.Create("{\"TimeTick\":200,\"nested\":{\"TimeTick\":1},\"text\":\"TimeTick\"}","{\"flag\":1}",liveA),
+            "nested field interfered with wall clock normalization");
+        Check(nested!=ReplayStateDigest.Create("{\"TimeTick\":100,\"nested\":{\"TimeTick\":2},\"text\":\"TimeTick\"}","{\"flag\":1}",liveA),
+            "nested TimeTick was incorrectly ignored");
+        foreach(string invalid in new[]{"{}","{\"nested\":{\"TimeTick\":1}}","{\"TimeTick\":0}",
+            "{\"TimeTick\":-1}","{\"TimeTick\":1.5}","{\"TimeTick\":\"1\"}",
+            "{\"TimeTick\":1,\"TimeTick\":2}","{\"TimeTick\":9999999999999999999999}"})
+            Reject(()=>ReplayStateDigest.Create(invalid,"{\"flag\":1}",liveA),"invalid native timestamp accepted: "+invalid);
 
         // Wrong order locks the gate and releases the host exactly once.
         controller=new RecoveryController();fake=new FakeHost();
@@ -203,12 +226,14 @@ internal static class Contracts
         Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"failed replay did not abort host");
         Check(!controller.TryConsume(EventKind.Dialogue,"line-1",out _),"failed replay kept consuming");
         Reject(()=>controller.Start(Story(),fake),"locked gate accepted a new replay");
-        controller.Acknowledge();Check(controller.Phase==RecoveryPhase.Idle,"acknowledged failure stayed locked");
+        Reject(()=>controller.Acknowledge(),"acknowledgement bypassed native recovery boundary");
+        Check(controller.Phase==RecoveryPhase.Failed,"acknowledgement unlocked unsafe state");
 
         // A different post-replay state is a failure, not a warning.
         controller=new RecoveryController();fake=new FakeHost{State="hp=3"};
         controller.Start(Story(),fake);
         controller.TryConsume(EventKind.Dialogue,"line-1",out _);controller.TryConsume(EventKind.Random,"rand:1",out _);
+        controller.IsStopPoint(EventKind.Choice,"menu-2");
         Reject(()=>controller.Verify(),"mismatched state passed verification");
         Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"state mismatch did not abort host");
 
@@ -220,9 +245,27 @@ internal static class Contracts
         controller.Start(Story(),fake);controller.Cancel("player left the scene");
         Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"cancel did not abort host");
 
-        // VerifyAtEnd covers recordings that stopped without a pending interaction.
+        // VerifyAtEnd covers manual checkpoints, never a pending interaction.
         controller=new RecoveryController();fake=new FakeHost();
         controller.Start(Story(),fake);
+        controller.TryConsume(EventKind.Dialogue,"line-1",out _);controller.TryConsume(EventKind.Random,"rand:1",out _);
+        Reject(()=>controller.VerifyAtEnd(),"end verification bypassed pending stop point");
+        Reject(()=>controller.Verify(),"verification bypassed unobserved stop point");
+        Check(fake.States==0 && controller.Replaying,"premature verification captured state or unlocked gate");
+        Check(controller.IsStopPoint(EventKind.Choice,"menu-2"),"pending stop point unavailable");
+        controller.Verify();
+        Check(controller.Phase==RecoveryPhase.Idle,"observed stop point could not verify");
+
+        // Both expected state and checkpoint metadata must be frozen at start.
+        var mutable=Story();
+        controller=new RecoveryController();fake=new FakeHost();controller.Start(mutable,fake);
+        mutable.ExpectedState="hp=3";mutable.Checkpoint="2:changed";
+        controller.TryConsume(EventKind.Dialogue,"line-1",out _);controller.TryConsume(EventKind.Random,"rand:1",out _);
+        Check(controller.IsStopPoint(EventKind.Choice,"menu-2"),"caller changed frozen stop point");
+        controller.Verify();Check(controller.Phase==RecoveryPhase.Idle,"caller changed frozen expected state");
+        controller=new RecoveryController();fake=new FakeHost();
+        var manual=Story();manual.Checkpoint="manual:1";
+        controller.Start(manual,fake);
         Reject(()=>controller.VerifyAtEnd(),"verify-at-end ran before any event");
         controller.TryConsume(EventKind.Dialogue,"line-1",out _);
         Reject(()=>controller.VerifyAtEnd(),"verify-at-end ran with events left");
@@ -232,7 +275,7 @@ internal static class Contracts
         Check(controller.Phase==RecoveryPhase.Idle && fake.Aborts==0,"verify-at-end did not settle");
 
         controller=new RecoveryController();fake=new FakeHost{State="hp=3"};
-        controller.Start(Story(),fake);
+        controller.Start(manual,fake);
         controller.TryConsume(EventKind.Dialogue,"line-1",out _);controller.TryConsume(EventKind.Random,"rand:1",out _);
         Reject(()=>controller.VerifyAtEnd(),"verify-at-end accepted a mismatched state");
         Check(controller.Phase==RecoveryPhase.Failed && fake.Aborts==1,"verify-at-end mismatch did not abort");

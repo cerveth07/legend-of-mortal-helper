@@ -85,6 +85,7 @@ namespace MortalHelper.Game
                 SwitchState, SwitchOnLabel, SwitchOffLabel, FooterLabel, FooterValue, ButtonStyle, IconButton, Notice })
                 style.font = UiFont;
             var headingFont = BadgeFont != null ? BadgeFont : UiFont;
+            Title.font = headingFont; SectionTitle.font = headingFont;
 
             Title.fontSize = size + 4; Title.normal.textColor = Primary;
             Title.alignment = TextAnchor.MiddleCenter; Title.wordWrap = false; Title.clipping = TextClipping.Clip;
@@ -295,10 +296,12 @@ namespace MortalHelper.Game
         {
             foreach (var texture in new[] { Dark, Panel, Surface, SurfaceAlt, Accent, AccentSoft, Hover, Transparent,
                 Button, ButtonHover, ButtonActive, Input, SwitchOn, SwitchOff, SliderTrack, SliderFill, SliderThumb,
-                ScrollPaper, ScrollRoll, Border, Ink, Badge, BadgeHover, BadgeActive })
+                ScrollPaper, ScrollRoll, Border, Ink, Badge, BadgeHover, BadgeActive, Hairline, Focus, SegOff })
                 if (texture != null) Object.Destroy(texture);
             if (Skin != null) Object.Destroy(Skin);
             Skin = null;
+            if (BadgeFont != null) Object.Destroy(BadgeFont);
+            BadgeFont = null;
         }
     }
 }

@@ -1,55 +1,26 @@
-"""Builds the drop-in packages.
-
-Two layouts are produced from the same compiled plugin:
-
-  full   loader (winhttp.dll + BepInEx/core) plus the plugin, so copying the
-         folder contents into the game directory is enough to make it work;
-  plugin only the plugin, for players who already run BepInEx 6 Mono.
-
-Nothing from the game is copied: only the loader files provided locally and our
-own DLL. No network access, no installation into the game directory.
-"""
+"""Package a tested current plugin without redistributing game or loader binaries."""
 
 import argparse
 import hashlib
-import os
+import json
+import re
 import shutil
 import zipfile
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
+ROOT = Path(__file__).resolve().parents[1]
 NAME = "mortal-helper"  # ASCII on purpose: the zip name ends up in URLs
 
 USAGE = """活侠·万象录 {version} —— 使用说明
 ================================================
 
-这是一个《活侠传》的整合 Mod。安装不需要安装器：把本文件夹里的内容，
-整体复制到游戏根目录（和 Mortal.exe 同一个文件夹）即可。
-
-安装步骤
---------
-1. 完全退出游戏。
-2. 备份存档目录（通常在 %USERPROFILE%\\AppData\\LocalLow\\Obb Studio\\Mortal\\<你的SteamID>）。
-3. 把本文件夹里的全部内容复制进游戏根目录，允许合并。
-4. 从 Steam 启动游戏，进入游戏后按 Tab 打开面板。
-
-复制后游戏根目录应当是：
-    Mortal.exe
-    winhttp.dll
-    doorstop_config.ini
-    .doorstop_version
-    BepInEx\\core\\...
-    BepInEx\\plugins\\cerveth.mortal.helper\\MortalHelper.dll
-
-确认是否生效
-------------
-打开 BepInEx\\LogOutput.log，应能看到：
-    活侠·万象录 0.1.0  初始化完成
-
-卸载
-----
-删除 winhttp.dll、doorstop_config.ini、.doorstop_version 和整个 BepInEx 文件夹。
-存档不受影响；面板里写入的数值不会自动撤销。
+这是《活侠传》的辅助插件，仅插件包需要已安装 BepInEx 6 Mono x64。
+完全退出游戏并备份存档，然后将 BepInEx/plugins/cerveth.mortal.helper/
+复制到游戏目录的同名位置。从 Steam 启动游戏，按 Tab 打开面板。
+版本：{version}。检查 BepInEx/LogOutput.log 中的插件初始化消息。
+卸载时只移走本插件 MortalHelper.dll，共用加载器及其他插件请保留。
+关闭或移走插件不会撤销已经应用并保存的属性修改。
 
 注意事项
 --------
@@ -61,22 +32,6 @@ USAGE = """活侠·万象录 {version} —— 使用说明
 - 不要在游戏运行时替换文件。
 """
 
-NOTICE = """第三方组件说明
-================================================
-
-本整合包内含的加载器二进制来自 BepInEx 项目：
-  BepInEx 6.0.0-be.692 (Unity Mono, x64) — https://github.com/BepInEx/BepInEx
-  包含 winhttp.dll（Doorstop 注入器）、doorstop_config.ini、BepInEx/core 下的程序集。
-
-BepInEx 采用 LGPL-2.1 许可；其完整许可文本与对应源码见上述官方仓库。
-本包不修改这些二进制，只按原样分发。若你需要源码或不同许可条款下的版本，
-请直接从官方发布页获取。
-
-本包不包含《活侠传》的游戏程序集、剧情资源、存档，也不包含任何旧版
-第三方 Mod（骰子大师、LOMSave 等）的代码或二进制。
-
-本包中的插件（MortalHelper.dll 及其源码）由本工程使用 MIT 许可。
-"""
 
 
 def sha256(path: Path) -> str:
@@ -87,20 +42,8 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def copy_tree(source: Path, target: Path, root: Path) -> None:
-    for item in sorted(source.rglob("*")):
-        if item.is_dir():
-            continue
-        relative = item.relative_to(root)
-        destination = target / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(item, destination)
-
-
 def write_zip(folder: Path, archive: Path) -> None:
-    if archive.exists():
-        archive.unlink()
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
+    with zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
         for item in sorted(folder.rglob("*")):
             if item.is_file():
                 bundle.write(item, item.relative_to(folder).as_posix())
@@ -114,44 +57,44 @@ def main() -> int:
     parser.add_argument("--version", default=VERSION)
     args = parser.parse_args()
 
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?", args.version):
+        parser.error("version must be a semantic version without paths")
+    if args.loader:
+        parser.error("Full loader bundles are disabled until per-component licenses and source-supply notices are verified; use the plugin-only package.")
     plugin = Path(args.plugin).resolve()
     if not plugin.is_file():
-        raise SystemExit("plugin not found: %s" % plugin)
+        parser.error("plugin not found: %s" % plugin)
+    manifest_path = plugin.parent / "build-manifest.json"
+    if not manifest_path.is_file():
+        parser.error("build manifest missing; run build.py --test first")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    sources = {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / "src").rglob("*.cs"))}
+    tests = {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / "tests").glob("*.cs"))}
+    if (manifest.get("plugin_sha256") != sha256(plugin) or manifest.get("sources") != sources
+            or manifest.get("tests") != tests or manifest.get("build_script_sha256") != sha256(ROOT / "build.py")
+            or manifest.get("diagnostics") is not False or not isinstance(manifest.get("contract_checks"), int)
+            or manifest["contract_checks"] <= 0):
+        parser.error("build is stale, untested or diagnostic; rebuild current sources with build.py --test")
+    version_source = (ROOT / "src" / "Game" / "Plugin.cs").read_text(encoding="utf-8")
+    if not re.search(r'\[BepInPlugin\("cerveth\.mortal\.helper",\s*"[^"\n]+",\s*"' + re.escape(args.version) + r'"\)\]', version_source):
+        parser.error("package version does not match the plugin source version")
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
     made = []
     plugin_root = out / ("%s-%s-plugin" % (NAME, args.version))
-    if plugin_root.exists():
-        shutil.rmtree(plugin_root)
+    if plugin_root.exists() or (out / ("%s-%s-plugin.zip" % (NAME, args.version))).exists():
+        parser.error("output already exists; choose a fresh --out directory")
     (plugin_root / "BepInEx" / "plugins" / "cerveth.mortal.helper").mkdir(parents=True)
     shutil.copy2(plugin, plugin_root / "BepInEx" / "plugins" / "cerveth.mortal.helper" / "MortalHelper.dll")
     (plugin_root / "使用说明.txt").write_text(USAGE.format(version=args.version), encoding="utf-8")
-    (plugin_root / "第三方组件说明.txt").write_text(NOTICE, encoding="utf-8")
+    shutil.copy2(ROOT / "LICENSE", plugin_root / "LICENSE")
+    shutil.copy2(ROOT / "THIRD_PARTY.md", plugin_root / "THIRD_PARTY.md")
+    shutil.copy2(ROOT / "PROVENANCE.md", plugin_root / "PROVENANCE.md")
+    shutil.copy2(manifest_path, plugin_root / "build-manifest.json")
     make_sums(plugin_root)
     write_zip(plugin_root, out / ("%s-%s-plugin.zip" % (NAME, args.version)))
     made.append(plugin_root)
-
-    if args.loader:
-        loader = Path(args.loader).resolve()
-        full_root = out / ("%s-%s-full" % (NAME, args.version))
-        if full_root.exists():
-            shutil.rmtree(full_root)
-        full_root.mkdir(parents=True)
-        for name in ("winhttp.dll", "doorstop_config.ini", ".doorstop_version"):
-            source = loader / name
-            if not source.is_file():
-                raise SystemExit("loader file missing: %s" % source)
-            shutil.copy2(source, full_root / name)
-        copy_tree(loader / "BepInEx" / "core", full_root / "BepInEx" / "core", loader / "BepInEx" / "core")
-        target = full_root / "BepInEx" / "plugins" / "cerveth.mortal.helper"
-        target.mkdir(parents=True)
-        shutil.copy2(plugin, target / "MortalHelper.dll")
-        (full_root / "使用说明.txt").write_text(USAGE.format(version=args.version), encoding="utf-8")
-        (full_root / "第三方组件说明.txt").write_text(NOTICE, encoding="utf-8")
-        make_sums(full_root)
-        write_zip(full_root, out / ("%s-%s-full.zip" % (NAME, args.version)))
-        made.append(full_root)
 
     for folder in made:
         files = [p for p in folder.rglob("*") if p.is_file()]

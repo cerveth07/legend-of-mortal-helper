@@ -73,15 +73,6 @@ namespace MortalHelper.Game
         }
     }
 
-    [HarmonyPatch(typeof(MartialPanel), "CanUseLearnButton")]
-    internal static class SkillButtonPatch
-    {
-        private static void Postfix(ref bool __result)
-        {
-            if (ProgressionState.FreeSkill) __result = true;
-        }
-    }
-
     [HarmonyPatch(typeof(UpgradePanel), "HandleUpgradeNextItem")]
     internal static class ForgeSpendPatch
     {
@@ -162,7 +153,9 @@ namespace MortalHelper.Game
             {
                 var stat = GameAccess.Field<GameStat>(__instance, "_martialPoint");
                 int available = stat != null ? stat.FinalValue : 0;
-                if (available > 0 && point > available) point = available;
+                var item = GameAccess.Field<MartialItemPanel>(__instance, "_currentItem");
+                if (available > 0 && item != null && item.Book != null)
+                    point = System.Math.Min(available, item.Book.GetNextLevelRequirePoints());
             }
             catch (System.Exception) { }
         }
@@ -177,7 +170,9 @@ namespace MortalHelper.Game
             try
             {
                 var stat = GameAccess.Field<GameStat>(__instance, "_martialPoint");
-                if (stat != null && stat.FinalValue > 0) __result = true;
+                var item = GameAccess.Field<MartialItemPanel>(__instance, "_currentItem");
+                var data = item == null || item.Book == null ? null : item.Book.GetCurrentMartialData();
+                if (stat != null && stat.FinalValue > 0 && data != null && data.Check()) __result = true;
             }
             catch (System.Exception) { }
         }
@@ -219,12 +214,12 @@ namespace MortalHelper.Game
     [HarmonyPatch(typeof(MissionManagerData), "AddFlag")]
     internal static class CheckpointAddPatch
     {
-        private static void Postfix(MissionManagerData __instance, string __1) { CheckpointState.Changed(__instance, __1); }
+        private static void Postfix(MissionManagerData __instance, string __0) { CheckpointState.Changed(__instance, __0); }
     }
 
     [HarmonyPatch(typeof(MissionManagerData), "SetFlag")]
     internal static class CheckpointSetPatch
     {
-        private static void Postfix(MissionManagerData __instance, string __1) { CheckpointState.Changed(__instance, __1); }
+        private static void Postfix(MissionManagerData __instance, string __0) { CheckpointState.Changed(__instance, __0); }
     }
 }
