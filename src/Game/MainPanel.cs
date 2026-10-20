@@ -1083,6 +1083,11 @@ namespace MortalHelper.Game
             float rollW = Mathf.Max(1f, badge.width - 10f * s);
             float rollX = badge.x + (badge.width - rollW) * .5f;
             GUI.DrawTexture(new Rect(rollX, badge.y + inset, rollW, rollH), style.ScrollRoll, ScaleMode.StretchToFill, true);
+            // The hanging-scroll design caps both ends. The layout already reserved the
+            // space below (the footer subtracts inset + rollH), only the draw call was
+            // missing, which left the collapsed badge looking cut off at the bottom.
+            GUI.DrawTexture(new Rect(rollX, badge.yMax - inset - rollH, rollW, rollH), style.ScrollRoll,
+                ScaleMode.StretchToFill, true);
             float footerH = Mathf.Min(22f * s, badge.height * .17f);
             float footerY = badge.yMax - inset - rollH - footerH - 5f * s;
             float titleY = badge.y + inset + rollH + 8f * s;
