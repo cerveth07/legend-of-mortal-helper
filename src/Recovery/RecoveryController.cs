@@ -23,6 +23,7 @@ namespace MortalHelper.Recovery
 
         // True when every recorded event has been consumed; the caller then verifies.
         public bool Finished => Replaying && cursor.Complete;
+        public RecordedEvent NextEvent => Replaying ? cursor.Peek() : null;
 
         // Recordings that stopped without a pending interaction are verified directly
         // after the last event instead of waiting at a stop-point interaction.

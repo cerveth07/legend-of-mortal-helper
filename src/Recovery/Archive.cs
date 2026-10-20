@@ -122,8 +122,9 @@ namespace MortalHelper.Recovery
                 if (entry == null || !Enum.IsDefined(typeof(EventKind), entry.Kind) ||
                     double.IsNaN(entry.Number) || double.IsInfinity(entry.Number))
                     throw new InvalidDataException("事件字段非法。");
-                if ((entry.Kind == EventKind.Choice || entry.Kind == EventKind.Dice) && entry.Integer < 1)
-                    throw new InvalidDataException("选项编号非法。");
+                if ((entry.Kind == EventKind.Choice && entry.Integer < 1) ||
+                    (entry.Kind == EventKind.Dice && entry.Integer < 0))
+                    throw new InvalidDataException("选项编号或骰点非法。");
             }
         }
 

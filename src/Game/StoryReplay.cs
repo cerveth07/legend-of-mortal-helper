@@ -1,9 +1,14 @@
 using System;
 using System.IO;
+using System.Text;
+using Fungus;
 using HarmonyLib;
 using Mortal.Core;
+using Mortal.Story;
 using MortalHelper.Recovery;
 using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 namespace MortalHelper.Game
 {
@@ -23,8 +28,32 @@ namespace MortalHelper.Game
         private static string diceScript;
         private static float lastProgress, verifyAt;
         private static bool clicking;
+        private static string choiceSnapshot, lastClickedSnapshot;
+        private static int choiceStableFrame, startFrame;
+        private static float choiceStableAt;
+        private static bool loadingBaseline, baselineScenePending;
+        private static string baselineScene;
+        private static float baselineSceneDeadline;
 
         internal static bool Active => controller != null && (controller.Replaying || controller.Finished);
+
+        // The native LoadCurrentScene operation may trigger a scene change during
+        // or shortly after loading the baseline. It is not a user-initiated abort.
+        internal static bool IsExpectedBaselineSceneChange(string scene)
+        {
+            if (loadingBaseline)
+            {
+                baselineScenePending = false;
+                return true;
+            }
+            if (baselineScenePending && Time.unscaledTime <= baselineSceneDeadline &&
+                string.Equals(scene, baselineScene, StringComparison.Ordinal))
+            {
+                baselineScenePending = false;
+                return true;
+            }
+            return false;
+        }
         internal static int Position { get; private set; }
         internal static int? PendingDice { get; private set; }
         internal static string Status => status;
@@ -42,13 +71,20 @@ namespace MortalHelper.Game
                         "，脚本=" + (save.CurrentStoryScript ?? "null") + "）。");
                 var load = AccessTools.Method(typeof(SaveSystem), "ExecuteLoadGameData");
                 if (load == null) throw new InvalidOperationException("找不到游戏读档方法。");
-                load.Invoke(SaveSystem.Instance, new object[] { save });
-                // Applying data alone never changes scene; the load panel does these
-                // three calls afterwards, so replay must do the same.
-                SaveSystem.Instance.SaveUniverseData();
-                if (MissionManagerData.Instance != null) MissionManagerData.Instance.UpdateCheckMissions();
-                if (SceneController.Instance != null) SceneController.Instance.LoadCurrentScene();
-                Log("baseline applied tick=" + save.TimeTick + " scene=" + (save.CurrentScene ?? "null"));
+                loadingBaseline = true;
+                baselineScene = save.CurrentScene;
+                baselineScenePending = true;
+                baselineSceneDeadline = Time.unscaledTime + 10f;
+                try
+                {
+                    load.Invoke(SaveSystem.Instance, new object[] { save });
+                    // Follow the game's native post-load sequence, not a direct save write.
+                    SaveSystem.Instance.SaveUniverseData();
+                    if (MissionManagerData.Instance != null) MissionManagerData.Instance.UpdateCheckMissions();
+                    if (SceneController.Instance != null) SceneController.Instance.LoadCurrentScene();
+                    Log("baseline applied tick=" + save.TimeTick + " scene=" + (save.CurrentScene ?? "null"));
+                }
+                finally { loadingBaseline = false; }
             }
 
             public string CaptureState() { return StoryRecovery.Summary(); }
@@ -61,7 +97,7 @@ namespace MortalHelper.Game
         }
 
         // Why a restore cannot start right now; empty means it can.
-        internal static string Blocker(int slot)
+        internal static string Blocker(int slot, bool fromBackup = false)
         {
             if (Active) return "正在重放中";
             if (StoryRecovery.Recording) return "正在记录，请先停止记录";
@@ -69,14 +105,15 @@ namespace MortalHelper.Game
             {
                 string folder = StoryRecovery.Directory;
                 if (folder == null) return "找不到记录目录";
-                if (!File.Exists(Path.Combine(folder, "slot-" + slot.ToString("D3") + ".mhr")))
-                    return "槽位 " + slot + " 还没有检查点";
+                string path = new ArchiveStore(folder).PathFor(slot) + (fromBackup ? ".bak" : "");
+                if (!File.Exists(path))
+                    return "槽位 " + slot + (fromBackup ? " 没有历史备份" : " 还没有检查点");
             }
             catch (Exception) { return "读取记录目录失败"; }
             return "";
         }
 
-        internal static bool Start(int slot)
+        internal static bool Start(int slot, bool fromBackup = false)
         {
             if (controller != null && controller.Replaying) { status = "已经在重放中。"; return false; }
             if (StoryRecovery.Recording) { status = "请先停止记录再恢复。"; return false; }
@@ -85,13 +122,14 @@ namespace MortalHelper.Game
                 string folder = StoryRecovery.Directory;
                 if (folder == null) { status = "找不到记录目录。"; return false; }
                 var store = new ArchiveStore(folder);
-                var document = store.Load(slot);
+                var document = store.Load(slot, fromBackup);
                 if (document == null || document.Kind != RecoveryKind.Story) { status = "该槽位不是剧情检查点。"; return false; }
+                Position = 0; diceOrdinal = 0; diceScript = null; PendingDice = null;
+                verifyAt = 0f; lastProgress = Time.unscaledTime; startFrame = Time.frameCount;
+                choiceSnapshot = null; lastClickedSnapshot = null; baselineScenePending = false;
                 controller = new RecoveryController();
                 controller.Start(document, new Host());
-                Position = 0; diceOrdinal = 0; diceScript = null; PendingDice = null;
-                verifyAt = 0f; lastProgress = Time.unscaledTime;
-                status = "已载入基线，开始重放 " + document.Events.Count + " 个事件。";
+                status = "已载入" + (fromBackup ? "历史备份" : "基线") + "，开始重放 " + document.Events.Count + " 个事件。";
                 Log("started: " + document.Events.Count + " events, checkpoint=" + document.Checkpoint);
                 if (document.Events.Count == 0) ScheduleVerify();
                 return true;
@@ -108,6 +146,8 @@ namespace MortalHelper.Game
             if (controller != null && controller.Replaying) controller.Cancel(reason);
             controller = null;
             PendingDice = null;
+            baselineScenePending = false;
+            choiceSnapshot = null; lastClickedSnapshot = null;
             status = reason ?? "重放已停止。";
             Log("stopped: " + status);
         }
@@ -122,11 +162,28 @@ namespace MortalHelper.Game
             }
             if (!controller.Replaying) { controller = null; return; }
             if (Time.unscaledTime - lastProgress > StallSeconds)
+            {
                 Stop("超过 " + (int)StallSeconds + " 秒没有匹配到记录的交互，重放已中止。");
+                return;
+            }
+            // Do not act on controls belonging to the outgoing scene.
+            if (Time.frameCount <= startFrame + 1 || !GameAccess.Loaded) return;
+            if (baselineScenePending)
+            {
+                if (Time.unscaledTime > baselineSceneDeadline) baselineScenePending = false;
+                else if (!string.Equals(SceneManager.GetActiveScene().name, baselineScene,
+                    StringComparison.Ordinal)) return;
+            }
+            var next = controller.NextEvent;
+            if (next != null && next.Kind == EventKind.Dice && !PendingDice.HasValue &&
+                DiceAdapter.Dialog != null && DiceAdapter.Dialog.isActiveAndEnabled)
+                TakeDice(); // Also covers a dialog enabled during baseline loading.
+            if (controller != null && controller.Replaying) DriveChoice();
         }
 
         private static void ScheduleVerify()
         {
+            if (verifyAt > 0f) return;
             verifyAt = Time.unscaledTime + VerifyDelay;
             status = "事件已全部注入，等待状态校验…";
         }
@@ -136,6 +193,7 @@ namespace MortalHelper.Game
             verifyAt = 0f;
             var current = controller;
             controller = null;
+            baselineScenePending = false;
             try
             {
                 current.VerifyAtEnd();
@@ -148,51 +206,121 @@ namespace MortalHelper.Game
             Log(status);
         }
 
-        // Called when a roll dialog opens; consumes the matching recorded event.
+        // Called when a roll dialog opens or a fully loaded dice dialog is found.
         internal static void TakeDice()
         {
-            if (controller == null || !controller.Replaying) return;
+            if (controller == null || !controller.Replaying || PendingDice.HasValue) return;
+            if (controller.NextEvent == null || controller.NextEvent.Kind != EventKind.Dice) return;
             string script = StoryRecovery.CurrentScript;
             if (script != diceScript) { diceScript = script; diceOrdinal = 0; }
-            string key = StoryRecovery.DiceKey(script, ++diceOrdinal);
+            string key = StoryRecovery.DiceKey(script, diceOrdinal + 1);
             RecordedEvent consumed;
             if (!controller.TryConsume(EventKind.Dice, key, out consumed))
             {
                 Stop("判定「" + key + "」与记录不一致，重放已中止。");
                 return;
             }
+            diceOrdinal++;
             Position++;
             lastProgress = Time.unscaledTime;
             PendingDice = consumed.Integer;
             Log("dice " + consumed.Integer + " (" + Position + ")");
-            if (controller.Finished) ScheduleVerify();
+            // Verification starts on the actual dice result, never on dialog open.
         }
 
-        // Called when a story option is rendered; clicks it when it matches the tape.
-        internal static void TryChoice(UnityEngine.UI.Button button, string text)
+        internal static void ConfirmDice(int actual)
         {
-            if (controller == null || !controller.Replaying || clicking || button == null) return;
-            string key = StoryRecovery.ChoiceKey(StoryRecovery.CurrentScript, text);
-            RecordedEvent consumed;
-            if (!controller.TryConsume(EventKind.Choice, key, out consumed))
+            if (!PendingDice.HasValue) return;
+            int expected = PendingDice.Value;
+            if (actual != expected)
             {
-                Stop("选项「" + text + "」与记录不一致，重放已中止。");
+                Stop("原生骰子结果与记录不一致（预期 " + expected + "，实际 " + actual + "）。");
                 return;
             }
+            PendingDice = null;
+            lastProgress = Time.unscaledTime;
+            if (controller != null && controller.Finished) ScheduleVerify();
+        }
+
+        // Menu content callbacks run while buttons are being populated, so choosing
+        // there incorrectly treats unrelated options as out-of-order events. Observe
+        // the *complete* active menu during Update and wait for a stable snapshot.
+        private static void DriveChoice()
+        {
+            if (clicking || controller == null || !controller.Replaying || PendingDice.HasValue) return;
+            var next = controller.NextEvent;
+            if (next == null || next.Kind != EventKind.Choice) { choiceSnapshot = null; return; }
+            var menu = MenuDialog.GetMenuDialog();
+            if (menu == null || !menu.IsActive())
+            {
+                choiceSnapshot = null;
+                lastClickedSnapshot = null;
+                return;
+            }
+            var buttons = menu.GetComponentsInChildren<NormalOptionButton>(false);
+            var fingerprint = new StringBuilder(StoryRecovery.CurrentScript).Append(':')
+                .Append(menu.GetInstanceID());
+            Button match = null;
+            string matchedText = null;
+            int matches = 0, available = 0;
+            foreach (var option in buttons)
+            {
+                if (option == null || !option.gameObject.activeInHierarchy) continue;
+                Button button = option.GetComponent<Button>();
+                if (button == null) continue;
+                Text text;
+                try { text = GameAccess.Field<Text>(option, "_source"); }
+                catch (Exception) { continue; }
+                if (text == null) continue;
+                available++;
+                fingerprint.Append('|').Append(option.GetInstanceID()).Append(':')
+                    .Append(text.text).Append(':').Append(button.interactable);
+                if (button.interactable &&
+                    StoryRecovery.ChoiceKey(StoryRecovery.CurrentScript, text.text) == next.Key)
+                {
+                    match = button; matchedText = text.text; matches++;
+                }
+            }
+            if (available == 0) { choiceSnapshot = null; return; }
+            string snapshot = fingerprint.ToString();
+            if (!string.Equals(snapshot, choiceSnapshot, StringComparison.Ordinal))
+            {
+                choiceSnapshot = snapshot;
+                choiceStableFrame = Time.frameCount;
+                choiceStableAt = Time.unscaledTime;
+                return;
+            }
+            if (Time.frameCount - choiceStableFrame < 2 ||
+                Time.unscaledTime - choiceStableAt < 0.15f ||
+                string.Equals(lastClickedSnapshot, snapshot, StringComparison.Ordinal)) return;
+            if (matches == 0) return; // No target in this menu; never consume another option.
+            if (matches > 1)
+            {
+                Stop("有多个同名剧情选项，无法唯一确认重放目标。");
+                return;
+            }
+            RecordedEvent consumed;
+            if (!controller.TryConsume(EventKind.Choice, next.Key, out consumed))
+            {
+                Stop("待重放选项已失效，重放已中止。");
+                return;
+            }
+            // Mark before invoking: a synchronous game callback can construct the
+            // next menu, and the previous one must never be clicked twice.
+            lastClickedSnapshot = snapshot;
             clicking = true;
             try
             {
                 Position++;
                 lastProgress = Time.unscaledTime;
-                Log("choice " + text + " (" + Position + ")");
-                button.onClick.Invoke();
-                if (controller.Finished) ScheduleVerify();
+                Log("choice " + matchedText + " (" + Position + ")");
+                match.onClick.Invoke();
+                if (controller != null && controller.Finished && !PendingDice.HasValue)
+                    ScheduleVerify();
             }
             catch (Exception error) { Stop("选择注入失败：" + error.Message); }
             finally { clicking = false; }
         }
-
-        internal static void AfterDice() { PendingDice = null; }
 
         private static void Log(string message)
         {

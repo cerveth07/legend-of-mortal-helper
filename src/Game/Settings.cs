@@ -33,7 +33,7 @@ namespace MortalHelper.Game
             ShowConditions = config.Bind("Story", "ShowConditions", false, "悬停选项时显示已确认的原生选择条件，包含剧透。");
             DiagnoseScript = config.Bind("Diagnostics", "DiagnoseScript", false, "诊断：切换剧本时在状态行显示脚本名与可解析分支数（无面板入口）。");
             ShowBranches = config.Bind("Story", "ShowBranches", false, "在选项上标记〔已走〕〔未记录〕，记录保存在配置目录的 cerveth.mortal.helper.choices.txt。");
-            Point = config.Bind("Story", "BasePoint", "50", "指定点数模式下的基础点数；按每次判定范围校验。");
+            Point = config.Bind("Story", "BasePoint", "", "指定点数模式下的基础点数；按每次判定范围校验。");
             DuelHealth = config.Bind("Duel", "KeepHealth", false, "单挑主角生命不因普通扣减降低。");
             DuelStamina = config.Bind("Duel", "KeepStamina", false, "单挑主角气力不因普通扣减降低。");
             DuelDodge = config.Bind("Duel", "MaximumDodge", false, "单挑主角闪避率设为最高；保留必中机制。");

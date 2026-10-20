@@ -94,15 +94,18 @@ namespace MortalHelper.Game
 
         internal static void NoteChoice(string text)
         {
-            Add(EventKind.Choice, ChoiceKey(CurrentScript, text), 1);
-            if (!string.IsNullOrEmpty(text)) Events[Events.Count - 1].Data = text.Length > 200 ? text.Substring(0, 200) : text;
+            // Option markers remain installed even when recording is off.
+            // Never index the event list unless this exact click was added.
+            if (Add(EventKind.Choice, ChoiceKey(CurrentScript, text), 1) && !string.IsNullOrEmpty(text))
+                Events[Events.Count - 1].Data = text.Length > 200 ? text.Substring(0, 200) : text;
         }
 
-        private static void Add(EventKind kind, string key, int value)
+        private static bool Add(EventKind kind, string key, int value)
         {
-            if (!Recording) return;
-            if (Events.Count >= Archive.MaximumEvents) { Stop(); return; }
+            if (!Recording) return false;
+            if (Events.Count >= Archive.MaximumEvents) { Stop(); return false; }
             Events.Add(new RecordedEvent { Kind = kind, Key = key, Integer = value });
+            return true;
         }
 
         // Summary of the values that a replayed event sequence reproduces. Volatile
@@ -150,8 +153,22 @@ namespace MortalHelper.Game
                 var store = new ArchiveStore(folder);
                 store.Save(slot, document);
                 LastFile = store.PathFor(slot);
-                var loaded = store.Load(slot, true);
-                Status = "检查点已保存（" + document.Events.Count + " 个事件，备份可读：" + (loaded != null) + "）：" + Path.GetFileName(LastFile);
+                // The first save has no .bak. Verify the file just written instead
+                // of treating a missing *historical* backup as a save failure.
+                var loaded = store.Load(slot);
+                if (loaded.Kind != document.Kind || loaded.Checkpoint != document.Checkpoint ||
+                    loaded.Events.Count != document.Events.Count ||
+                    loaded.ExpectedState != document.ExpectedState)
+                    throw new InvalidDataException("检查点写入后校验不一致。");
+                string backupPath = LastFile + ".bak";
+                string backupStatus = "无历史备份";
+                if (File.Exists(backupPath))
+                {
+                    try { store.Load(slot, true); backupStatus = "历史备份可读"; }
+                    catch (Exception) { backupStatus = "历史备份不可读"; }
+                }
+                Status = "检查点已保存（" + document.Events.Count + " 个事件，主档校验通过，" +
+                    backupStatus + "）：" + Path.GetFileName(LastFile);
                 return true;
             }
             catch (Exception error)

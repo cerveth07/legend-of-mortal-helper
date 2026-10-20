@@ -26,6 +26,16 @@ namespace MortalHelper.Recovery
             Position = 0;
         }
 
+        // Read-only lookahead lets game adapters find the intended option
+        // without consuming (or rejecting) every other visible menu button.
+        public RecordedEvent Peek()
+        {
+            if (gate.Phase != RecoveryPhase.Replaying || document == null || Complete) return null;
+            var item = document.Events[Position];
+            return new RecordedEvent { Kind = item.Kind, Key = item.Key, Integer = item.Integer,
+                Number = item.Number, Data = item.Data };
+        }
+
         public RecordedEvent Consume(EventKind kind, string key)
         {
             if (gate.Phase != RecoveryPhase.Replaying || document == null || Complete)

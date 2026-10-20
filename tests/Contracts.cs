@@ -87,6 +87,15 @@ internal static class Contracts
         var bad=Document(); bad.Events[0].Number=double.NaN;
         Reject(()=>Archive.Encode(bad),"NaN accepted");
         bad=Document();bad.Kind=(RecoveryKind)255;Reject(()=>Archive.Encode(bad),"unknown kind accepted");
+        // Native dice can legitimately roll zero; options still require 1-based indices.
+        var zeroRoll=Document();
+        zeroRoll.Events.Add(new RecordedEvent{Kind=EventKind.Dice,Key="dice:zero",Integer=0});
+        using(var input=new MemoryStream(Archive.Encode(zeroRoll)))
+            Check(Archive.Decode(input).Events[1].Integer==0,"zero dice roll rejected");
+        bad=Document();bad.Events.Add(new RecordedEvent{Kind=EventKind.Dice,Key="dice:negative",Integer=-1});
+        Reject(()=>Archive.Encode(bad),"negative dice roll accepted");
+        bad=Document();bad.Events.Add(new RecordedEvent{Kind=EventKind.Choice,Key="choice:zero",Integer=0});
+        Reject(()=>Archive.Encode(bad),"zero choice index accepted");
         bad=Document();bad.Scene="Combat";Reject(()=>Archive.Encode(bad),"wrong scene accepted");
         bad=Document();bad.Baseline=new string('x',4000001);Reject(()=>Archive.Encode(bad),"oversized field accepted");
 
@@ -100,6 +109,11 @@ internal static class Contracts
         Reject(()=>gate.NotifyMutation("edit"),"editing during recovery allowed");
         Reject(()=>gate.Advance(RecoveryPhase.Idle),"verification bypass allowed");
         gate.Advance(RecoveryPhase.Loading);gate.Advance(RecoveryPhase.Replaying);
+        var peek=cursor.Peek();
+        Check(peek!=null && peek.Kind==EventKind.Choice && peek.Key=="choice:1" &&
+            cursor.Position==0,"lookahead consumed or skipped an event");
+        peek.Integer=99;
+        Check(cursor.Peek().Integer==2,"lookahead exposed mutable replay state");
         Check(cursor.Consume(EventKind.Choice,"choice:1").Integer==2,"mutable replay input");
         cursor.Verify("choice:2","state-2");Check(gate.CanInteract,"successful verification stayed locked");
         cursor.Prepare(Document(),"test-client",RecoveryKind.Story);
@@ -191,6 +205,8 @@ internal static class Contracts
         try
         {
             var store=new ArchiveStore(folder);store.Save(1,Document());
+            Check(store.Load(1).ExpectedState=="state-2","first checkpoint primary not readable");
+            Check(!File.Exists(store.PathFor(1)+".bak"),"first checkpoint unexpectedly created backup");
             var next=Document();next.ExpectedState="new";store.Save(1,next);
             Check(store.Load(1).ExpectedState=="new","primary not updated");
             Check(store.Load(1,true).ExpectedState=="state-2","backup lost");

@@ -46,6 +46,7 @@ namespace MortalHelper.Game
         private bool recoveryOpen;
         private bool editOpen = true;
         private bool confirmResetSlots, confirmClearComments;
+        private bool confirmRestoreMain, confirmRestoreBackup;
         private readonly Dictionary<string, string> relationshipEdits = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> statEdits = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> itemEdits = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -610,21 +611,47 @@ namespace MortalHelper.Game
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
             recoverySlot = Mathf.Clamp(recoverySlot, 1, 9);
-            if (GUILayout.Button("减少", style.SubtleStyle, GUILayout.Width(56f * scale))) recoverySlot--;
+            if (GUILayout.Button("减少", style.SubtleStyle, GUILayout.Width(56f * scale)))
+            {
+                recoverySlot = Mathf.Max(1, recoverySlot - 1);
+                confirmRestoreMain = confirmRestoreBackup = false;
+            }
             GUILayout.Label("槽位 " + recoverySlot, style.Entry, GUILayout.Width(64f * scale));
-            if (GUILayout.Button("增加", style.SubtleStyle, GUILayout.Width(56f * scale))) recoverySlot++;
+            if (GUILayout.Button("增加", style.SubtleStyle, GUILayout.Width(56f * scale)))
+            {
+                recoverySlot = Mathf.Min(9, recoverySlot + 1);
+                confirmRestoreMain = confirmRestoreBackup = false;
+            }
+            GUILayout.EndHorizontal();
             string blocker = StoryReplay.Blocker(recoverySlot);
+            string backupBlocker = StoryReplay.Blocker(recoverySlot, true);
             bool canRestore = GUI.enabled;
+            GUILayout.BeginHorizontal();
             GUI.enabled = canRestore && blocker.Length == 0;
-            if (GUILayout.Button("恢复检查点", style.ButtonStyle, GUILayout.ExpandWidth(true)))
-                StoryReplay.Start(recoverySlot);
+            if (GUILayout.Button(confirmRestoreMain ? "确认恢复主检查点？" : "恢复检查点",
+                style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                bool armed = confirmRestoreMain;
+                confirmRestoreMain = false; confirmRestoreBackup = false;
+                if (armed) { int slot = recoverySlot; Defer(() => StoryReplay.Start(slot)); }
+                else confirmRestoreMain = true;
+            }
+            GUI.enabled = canRestore && backupBlocker.Length == 0;
+            if (GUILayout.Button(confirmRestoreBackup ? "确认恢复历史备份？" : "恢复历史备份",
+                style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                bool armed = confirmRestoreBackup;
+                confirmRestoreMain = false; confirmRestoreBackup = false;
+                if (armed) { int slot = recoverySlot; Defer(() => StoryReplay.Start(slot, true)); }
+                else confirmRestoreBackup = true;
+            }
             GUI.enabled = canRestore;
             GUILayout.EndHorizontal();
             if (blocker.Length > 0) Note("现在不能恢复：" + blocker);
             if (!string.IsNullOrEmpty(StoryRecovery.Status)) Note(StoryRecovery.Status);
             if (!string.IsNullOrEmpty(StoryReplay.Status)) Note(StoryReplay.Status);
             if (StoryReplay.Active) Note("重放中：第 " + StoryReplay.Position + " 个事件");
-            Note("恢复会先载入该检查点的基线存档，再自动重掷/点选项；请先另存当前进度。");
+            Note("恢复需要二次确认，将覆盖当前未存档进度；历史备份是上一份检查点，不是原生存档。");
         }
 
         private void Recall()

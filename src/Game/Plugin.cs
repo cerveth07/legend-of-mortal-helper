@@ -114,7 +114,8 @@ namespace MortalHelper.Game
             DiceAdapter.Close(); HintAdapter.Clear(); Panel?.ClearSelection();
             // A replay must never survive a scene change: the follow-up script would
             // keep receiving injections meant for the previous one.
-            StoryReplay.Stop("场景已切换，重放已中止。");
+            if (!StoryReplay.IsExpectedBaselineSceneChange(next.name) && StoryReplay.Active)
+                StoryReplay.Stop("场景已切换，重放已中止。");
         }
         private void OnDestroy()
         {

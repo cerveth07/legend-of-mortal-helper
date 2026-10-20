@@ -18,6 +18,7 @@ namespace MortalHelper.Game
         private static DiceWidget widget;
         private static int? queuedOption;
         private static bool nativeInvocation;
+        private static bool replaySubmitting;
         // The dice controls live in the game UI: the widget is always shown while a
         // wheel is open and clicking an option always picks it. No modes to switch.
         internal static bool Enabled => Plugin.Active;
@@ -31,7 +32,8 @@ namespace MortalHelper.Game
             Close();
             Dialog = dialog;
             Session.Open();
-            if (StoryReplay.Active) StoryReplay.TakeDice();
+            // StoryReplay observes ready dialogs from Update; OnEnable may occur
+            // before the game has assigned the script and opened all controls.
         }
 
         internal static void Close()
@@ -65,15 +67,26 @@ namespace MortalHelper.Game
             InjectReplayPoint();
         }
 
-        // During playback the recorded roll is committed and the native start is
-        // pressed by the game itself, exactly like a normal submit.
+        // A pending roll must remain pending until CheckPointManager.Dice actually
+        // returns the requested raw value. PressStartButton may be rejected by
+        // another prefix or defer its result; a button call alone is not success.
         private static void InjectReplayPoint()
         {
             if (!StoryReplay.Active || !StoryReplay.PendingDice.HasValue || !Ready) return;
             ReplayPoint = StoryReplay.PendingDice.Value;
-            try { Dialog.PressStartButton(); }
-            catch (System.Exception error) { Plugin.Instance.Report(error); }
-            finally { ReplayPoint = null; StoryReplay.AfterDice(); }
+            replaySubmitting = true;
+            try
+            {
+                Dialog.PressStartButton();
+                if (Session.Phase == RollPhase.Input)
+                    StoryReplay.Stop("原生骰子提交未被接受，重放已中止。");
+            }
+            catch (System.Exception error)
+            {
+                StoryReplay.Stop("骰子注入失败：" + error.Message);
+                Plugin.Instance.Report(error);
+            }
+            finally { replaySubmitting = false; ReplayPoint = null; }
         }
 
         private static void BindChoices()
@@ -127,7 +140,8 @@ namespace MortalHelper.Game
         internal static bool Commit()
         {
             if (!Enabled || Dialog == null) return true;
-            if (!Ready || (!nativeInvocation && (GameAccess.Typing || Plugin.Instance.Panel.Visible))) return false;
+            if (!Ready || (!nativeInvocation && !replaySubmitting &&
+                (GameAccess.Typing || Plugin.Instance.Panel.Visible))) return false;
             string error;
             string pointValue = ReplayPoint.HasValue ? ReplayPoint.Value.ToString() : Plugin.Instance.Options.Point.Value;
             bool ok = Session.Commit(Session.Generation, pointValue,
@@ -163,6 +177,11 @@ namespace MortalHelper.Game
                 result.Result = Session.RequestedOption.Value;
             // Replay injects the raw roll, so the tape must store Random, not the
             // bonus-adjusted Result.
+            if (StoryReplay.PendingDice.HasValue)
+            {
+                if (result == null) StoryReplay.Stop("未收到有效的原生骰子结果。");
+                else StoryReplay.ConfirmDice(result.Random);
+            }
             if (result != null) StoryRecovery.NoteDice(result.Random);
             Session.Resolved();
         }
