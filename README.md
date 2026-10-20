@@ -39,7 +39,7 @@
 
 | 功能 | 用法 | 默认 | 限制 |
 |---|---|---|---|
-| **天命控制（控骰）** | 三态：`自然掷骰` / `指定点数` / `直接选项`。指定点数模式下可编辑「基础点数」（默认 50），点原生启动即用该点数；直接选项模式下在判定页点目标选项即可。 | 自然掷骰 | 点数按每次判定的 `diceMin`～`diceMax` 校验，越界不扣命运点；重掷仍走原生命运点；动画期间禁止重复提交；判定页始终提供重掷/范围阶段，所以零命运也能直接点选项 |
+| **天命控制（控骰）** | 判定页轮盘下方常驻点数输入框：留空即自然掷骰，填数字则本次判定用该点数；**直接点击选项即选择**（走原生选中特效）。面板里不再有模式开关。 | 留空（自然） | 点数按本次判定的 `diceMin`～`diceMax` 校验，越界不扣命运点；重掷仍走原生命运点；动画期间禁止重复提交；判定页始终提供重掷/范围阶段，所以零命运也能直接点选项 |
 | **选项提示（含剧透）** | 收起面板后悬停选项，分三段：`选择条件`（游戏原生条件文本）、`选择效果（已确认部分）`（脚本里能确定的直接调用）、`取决于判定的后果`（分支点 `checkpointmanager.Switch`、后续剧情 `luamanager.SetNextScript` / `statmodifymanager.AddStory`）。总开关与两个子项独立。 | 全关 | 受限词法解析：遇到未知调用、条件分支、非字面量参数即停止分析；注释掉的调用不计入；每段最多 6 条，不猜 |
 | **分支记录** | 打开「显示已走分支标记」后，选项右上角显示 `〔已走〕` 或 `〔未记录〕`，点击时记录。面板底部列出最近记录，可「清空记录」。 | 关 | 记录键为「脚本名 + 选项文本」，存配置目录 `cerveth.mortal.helper.choices.txt`，**不写入存档** |
 | **精确恢复（实验）** | 记录侧：开始记录 → 游玩（记录原始骰子点数与选项点击）→ 保存检查点，写到配置目录 `mhr\slot-00N.mhr`。播放侧：恢复检查点 → `RecoveryController` 预检 → 载入基线（`ExecuteLoadGameData` + `SaveUniverseData` + `UpdateCheckMissions` + `LoadCurrentScene`）→ 按记录注入 → 事件全部消费后比对状态摘要。 | 关 | **播放链路实机未验证**；恢复会覆盖当前内存进度（未存进度会丢），使用前请先正常存档；事件 key 不一致、场景切换或 120 秒没有匹配交互都会立即中止并说明原因；旧版（自增序号 key）检查点不兼容 |
@@ -168,8 +168,8 @@ LegendOfMortal/
 | 分组 | 主要键 | 默认 | 说明 |
 |---|---|---|---|
 | General | `Enabled` / `PanelKey` | true / Tab | 总开关、展开快捷键 |
-| Story | `Mode` / `BasePoint` | 0 / 50 | 0 自然、1 指定点数、2 直接选项 |
-| Story | `EffectHints` / `ShowEffects` / `ShowConditions` | false | 选项提示总开关与两个子项 |
+| Story | `Point` | 空 | 判定页输入框的默认点数；留空表示自然掷骰 |
+| Story | `Hints` / `ShowEffects` / `ShowConditions` | false | 选项提示总开关与两个子项 |
 | Story | `ShowBranches` / `DiagnoseScript` / `CheckpointLog` | false | 分支标记、脚本诊断、检查点提醒 |
 | Duel | `KeepHealth` / `KeepStamina` / `MaximumDodge` / `AlwaysHit` / `FirstStrike` / `ZeroDamage` / `LethalDamage` | false | 单挑辅助（`LethalDamage` 自动含命中与先手；`ZeroDamage` 与它互斥） |
 | GroupBattle | `KeepHealth` / `FullMana` / `InstantCooldown` / `FreezeTime` / `DownOnHit` | false | 群战辅助 |
@@ -177,7 +177,7 @@ LegendOfMortal/
 | Edits | `PracticeLimit` / `GameSpeed` | false / 1 | 修炼上限、游戏速度 |
 | Window | `X` `Y` `Width` `Height` `Opacity` `BadgeX` `BadgeY` | 自动保存 / 0.85 | 面板几何与透明度（0.40～1.00） |
 | Save | `SlotCount` / `SortRecent` | 0 / false | 存档格数（0 = 游戏默认）、排序开关 |
-| Diagnostics | `SelfTest` | false | 无头功能探测：载入槽位 3 后跑 API 检查并自动推进剧情；不移动鼠标、不抢焦点 |
+| Diagnostics | `SelfTest` / `AutoTour` / `PreviewEditable` | false | 无头功能探测、自动切视图截图（`BepInEx/config/mh/`）、按可编辑宽度只读渲染三张编辑表 |
 
 本插件写入的数据文件都在配置目录，**不写入存档目录**：`cerveth.mortal.helper.choices.txt`（分支记录）、`cerveth.mortal.helper.slots.txt`（存档备注）、`mhr\slot-00N.mhr`（检查点记录，固定字段格式，含基线 JSON 与事件，普通 SHA-256 仅用于检测损坏）。
 
