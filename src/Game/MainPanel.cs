@@ -429,14 +429,15 @@ namespace MortalHelper.Game
                 Color before = GUI.color;
                 GUI.color = StatusLooksBad(plugin.Status) ? new Color(1f, .80f, .74f) : new Color(.98f, .90f, .70f);
                 GUILayout.Label("上次操作：" + plugin.Status, style.Description);
-                GUILayout.Label("上次操作：" + plugin.Status, style.Description);
                 GUILayout.EndVertical();
                 GUILayout.Space(7f * s);
             }
             if (!features) GUILayout.Label("万象录辅助功能已暂停；已接入的功能不生效。", style.Description);
             if (page != lastPage) { scroll[page] = Vector2.zero; lastPage = page; }
-            scroll[page] = GUILayout.BeginScrollView(scroll[page], GUIStyle.none, GUI.skin.verticalScrollbar,
-                GUILayout.ExpandHeight(true));
+            // Only show the scrollbar when the page actually overflows; the always-on
+            // track drew a gold hairline down the right edge of every page.
+            scroll[page] = GUILayout.BeginScrollView(scroll[page], false, false, GUIStyle.none,
+                GUI.skin.verticalScrollbar, GUILayout.ExpandHeight(true));
             if (features || page == 4)
             {
                 switch (page)
@@ -825,8 +826,8 @@ namespace MortalHelper.Game
                 string buffer;
                 if (!statEdits.TryGetValue(key, out buffer)) { buffer = stat.Value.ToString(); statEdits[key] = buffer; }
                 GUILayout.BeginHorizontal();
-                GUILayout.Label(name + "  <color=#B7AE98>" + stat.Value + "</color>", style.Entry,
-                    GUILayout.ExpandWidth(true));
+                GUILayout.Label(Fit(name, style.Entry, Col(.40f) - 34f * scale) +
+                    "  <color=#B7AE98>" + stat.Value + "</color>", style.Entry, GUILayout.Width(Col(.40f)));
                 GUILayout.Label(stat.Min + "～" + stat.Max, style.Tight, GUILayout.Width(Col(.24f)));
                 if (!editable)
                 {
@@ -889,7 +890,7 @@ namespace MortalHelper.Game
                 string buffer;
                 if (!itemEdits.TryGetValue(key, out buffer)) { buffer = item.CurrentCount.ToString(); itemEdits[key] = buffer; }
                 GUILayout.BeginHorizontal();
-                GUILayout.Label(name, style.Entry, GUILayout.ExpandWidth(true));
+                GUILayout.Label(Fit(name, style.Entry, Col(.44f)), style.Entry, GUILayout.Width(Col(.44f)));
                 GUILayout.Label("×" + item.CurrentCount, style.Tight, GUILayout.Width(Col(.16f)));
                 buffer = GUILayout.TextField(buffer, 7, GUILayout.Width(Col(.20f)), GUILayout.Height(RowH));
                 itemEdits[key] = buffer;
@@ -1301,7 +1302,25 @@ namespace MortalHelper.Game
         {
             var pad = style.Skin != null ? style.Skin.window.padding.horizontal : 32f;
             float bar = style.Skin != null ? style.Skin.verticalScrollbar.fixedWidth : 7f;
-            return Mathf.Max(60f, shownRect.width - pad - bar - 10f);
+            // A very wide window used to stretch switches away from their labels and
+            // spread the page tabs across the whole title bar. Cap the layout width and
+            // let the extra space stay as margin instead.
+            float cap = Mathf.Round(720f * Mathf.Max(1f, scale));
+            return Mathf.Max(60f, Mathf.Min(shownRect.width - pad - bar - 10f, cap));
+        }
+
+        // Single-line names are clipped by IMGUI with no marker; truncate with an
+        // ellipsis so a long item or stat name does not look like it was cut by bug.
+        private string Fit(string text, GUIStyle style, float width)
+        {
+            if (string.IsNullOrEmpty(text) || style == null || width <= 12f) return text;
+            if (style.CalcSize(new GUIContent(text)).x <= width - 2f) return text;
+            for (int length = text.Length - 1; length > 0; length--)
+            {
+                string candidate = text.Substring(0, length) + "…";
+                if (style.CalcSize(new GUIContent(candidate)).x <= width - 2f) return candidate;
+            }
+            return "…";
         }
 
         private static string DisplayName(GameStat stat)

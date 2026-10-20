@@ -24,7 +24,10 @@ namespace MortalHelper.Game
             Instance = this;
             Options = new Settings(Config);
             // Self test needs Update to keep running while the window is unfocused.
-            if (Options.SelfTest.Value) Application.runInBackground = true;
+            // Diagnostics (probe, layout tour, editable preview) need Update and OnGUI
+            // to keep running while the window is unfocused; normal play does not.
+            if (Options.SelfTest.Value || Options.AutoTour.Value || Options.PreviewEditable.Value)
+                Application.runInBackground = true;
             Panel = new MainPanel(this);
             try
             {
