@@ -1196,12 +1196,22 @@ namespace MortalHelper.Game
         private void Section(string title)
         {
             GUILayout.Space(24f * scale);
-            GUILayout.BeginHorizontal(GUILayout.Height(RowH));
-            var bar = GUILayoutUtility.GetRect(2f * scale, 18f * scale, GUILayout.Width(2f * scale), GUILayout.Height(18f * scale));
-            GUI.DrawTexture(bar, style.Accent);
-            GUILayout.Space(8f * scale);
-            GUILayout.Label(title, style.SectionTitle);
-            GUILayout.EndHorizontal();
+            // The accent bar and the title used to be laid out independently, so the
+            // bar sat on the row top while the glyph block sat lower. Reserve one row
+            // from the measured text height and centre both inside it.
+            float width = Mathf.Max(60f, ContentWidth());
+            float textHeight = style.SectionTitle.CalcHeight(new GUIContent(title), width);
+            float rowHeight = Mathf.Max(RowH, Mathf.Ceil(textHeight));
+            Rect row = GUILayoutUtility.GetRect(1f, rowHeight, GUILayout.ExpandWidth(true), GUILayout.Height(rowHeight));
+            float barWidth = Mathf.Max(2f, Mathf.Round(2f * scale));
+            // Measured at scale 1: the glyph ink is 16px tall and sits 3px below the
+            // line-box centre, so a bar matched to the line box reads as too high and
+            // too long next to the title.
+            float barHeight = Mathf.Clamp(textHeight - 4f * scale, 10f * scale, 18f * scale);
+            float barY = row.y + Mathf.Round((rowHeight - barHeight) * .5f) + Mathf.Round(3f * scale);
+            GUI.DrawTexture(new Rect(row.x, barY, barWidth, barHeight), style.Accent);
+            float textX = row.x + barWidth + Mathf.Round(8f * scale);
+            GUI.Label(new Rect(textX, row.y, Mathf.Max(10f, row.xMax - textX), rowHeight), title, style.SectionTitle);
             GUILayout.Space(2f * scale);
             Rule();
             GUILayout.Space(12f * scale);

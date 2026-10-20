@@ -58,7 +58,7 @@ namespace MortalHelper.Game
             BadgeFont = CreateBadgeFont();
             Title = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Normal, alignment = TextAnchor.MiddleCenter };
             Header = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, wordWrap = true };
-            SectionTitle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Normal };
+            SectionTitle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Normal, alignment = TextAnchor.MiddleLeft };
             Tab = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, clipping = TextClipping.Clip };
             TabHover = new GUIStyle(Tab);
             TabHit = new GUIStyle(GUIStyle.none);
