@@ -249,6 +249,19 @@ namespace MortalHelper.Game
                 style.Skin != null) return;
             scale = next; lastWidth = Screen.width; lastHeight = Screen.height;
             style.Refresh(scale, style.UiFont);
+            if (plugin.Options.AutoTour.Value)
+            {
+                foreach (var pair in new[] { new KeyValuePair<string, GUIStyle>("description", style.Description),
+                    new KeyValuePair<string, GUIStyle>("entry", style.Entry),
+                    new KeyValuePair<string, GUIStyle>("label", style.Skin.label) })
+                {
+                    var st = pair.Value;
+                    plugin.Log("[TextMetrics] " + pair.Key + " size=" + st.fontSize + " line=" + st.lineHeight
+                        + " fixed=" + st.fixedHeight + " offset=" + st.contentOffset + " padding=" + st.padding
+                        + " measured=" + st.CalcHeight(new GUIContent("收起面板后悬停选项生效；关闭总开关不会清掉下面两项的选择。"), ContentWidth())
+                        + " clipping=" + st.clipping + " align=" + st.alignment);
+                }
+            }
             style.SetOpacity(opacity);
         }
 

@@ -197,7 +197,15 @@ namespace MortalHelper.Game
                 Skin.textField, Skin.horizontalSlider })
                 control.margin = new RectOffset(0, 0, control.margin.top, control.margin.bottom);
             foreach (var label in new[] { Entry, Tight, Description, FooterLabel, FooterValue, Tab, TabHover, Skin.label })
-                label.padding = new RectOffset(0, 0, 0, 0);
+            {
+                // Unity CalcHeight can return fontSize for a single line even when
+                // the dynamic CJK font's actual lineHeight is larger. Reserve the
+                // extra ink space and let glyphs paint into that padding: Clip would
+                // subtract it again and still cut the last line's lower strokes.
+                int descentSpace = Mathf.CeilToInt(Mathf.Max(0f, label.lineHeight - label.fontSize));
+                label.padding = new RectOffset(0, 0, 0, descentSpace);
+                label.clipping = TextClipping.Overflow;
+            }
             Tight.wordWrap = true;
         }
 
