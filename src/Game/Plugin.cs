@@ -124,6 +124,7 @@ namespace MortalHelper.Game
         }
         private void OnDestroy()
         {
+            if (tourStarted) FinishTour();
             SceneManager.activeSceneChanged -= SceneChanged;
             DiceAdapter.Close(); HintAdapter.Clear();
             if (Options.Speed.Value != 1f) Time.timeScale = 1f;
@@ -131,70 +132,172 @@ namespace MortalHelper.Game
             Instance = null;
         }
 
-        // Diagnostic self-tour: drives the panel through every page and writes a
-        // screenshot per page, so layout can be checked without touching the mouse.
+        // Read-only layout tour. Scroll changes run in Update, never during IMGUI.
         private float tourNext;
         private int tourPage;
         private int tourStage;
+        private int tourOffset;
+        private int tourShot;
+        private float tourMaximum;
         private bool tourStarted;
         private bool tourLogged;
+        private bool tourPreviewBefore;
+        private Action restoreTourPanel;
+        private string tourDirectory;
+
         private void Tour()
+        {
+            try { TourStep(); }
+            catch (Exception error)
+            {
+                Logger.LogError("[Tour] aborted: " + error);
+                FinishTour();
+            }
+        }
+
+        private void TourStep()
         {
             if (!Options.AutoTour.Value)
             {
+                if (tourStarted) FinishTour();
                 if (!tourLogged) { tourLogged = true; Logger.LogInfo("[Tour] disabled"); }
                 return;
             }
-            if (tourPage == 0 && !tourStarted)
+            if (!tourStarted)
             {
+                tourPage = tourStage = tourOffset = tourShot = 0;
+                tourPreviewBefore = Options.PreviewEditable.Value;
+                restoreTourPanel = Panel.CaptureTourState();
                 tourStarted = true;
-                Options.PreviewEditable.Value = true;
+                tourDirectory = Path.Combine(Paths.ConfigPath, "mh", "tour-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+                Directory.CreateDirectory(tourDirectory);
+                // Preview is transient diagnostic state, including on disk.
+                bool autoSave = Config.SaveOnConfigSet;
+                Config.SaveOnConfigSet = false;
+                try { Options.PreviewEditable.Value = true; }
+                finally { Config.SaveOnConfigSet = autoSave; }
                 Panel.Visible = true;
-                tourNext = Time.unscaledTime + 1.6f;
-                Logger.LogInfo("[Tour] start");
+                tourNext = Time.unscaledTime + .5f;
+                Logger.LogInfo("[Tour] start; read-only views, 300px scroll steps; numeric categories sample 0..2400/middle/end, not every item; " + tourDirectory);
                 return;
             }
             if (Time.unscaledTime < tourNext) return;
-            string dir = System.IO.Path.Combine(Paths.ConfigPath, "mh");
-            if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+            if (tourPage >= TourViews.Length) { FinishTour(); return; }
+            string view = TourViews[tourPage];
+            bool numeric = view.StartsWith("numeric-", StringComparison.Ordinal);
             if (tourStage == 0)
             {
-                if (tourPage >= TourViews.Length)
-                {
-                    if (!Options.AutoTour.Value) return;
-                    Options.AutoTour.Value = false;
-                    Options.PreviewEditable.Value = false;
-                    Config.Save();
-                    Logger.LogInfo("[Tour] finished");
-                    return;
-                }
-                ApplyTourView(TourViews[tourPage]);
-                Logger.LogInfo("[Tour] " + TourViews[tourPage] + " " + Panel.Geo());
+                ApplyTourView(view);
+                tourOffset = 0;
                 tourStage = 1;
-                tourNext = Time.unscaledTime + 1.5f;
-                return;
             }
-            string file = System.IO.Path.Combine(dir, "tour-" + tourPage + "-" + TourViews[tourPage] + ".png");
+            else if (tourStage == 1)
+            {
+                CaptureTour(view, "y" + tourOffset);
+                tourStage = 5;
+            }
+            else if (tourStage == 5)
+            {
+                float actual = Panel.TourScrollY;
+                bool end = view == "badge" || (tourOffset > 0 && actual < tourOffset - 1f);
+                if (end) NextTourView();
+                else if (numeric && tourOffset >= 2400)
+                {
+                    // Measure the real clamped end before choosing the middle sample.
+                    Panel.ScrollToEnd(Panel.Page);
+                    tourStage = 2;
+                }
+                else if (!numeric && tourOffset >= 3300)
+                {
+                    Logger.LogInfo("[Tour] long view sample limit; intermediate content after y3300 not exhausted: " + view);
+                    Panel.ScrollToEnd(Panel.Page);
+                    tourStage = 4;
+                }
+                else
+                {
+                    tourOffset += 300;
+                    Panel.SetTourPosition(tourOffset);
+                    tourStage = 1;
+                }
+            }
+            else if (tourStage == 2)
+            {
+                tourMaximum = Panel.TourScrollY;
+                Panel.SetTourPosition(Mathf.RoundToInt((2400f + tourMaximum) * .5f));
+                tourStage = 3;
+            }
+            else if (tourStage == 3)
+            {
+                CaptureTour(view, "middle");
+                tourStage = 6;
+            }
+            else if (tourStage == 6)
+            {
+                Panel.ScrollToEnd(Panel.Page);
+                tourStage = 4;
+            }
+            else
+            {
+                CaptureTour(view, "end");
+                NextTourView();
+            }
+            // Each screenshot has at least .5s to finish before the next UI change;
+            // every changed scroll/view likewise settles for .5s before capture.
+            tourNext = Time.unscaledTime + .5f;
+        }
+
+        private void CaptureTour(string view, string position)
+        {
+            string file = Path.Combine(tourDirectory, "tour-" + tourShot.ToString("D3") + "-" + view + "-" + position + ".png");
+            string detail = "shot=" + tourShot + " view=" + view + " position=" + position
+                + " actualScroll=" + Panel.TourScrollY.ToString("0.0")
+                + " readOnlyLayoutPreview=true recoveryFunctionVerified=false " + Panel.Geo()
+                + " screen=" + Screen.width + "x" + Screen.height + " file=" + file;
             ScreenCapture.CaptureScreenshot(file);
-            Logger.LogInfo("[Tour] shot " + file);
-            tourPage++;
-            tourStage = 0;
-            tourNext = Time.unscaledTime + 1.5f;
+            File.AppendAllText(Path.Combine(tourDirectory, "manifest.txt"), detail + Environment.NewLine);
+            Logger.LogInfo("[Tour] " + detail);
+            tourShot++;
+        }
+
+        private void NextTourView() { tourPage++; tourStage = 0; }
+
+        private void FinishTour()
+        {
+            bool hadStarted = tourStarted;
+            tourStarted = false;
+            tourLogged = true;
+            bool autoSave = Config.SaveOnConfigSet;
+            Config.SaveOnConfigSet = false;
+            try
+            {
+                Options.AutoTour.Value = false;
+                if (hadStarted) Options.PreviewEditable.Value = tourPreviewBefore;
+                restoreTourPanel?.Invoke();
+            }
+            catch (Exception error) { Logger.LogError("[Tour] cleanup failed: " + error); }
+            finally { restoreTourPanel = null; Config.SaveOnConfigSet = autoSave; }
+            try { Config.Save(); }
+            catch (Exception error) { Logger.LogError("[Tour] could not save restored settings: " + error); }
+            Logger.LogInfo("[Tour] finished; " + tourShot + " screenshots; " + tourDirectory);
         }
 
         private static readonly string[] TourViews =
         {
-            "story", "story-recall", "battle-duel", "battle-group",
-            "growth", "growth-relation", "numeric-top", "numeric-bottom", "save", "badge"
+            "story", "story-recovery", "story-recall", "battle-duel", "battle-group",
+            "growth", "growth-relation", "numeric-books", "numeric-miscs",
+            "numeric-special", "numeric-consumables", "save", "badge"
         };
 
         private void ApplyTourView(string view)
         {
             Panel.Visible = true;
+            Panel.RecoveryOpen = false;
             switch (view)
             {
                 case "story":
-                    Panel.SetView(0, 0, 0); Panel.Page = 0; Panel.RecoveryOpen = false; break;
+                case "story-recovery":
+                    Panel.SetView(0, 0, 0); Panel.Page = 0;
+                    Panel.RecoveryOpen = view == "story-recovery"; break;
                 case "story-recall":
                     Panel.SetView(1, 0, 0); Panel.Page = 0; break;
                 case "battle-duel":
@@ -205,15 +308,19 @@ namespace MortalHelper.Game
                     Panel.SetView(0, 0, 0); Panel.Page = 2; break;
                 case "growth-relation":
                     Panel.SetView(0, 0, 1); Panel.Page = 2; break;
-                case "numeric-top":
-                    Panel.Page = 3; break;
-                case "numeric-bottom":
-                    Panel.Page = 3; Panel.ScrollToEnd(3); break;
+                case "numeric-books":
+                case "numeric-miscs":
+                case "numeric-special":
+                case "numeric-consumables":
+                    Panel.Page = 3;
+                    int category = view == "numeric-books" ? 0 : view == "numeric-miscs" ? 1 : view == "numeric-special" ? 2 : 3;
+                    Panel.SetTourPosition(0, category); break;
                 case "save":
                     Panel.Page = 4; break;
                 case "badge":
                     Panel.Visible = false; break;
             }
+            Panel.SetTourPosition(0);
         }
 
         internal void Report(Exception error) { Status = error.Message; Logger.LogError(error); }

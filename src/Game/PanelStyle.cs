@@ -155,9 +155,10 @@ namespace MortalHelper.Game
             Skin.verticalScrollbarThumb.hover.background = Accent;
             Skin.verticalScrollbarThumb.fixedWidth = 7f * Scale;
             Skin.verticalScrollbar.fixedWidth = 8f * Scale;
+            Skin.verticalScrollbar.margin = new RectOffset(Mathf.RoundToInt(4f * Scale), 0, 0, 0);
 
             Segment.font = UiFont; Segment.fontSize = Mathf.Max(12, size - 2);
-            Segment.padding = new RectOffset(8, 8, 3, 3); Segment.margin = new RectOffset(2, 2, 0, 0);
+            Segment.padding = new RectOffset(8, 8, 3, 3); Segment.margin = new RectOffset(0, 0, 0, 0);
             Segment.normal.background = SegOff; Segment.hover.background = Hover;
             Segment.active.background = AccentSoft; Segment.focused.background = Hover;
             Segment.onNormal.background = AccentSoft; Segment.onHover.background = AccentSoft;
@@ -187,6 +188,17 @@ namespace MortalHelper.Game
             SwitchTrack.normal.background = SwitchOff; SwitchTrack.hover.background = SwitchOff; SwitchTrack.active.background = SwitchOff;
             SwitchTrack.onNormal.background = SwitchOn; SwitchTrack.onHover.background = SwitchOn; SwitchTrack.onActive.background = SwitchOn;
             SwitchTrack.border = new RectOffset(0, 0, 0, 0); SwitchTrack.padding = new RectOffset(0, 0, 0, 0);
+
+            // Rows reserve their own column widths and spacing. Inherited skin
+            // margins must not silently add width beyond those reservations.
+            foreach (var control in new[] { Entry, Tight, Description, FooterLabel, FooterValue, Tab, TabHover,
+                ButtonStyle, SubtleStyle, DangerStyle, Notice, Segment, SwitchTrack,
+                SwitchState, SwitchOnLabel, SwitchOffLabel, Skin.label, Skin.button,
+                Skin.textField, Skin.horizontalSlider })
+                control.margin = new RectOffset(0, 0, control.margin.top, control.margin.bottom);
+            foreach (var label in new[] { Entry, Tight, Description, FooterLabel, FooterValue, Tab, TabHover, Skin.label })
+                label.padding = new RectOffset(0, 0, 0, 0);
+            Tight.wordWrap = true;
         }
 
         internal void SetOpacity(float value)
