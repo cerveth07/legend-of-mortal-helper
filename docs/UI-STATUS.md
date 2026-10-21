@@ -22,7 +22,7 @@
 
 新验收同时检查：原尺寸/最近邻放大后的字形上下笔画、字体行高与预留空间、各行是否侵入相邻控件、右侧是否出界。不能只凭整句能辨认就判定没有裁切。
 
-## 最新实拍证据
+## 前轮字形修复实拍证据
 
 Windows汇总根目录：`D:\DSH WORKAREA\_tmp\ui-audit-20261021`
 
@@ -40,10 +40,46 @@ DLL SHA-256：`86c15b6514cd74447fa2b87639c7ba2efd831970dd1cb11fe22fd35ab5a7b079`
 
 同句原图裁剪的3倍最近邻对照：`glyph-comparison/before-after-3x.png`，上旧下新，无补画或图像生成。
 
-## 巡视范围
+## 前轮巡视范围
 
 13个视图：剧情、恢复展开、回想、单挑、群战、养成、人际、数值四类物品、存档与徽章。普通长页每300像素滚动至末尾；异常长页3300后补末尾。数值页0..2400连续拍，再拍后段中点与末尾，未逐行穷尽全部物品。
 
 AutoTour禁用交互；每次切换和异步截图后均等待至少0.5秒。每个独立时间目录包含manifest.txt，逐图记录视图、位置和几何。父目录保存日志、前台采样与配置备份。
 
 这是标题场景的布局预览，未读档、未调用编辑或恢复业务。此记录不代表真实存档写入、战斗或恢复功能验收；其他DPI、系统字体、分辨率仍不在本次实拍矩阵内。
+
+
+## 留白、滚动条、开关与区段跳转
+
+本轮在前述宽度预算与字形修复基础上调整布局，背景纹理、颜色与透明度不动，`PanelStyle.cs` 未修改。截图背后的游戏画面可能随时间变化，不表示插件背景样式发生变化。
+
+- **空消息不占位**：Status 为空时移除原占位；有消息时显示在滚动正文下方，不再把顶部正文向下推。消息在 Layout 阶段取得快照，供对应 Repaint 使用，避免同一轮中出现/消失导致控件拓扑不一致。
+- **区段与子页间距**：每页首个 Section 上方为 6px，后续 Section 为 24px；ViewTabs 后只保留共享的 6px，取消页面额外叠加的 8px。间距随界面 scale 缩放。
+- **短页隐藏滚动条**：正文仍使用固定 gutter 预算，避免宽度跳变；`alwaysShowVertical=false`，实际内容不足一页时不绘制滚动条。这是在保留统一宽度预算下调整显示行为。
+- **开关间距**：开关前后各保留 8px，从原行内预算重新分配，整行总宽度不增加。
+- **数值页固定导航**：顶部提供属性、物品、速度三个区段跳转按钮。区段坐标在 Repaint 缓存，点击通过 Defer 延后执行，避免在当前 IMGUI 绘制中切换滚动位置；正文滚动时导航仍留在顶部。
+- **重新展开的页签字号**：从收起徽章打开面板的过渡期间，不再根据过渡宽度修改共享 Tab 字号，避免临时窄宽度把后续页签字号持续压小。
+
+前轮对小字底部笔画、字体行高与留白的验证仍有效，但前轮截图不能证明上述新布局已验收。新批次须重新检查空/有消息、短/长页、开关间隔和三个实际区段跳转。
+
+## 本轮确认批与扩展巡视
+
+本轮确认批保存于同一汇总根目录：
+
+```text
+Windows:
+D:\DSH WORKAREA\_tmp\ui-audit-20261021\spacing-default-confirm\
+D:\DSH WORKAREA\_tmp\ui-audit-20261021\spacing-small-confirm\
+D:\DSH WORKAREA\_tmp\ui-audit-20261021\spacing-wide-confirm\
+
+WSL:
+/mnt/d/DSH WORKAREA/_tmp/ui-audit-20261021/spacing-default-confirm/
+/mnt/d/DSH WORKAREA/_tmp/ui-audit-20261021/spacing-small-confirm/
+/mnt/d/DSH WORKAREA/_tmp/ui-audit-20261021/spacing-wide-confirm/
+```
+
+各目录下使用独立 `tour-YYYYMMDD-HHMMSS/`，截图数量、实际几何和 DLL SHA-256 待本轮完成后补录，不预先宣称通过。
+
+AutoTour 现有 **18 个视图**：保留前轮 13 个，追加 `numeric-attributes-anchor`、`numeric-items-anchor`、`numeric-speed-anchor`、`story-notice` 和 `language`。三个 anchor 视图先等待布局，再复用实际区段跳转路径，各单拍一次；manifest 记录 anchor 名与实际 scroll。`story-notice` 使用明确标注的长消息布局样本，仅用于检查消息换行与正文下方的间距；manifest 只有该视图的 `statusPreviewFixture=true`。巡视启动保存原 Status，每个视图先恢复原值，结束或中止恢复，避免样本泄露到其他截图。
+
+其余滚动采样策略、后台无焦点/无输入、禁用交互、截图前后等待及本地保存规则不变。新增视图不调用属性写入、物品修改、记录或恢复业务；标题场景只读预览仍不等同实际读档场景或功能验收。游戏截图不提交仓库。

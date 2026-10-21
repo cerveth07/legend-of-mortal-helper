@@ -112,6 +112,7 @@ namespace MortalHelper.Game
     internal static class SaveSlotCommentText
     {
         private const string Marker = "〔备注〕";
+        private const string TraditionalMarker = "〔備註〕";
 
         internal static void Append(object panel)
         {
@@ -127,8 +128,11 @@ namespace MortalHelper.Game
                     if (text == null) continue;
                     string current = text.text ?? "";
                     int at = current.IndexOf(Marker, StringComparison.Ordinal);
+                    int traditionalAt = current.IndexOf(TraditionalMarker, StringComparison.Ordinal);
+                    if (at < 0 || (traditionalAt >= 0 && traditionalAt < at)) at = traditionalAt;
                     if (at >= 0) current = current.Substring(0, at);
-                    text.text = current.TrimEnd() + "\n" + Marker + comment;
+                    string marker = Plugin.Instance.Options.TraditionalChinese.Value ? TraditionalMarker : Marker;
+                    text.text = current.TrimEnd() + "\n" + marker + comment;
                 }
             }
             catch (Exception) { }

@@ -43,7 +43,7 @@ def run_tests(dotnet, compiler=None, base=None, framework=None):
         output = ROOT / 'artifacts'
         test_exe = output / 'ContractTests.exe'
         test_exe.unlink(missing_ok=True)
-        pure = sorted((ROOT / 'src' / 'Core').glob('*.cs')) + sorted((ROOT / 'src' / 'Recovery').glob('*.cs'))
+        pure = sorted((ROOT / 'src' / 'Core').glob('*.cs')) + sorted((ROOT / 'src' / 'Recovery').glob('*.cs')) + [ROOT / 'src' / 'Game' / 'UiLanguage.cs']
         run_compiler(dotnet, compiler, base + ['-target:exe', '-out:' + str(test_exe)] +
                      ['-r:' + str(framework / n) for n in ['mscorlib.dll', 'System.dll', 'System.Core.dll']] +
                      pure + [ROOT / 'tests' / 'Contracts.cs'], output / 'tests.rsp')

@@ -82,6 +82,7 @@ namespace MortalHelper.Game
                     if (StoryRecovery.Recording) StoryRecovery.Stop();
                     if (StoryReplay.Active) StoryReplay.Stop("实验恢复已停用；请通过原生读档解除保护锁。");
                 }
+                AnytimeStory.Tick(); AnytimeDuel.Tick();
                 DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick();
 #if !NO_PROBE
                 Probe.Tick();
@@ -117,6 +118,7 @@ namespace MortalHelper.Game
         private void SceneChanged(Scene previous, Scene next)
         {
             DiceAdapter.Close(); HintAdapter.Clear(); Panel?.ClearSelection();
+            if (next.name == "Title") { AnytimeStory.Reset(); AnytimeDuel.Reset(); }
             // A replay must never survive a scene change: the follow-up script would
             // keep receiving injections meant for the previous one.
             if (!StoryReplay.IsExpectedBaselineSceneChange(next.name) && StoryReplay.Active)
@@ -127,6 +129,7 @@ namespace MortalHelper.Game
             if (tourStarted) FinishTour();
             SceneManager.activeSceneChanged -= SceneChanged;
             DiceAdapter.Close(); HintAdapter.Clear();
+            AnytimeStory.Reset(); AnytimeDuel.Reset();
             if (Options.Speed.Value != 1f) Time.timeScale = 1f;
             Panel?.Dispose(); patches?.UnpatchSelf(); Config.Save();
             Instance = null;
@@ -142,6 +145,7 @@ namespace MortalHelper.Game
         private bool tourStarted;
         private bool tourLogged;
         private bool tourPreviewBefore;
+        private string tourStatusBefore;
         private Action restoreTourPanel;
         private string tourDirectory;
 
@@ -167,6 +171,7 @@ namespace MortalHelper.Game
             {
                 tourPage = tourStage = tourOffset = tourShot = 0;
                 tourPreviewBefore = Options.PreviewEditable.Value;
+                tourStatusBefore = Status;
                 restoreTourPanel = Panel.CaptureTourState();
                 tourStarted = true;
                 tourDirectory = Path.Combine(Paths.ConfigPath, "mh", "tour-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
@@ -185,11 +190,24 @@ namespace MortalHelper.Game
             if (tourPage >= TourViews.Length) { FinishTour(); return; }
             string view = TourViews[tourPage];
             bool numeric = view.StartsWith("numeric-", StringComparison.Ordinal);
+            bool anchor = view.EndsWith("-anchor", StringComparison.Ordinal);
             if (tourStage == 0)
             {
                 ApplyTourView(view);
                 tourOffset = 0;
-                tourStage = 1;
+                // Let this page finish a layout/repaint before using section coordinates.
+                tourStage = anchor ? 7 : 1;
+            }
+            else if (tourStage == 7)
+            {
+                int section = view == "numeric-attributes-anchor" ? 0 : view == "numeric-items-anchor" ? 1 : 2;
+                Panel.TourJumpToSection(section);
+                tourStage = 8;
+            }
+            else if (tourStage == 8)
+            {
+                CaptureTour(view, view.Substring("numeric-".Length));
+                tourStage = 5;
             }
             else if (tourStage == 1)
             {
@@ -199,7 +217,7 @@ namespace MortalHelper.Game
             else if (tourStage == 5)
             {
                 float actual = Panel.TourScrollY;
-                bool end = view == "badge" || (tourOffset > 0 && actual < tourOffset - 1f);
+                bool end = anchor || view == "badge" || (tourOffset > 0 && actual < tourOffset - 1f);
                 if (end) NextTourView();
                 else if (numeric && tourOffset >= 2400)
                 {
@@ -251,6 +269,7 @@ namespace MortalHelper.Game
             string file = Path.Combine(tourDirectory, "tour-" + tourShot.ToString("D3") + "-" + view + "-" + position + ".png");
             string detail = "shot=" + tourShot + " view=" + view + " position=" + position
                 + " actualScroll=" + Panel.TourScrollY.ToString("0.0")
+                + " statusPreviewFixture=" + (view == "story-notice" ? "true" : "false")
                 + " readOnlyLayoutPreview=true recoveryFunctionVerified=false " + Panel.Geo()
                 + " screen=" + Screen.width + "x" + Screen.height + " file=" + file;
             ScreenCapture.CaptureScreenshot(file);
@@ -271,7 +290,11 @@ namespace MortalHelper.Game
             try
             {
                 Options.AutoTour.Value = false;
-                if (hadStarted) Options.PreviewEditable.Value = tourPreviewBefore;
+                if (hadStarted)
+                {
+                    Options.PreviewEditable.Value = tourPreviewBefore;
+                    Status = tourStatusBefore;
+                }
                 restoreTourPanel?.Invoke();
             }
             catch (Exception error) { Logger.LogError("[Tour] cleanup failed: " + error); }
@@ -285,15 +308,21 @@ namespace MortalHelper.Game
         {
             "story", "story-recovery", "story-recall", "battle-duel", "battle-group",
             "growth", "growth-relation", "numeric-books", "numeric-miscs",
-            "numeric-special", "numeric-consumables", "save", "badge"
+            "numeric-special", "numeric-consumables", "save", "language", "badge",
+            "numeric-attributes-anchor", "numeric-items-anchor", "numeric-speed-anchor", "story-notice"
         };
 
         private void ApplyTourView(string view)
         {
+            Status = tourStatusBefore;
             Panel.Visible = true;
             Panel.RecoveryOpen = false;
             switch (view)
             {
+                case "story-notice":
+                    Panel.SetView(0, 0, 0); Panel.Page = 0;
+                    Status = "布局预览消息：用于核对消息区域与正文之间的间距，以及较长消息在窄面板中的自动换行。未修改游戏进度。";
+                    break;
                 case "story":
                 case "story-recovery":
                     Panel.SetView(0, 0, 0); Panel.Page = 0;
@@ -308,6 +337,10 @@ namespace MortalHelper.Game
                     Panel.SetView(0, 0, 0); Panel.Page = 2; break;
                 case "growth-relation":
                     Panel.SetView(0, 0, 1); Panel.Page = 2; break;
+                case "numeric-attributes-anchor":
+                case "numeric-items-anchor":
+                case "numeric-speed-anchor":
+                    Panel.Page = 3; break;
                 case "numeric-books":
                 case "numeric-miscs":
                 case "numeric-special":
@@ -317,6 +350,8 @@ namespace MortalHelper.Game
                     Panel.SetTourPosition(0, category); break;
                 case "save":
                     Panel.Page = 4; break;
+                case "language":
+                    Panel.Page = 5; break;
                 case "badge":
                     Panel.Visible = false; break;
             }

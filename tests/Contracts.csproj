@@ -10,5 +10,6 @@
     <Compile Include="Contracts.cs" />
     <Compile Include="../src/Core/*.cs" />
     <Compile Include="../src/Recovery/*.cs" />
+    <Compile Include="../src/Game/UiLanguage.cs" />
   </ItemGroup>
 </Project>

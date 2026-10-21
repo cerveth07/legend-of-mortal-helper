@@ -8,6 +8,7 @@
 | BepInEx 6 Mono x64，历史验证 be.692 | 加载、配置 | 用户自行安装官方 BepInEx；插件包不附带加载器 |
 | 加载器提供的 `0Harmony.dll` | Harmony 补丁 | 由具体加载器提供，可能是 HarmonyX；不能仅凭程序集名认定版本、作者或许可 |
 | Roslyn 4.12 与 .NET | 本地编译、离线测试 | 用户提供；不随插件包分发 |
+| OpenCC 简繁字形表 | 构建时筛选面板所需字形对照 | [OpenCC](https://github.com/BYVoid/OpenCC)，Apache-2.0；插件运行时不加载 OpenCC |
 
 官方项目定位：BepInEx（github.com/BepInEx/BepInEx）、HarmonyX（github.com/BepInEx/HarmonyX）、Harmony（github.com/pardeike/Harmony）、Roslyn（github.com/dotnet/roslyn）。这些定位信息不能替代对实际二进制版本的检查。
 

@@ -187,7 +187,7 @@ namespace MortalHelper.Game
             try
             {
                 var text = GameAccess.Field<UnityEngine.UI.Text>(__instance, "_maxCountText");
-                if (text != null) text.text = "不限";
+                if (text != null) text.text = UiLanguage.Convert("不限", Plugin.Instance.Options.TraditionalChinese.Value);
             }
             catch (System.Exception) { }
         }

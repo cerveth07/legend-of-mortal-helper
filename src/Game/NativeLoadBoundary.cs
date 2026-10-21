@@ -71,6 +71,21 @@ namespace MortalHelper.Game
             }
             applied = false;
             expectedScene = null;
+            if (AnytimeStory.Failed || AnytimeDuel.Failed)
+            {
+                Plugin.Instance?.Gate.Fail("中途档恢复未通过校验；请重新读取原生存档。");
+                yield break;
+            }
+            if (AnytimeStory.Replaying)
+            {
+                AnytimeStory.AfterNativeLoadScene();
+                yield break;
+            }
+            if (AnytimeDuel.Replaying)
+            {
+                AnytimeDuel.AfterNativeLoadScene();
+                yield break;
+            }
             StoryReplay.OnNativeLoadCompleted();
         }
 

@@ -106,7 +106,7 @@ namespace MortalHelper.Game
                     output.Append("选择效果（已确认部分）\n").Append(effects);
                 }
             }
-            string text = output.ToString();
+            string text = UiLanguage.Convert(output.ToString(), options.TraditionalChinese.Value);
             if (string.IsNullOrWhiteSpace(text)) return;
             if (overlayStyle == null)
                 overlayStyle = new GUIStyle(GUI.skin.box)

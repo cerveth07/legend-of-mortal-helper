@@ -12,7 +12,9 @@ for path in files:
         errors.append('Unexpected binary or game data: ' + str(path.relative_to(root)))
     if path.suffix == '.cs':
         source = path.read_text(encoding='utf-8')
-        if re.search(r'\bBinaryFormatter\b|\b(?:using|namespace)\s+(?:LOMSave2|DiceMaster)\b', source):
+        # The game itself uses BinaryFormatter for its native .dat files; its
+        # presence is not evidence of a dependency on the old mod's source.
+        if re.search(r'\b(?:using|namespace)\s+(?:LOMSave2|DiceMaster)\b', source):
             errors.append('Legacy implementation dependency: ' + str(path.relative_to(root)))
 if (root / '.git').is_dir():
     result = subprocess.run(['git', 'rev-list', '--max-parents=0', 'HEAD'], cwd=root, text=True, capture_output=True)

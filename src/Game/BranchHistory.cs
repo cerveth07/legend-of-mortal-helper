@@ -140,7 +140,8 @@ namespace MortalHelper.Game
             label.font = source.font;
             label.fontSize = Mathf.Max(12, Mathf.Min(source.fontSize, 18));
             label.color = source.color;
-            label.text = BranchHistory.Has(script, source.text) ? "〔已走〕" : "〔未记录〕";
+            label.text = UiLanguage.Convert(BranchHistory.Has(script, source.text) ? "〔已走〕" : "〔未记录〕",
+                Plugin.Instance.Options.TraditionalChinese.Value);
         }
 
         public void OnPointerClick(PointerEventData data)
