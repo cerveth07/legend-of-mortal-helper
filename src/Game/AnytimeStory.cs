@@ -83,6 +83,7 @@ namespace MortalHelper.Game
         private static string script, scene, baseline, baselineRandomState, baselineLuaRandomState, invalid;
         private static AnytimeLuaValue[] baselineGlobals;
         private static string pendingSlot, pendingPath, pendingNativeBackup, pendingSideBackup;
+        private static bool pendingRequiredBefore;
         private static string completedPath, completedHash;
         private static AnytimeStoryRecord pendingRecord, playback;
         private static int cursor, tokenSerial;
@@ -137,6 +138,8 @@ namespace MortalHelper.Game
                 if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
                     File.Exists(path + ".mha.rollback"))
                     throw new InvalidDataException("此槽位有上次中断的存档记录，请先恢复备份。");
+                if (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha"))
+                    throw new InvalidDataException("此槽位缺少必需的剧情附档，请先恢复完整备份。");
                 var record = new AnytimeStoryRecord {
                     Client = Application.version, Baseline = baseline, Script = script, Scene = scene,
                     WaitKind = WaitKinds[0], WaitKey = WaitKeys[0],
@@ -159,16 +162,24 @@ namespace MortalHelper.Game
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 if (File.Exists(path)) File.Copy(path, pendingNativeBackup, true);
                 if (File.Exists(side)) File.Copy(side, pendingSideBackup, true);
+                pendingRequiredBefore = File.Exists(path + ".mha-required");
                 pendingSlot = slot; pendingPath = path; pendingRecord = record;
                 File.WriteAllText(path + ".mha-pending", "1", new UTF8Encoding(false));
+                File.WriteAllText(path + ".mha-required", "2", new UTF8Encoding(false));
                 return true;
             }
             catch (Exception error)
             {
-                AbortNativeSave();
-                DeleteIfExists(pendingNativeBackup);
-                DeleteIfExists(pendingSideBackup);
-                AnytimeNative.SaveFailed("剧情存档准备失败：" + error.Message);
+                bool hadPending = pendingRecord != null;
+                bool restored = !hadPending || RollBack();
+                if (!hadPending)
+                {
+                    try { DeleteIfExists(pendingNativeBackup); DeleteIfExists(pendingSideBackup); }
+                    catch (Exception cleanup) { Plugin.Instance?.Report(cleanup); }
+                    pendingNativeBackup = pendingSideBackup = null;
+                }
+                AnytimeNative.SaveFailed(restored ? "剧情存档准备失败：" + error.Message
+                    : "剧情存档准备失败且回退未完成；请保留 .mha-rollback/.mha.rollback 备份：" + error.Message);
                 return false;
             }
         }
@@ -224,10 +235,10 @@ namespace MortalHelper.Game
             try
             {
                 if (HashFile(saveFile) != HashObject(gameSave)) return false;
+                if (File.Exists(saveFile + ".mha-pending") || File.Exists(saveFile + ".mha-rollback") ||
+                    File.Exists(saveFile + ".mha.rollback")) return false;
                 DeleteIfExists(saveFile + ".mha");
-                DeleteIfExists(saveFile + ".mha-pending");
-                DeleteIfExists(saveFile + ".mha-rollback");
-                DeleteIfExists(saveFile + ".mha.rollback");
+                DeleteIfExists(saveFile + ".mha-required");
                 return true;
             }
             catch (Exception error) { Plugin.Instance?.Report(error); return false; }
@@ -248,7 +259,10 @@ namespace MortalHelper.Game
                 File.Exists(path + ".mha.rollback"))
                 throw new InvalidDataException("此槽位的剧情存档中断；请从备份恢复后再读档。");
             if (!File.Exists(path + ".mha"))
+            {
+                if (!File.Exists(path + ".mha-required")) return;
                 throw new InvalidDataException("此剧情编号档缺少配套的 .mha 剧情记录，不能安全恢复。请恢复完整备份。");
+            }
             var record = ReadRecord(path, save);
             var opening = JsonUtility.FromJson<GameSave>(record.Baseline);
             if (opening == null || opening.CurrentScene != record.Scene ||
@@ -602,6 +616,7 @@ namespace MortalHelper.Game
                     string side = pendingPath + ".mha";
                     if (File.Exists(pendingSideBackup)) File.Copy(pendingSideBackup, side, true);
                     else DeleteIfExists(side);
+                    if (!pendingRequiredBefore) DeleteIfExists(pendingPath + ".mha-required");
                     DeleteIfExists(pendingPath + ".mha-pending");
                 }
                 restored = true;
@@ -620,6 +635,7 @@ namespace MortalHelper.Game
                 catch (Exception error) { Plugin.Instance?.Report(error); }
             }
             pendingSlot = pendingPath = pendingNativeBackup = pendingSideBackup = null; pendingRecord = null;
+            pendingRequiredBefore = false;
         }
         private static void DeleteIfExists(string path) { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
         private static void LockInput()

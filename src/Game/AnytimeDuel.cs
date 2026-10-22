@@ -58,6 +58,7 @@ namespace MortalHelper.Game
         private static byte[] opening, stagedOpening;
         private static string stagedSceneKey;
         private static int pointIndex, drawIndex;
+        private static float replayStarted;
         private static bool waiting, injecting, replaying, failed, sceneReady, finalVerified, returningTitle;
         private static string invalid;
 
@@ -128,7 +129,8 @@ namespace MortalHelper.Game
                 Validate(journal);
                 string path = SlotFile(slot);
                 if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
-                    File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending"))
+                    File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending") ||
+                    (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha")))
                     throw new IOException("此槽位有尚未处理的存档恢复材料，请先核对该槽位。");
                 WritePair(path, native, Encode(journal));
                 string message = "单挑回合已写入编号槽 " + slot + "。";
@@ -167,6 +169,7 @@ namespace MortalHelper.Game
                     loaded.SceneKey != gameSave.CurrentSceneKey || loaded.NativeHash != Hash(File.ReadAllBytes(path)))
                     throw new InvalidDataException("客户端、战斗关卡或原生文件与单挑记录不匹配。");
                 pending = loaded;
+                replayStarted = Time.unscaledTime;
                 return true;
             }
             catch (Exception e)
@@ -200,6 +203,7 @@ namespace MortalHelper.Game
             if (manager != null && !Replaying && HasAssist()) Invalidate("本场曾启用单挑辅助。请在新单挑中重新记录。");
             if (!Replaying) { UnlockInput(); return; }
             LockInput();
+            if (Time.unscaledTime - replayStarted > 120f) { Fail("单挑回放超过两分钟仍未到达存档回合。"); return; }
             if (manager != null && Time.timeScale != 1f) Time.timeScale = 1f;
         }
 
@@ -208,6 +212,7 @@ namespace MortalHelper.Game
             manager = null; journal = null; pending = null; opening = null;
             stagedOpening = null; stagedSceneKey = null;
             pointIndex = drawIndex = 0; waiting = injecting = replaying = failed = sceneReady = finalVerified = returningTitle = false;
+            replayStarted = 0f;
             invalid = null;
             UnlockInput();
         }

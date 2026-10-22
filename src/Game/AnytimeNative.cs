@@ -16,6 +16,7 @@ namespace MortalHelper.Game
         [ThreadStatic] private static string savingSlot;
         [ThreadStatic] private static bool savingStory;
         [ThreadStatic] private static string loadingSlot;
+        private static string offeredScene;
         internal struct SaveScope
         {
             internal string Slot;
@@ -51,6 +52,10 @@ namespace MortalHelper.Game
 
         internal static string ManualLoadSlot => loadingSlot;
 
+        internal static bool OfferedHere => offeredScene == SceneManager.GetActiveScene().name;
+        internal static void MarkOffered() { offeredScene = SceneManager.GetActiveScene().name; }
+        internal static void ClearOffer() { offeredScene = null; }
+
         internal static void SaveFailed(string message)
         {
             if (Plugin.Instance == null) return;
@@ -62,6 +67,12 @@ namespace MortalHelper.Game
         internal static bool BeforeSave(string slot, out SaveScope previous)
         {
             previous = new SaveScope { Slot = savingSlot, Story = savingStory };
+            if (!Enabled && offeredScene == SceneManager.GetActiveScene().name &&
+                (offeredScene == "Combat" || offeredScene == "Story" || offeredScene == "Break"))
+            {
+                SaveFailed("保存菜单由随时存档开放后，开关已关闭；请重新开启功能后再保存。");
+                return false;
+            }
             if (Enabled && !Plugin.Instance.Gate.CanInteract)
             {
                 SaveFailed("恢复期间不能存档。");
@@ -113,6 +124,7 @@ namespace MortalHelper.Game
             string path = (string)AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile")
                 .Invoke(SaveSystem.Instance, new object[] { slot });
             DeleteIfExists(path + ".mha");
+            DeleteIfExists(path + ".mha-required");
         }
 
         private static void DeleteIfExists(string path)
@@ -192,14 +204,17 @@ namespace MortalHelper.Game
     internal static class AnytimeSaveButtonPatch
     {
         private static void Prefix(ref bool active)
-        { if (AnytimeNative.CanOffer) active = true; }
+        { if (!active && AnytimeNative.CanOffer) { active = true; AnytimeNative.MarkOffered(); } }
     }
 
     [HarmonyPatch(typeof(MenuPanel), "OnPanelOpen")]
     internal static class AnytimeMenuOpenedPatch
     {
         private static void Postfix(MenuPanel __instance)
-        { if (AnytimeNative.CanOffer) __instance.ToggleSaveButton(true); }
+        {
+            if (AnytimeNative.CanOffer) { AnytimeNative.MarkOffered(); __instance.ToggleSaveButton(true); }
+            else if (AnytimeNative.OfferedHere) __instance.ToggleSaveButton(false);
+        }
     }
 
     [HarmonyPatch(typeof(LuaManager), "ToggleSaveButton")]

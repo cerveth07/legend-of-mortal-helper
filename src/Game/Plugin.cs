@@ -117,6 +117,7 @@ namespace MortalHelper.Game
         }
         private void SceneChanged(Scene previous, Scene next)
         {
+            AnytimeNative.ClearOffer();
             DiceAdapter.Close(); HintAdapter.Clear(); Panel?.ClearSelection();
             if (next.name == "Title") { AnytimeStory.Reset(); AnytimeDuel.Reset(); }
             // A replay must never survive a scene change: the follow-up script would
