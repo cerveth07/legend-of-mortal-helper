@@ -39,6 +39,8 @@ namespace MortalHelper.Game
         {
             get
             {
+                // IMGUI fields are not visible to Unity's EventSystem selection.
+                if (Plugin.Instance?.Panel?.EditingTextField == true) return true;
                 var selected = EventSystem.current == null ? null : EventSystem.current.currentSelectedGameObject;
                 return selected != null && (selected.GetComponent<InputField>() != null ||
                     selected.GetComponent<TMPro.TMP_InputField>() != null);
