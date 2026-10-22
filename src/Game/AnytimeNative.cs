@@ -51,28 +51,37 @@ namespace MortalHelper.Game
 
         internal static string ManualLoadSlot => loadingSlot;
 
+        internal static void SaveFailed(string message)
+        {
+            if (Plugin.Instance == null) return;
+            Plugin.Instance.Status = message;
+            if (Plugin.Instance.Panel != null) Plugin.Instance.Panel.Visible = true;
+            Plugin.Instance.Log(message);
+        }
+
         internal static bool BeforeSave(string slot, out SaveScope previous)
         {
             previous = new SaveScope { Slot = savingSlot, Story = savingStory };
+            if (Enabled && !Plugin.Instance.Gate.CanInteract)
+            {
+                SaveFailed("恢复期间不能存档。");
+                return false;
+            }
             if (SceneManager.GetActiveScene().name == "Combat")
             {
                 if (Enabled)
                 {
-                    if (AnytimeDuel.SaveToSlot(slot)) ForgetStorySidecar(slot);
+                    if (AnytimeDuel.SaveToSlot(slot))
+                    {
+                        try { ForgetStorySidecar(slot); }
+                        catch (Exception error) { Plugin.Instance.Report(error); }
+                    }
                     return false;
                 }
             }
-            if (Enabled && StoryScene && !Plugin.Instance.Gate.CanInteract)
-            {
-                Plugin.Instance.Status = "恢复期间不能存档。";
-                return false;
-            }
             bool story = Enabled && StoryScene;
             if (story && !AnytimeStory.BeforeNativeSave(slot))
-            {
-                Plugin.Instance.Status = AnytimeStory.BlockReason ?? "当前剧情停点不能安全存档。";
                 return false;
-            }
             savingSlot = slot;
             savingStory = story;
             return true;
@@ -112,8 +121,6 @@ namespace MortalHelper.Game
         internal static void BeginLoad(SaveSystem save, out string previous)
         {
             previous = loadingSlot;
-            AnytimeStory.BeforeNativeLoad();
-            AnytimeDuel.Reset();
             loadingSlot = save == null ? null : save.CurrentSlot;
         }
 
@@ -122,6 +129,10 @@ namespace MortalHelper.Game
         internal static void PrepareLoad(ref GameSave data)
         {
             if (data == null || loadingSlot == null || Plugin.Instance == null) return;
+            // LoadGameData may return early for an empty or unreadable slot.
+            // Keep the current fight/story journal until native data is applied.
+            AnytimeStory.BeforeNativeLoad();
+            AnytimeDuel.Reset();
             try
             {
                 if (data.CurrentScene == "Combat")

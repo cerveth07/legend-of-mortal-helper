@@ -107,7 +107,7 @@ namespace MortalHelper.Game
         internal static bool SaveToSlot(string slot)
         {
             string reason = BlockReason;
-            if (reason != null) { Report(reason); return false; }
+            if (reason != null) { AnytimeNative.SaveFailed(reason); return false; }
             try
             {
                 if (!Numbered(slot)) throw new InvalidDataException("请选择游戏系统菜单中的编号槽位。");
@@ -127,8 +127,9 @@ namespace MortalHelper.Game
                 journal.RandomState = JsonUtility.ToJson(UnityEngine.Random.state);
                 Validate(journal);
                 string path = SlotFile(slot);
-                if (File.Exists(path + ".mha-pending"))
-                    throw new IOException("此槽位有尚未处理的剧情存档恢复材料，请先核对该槽位。");
+                if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
+                    File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending"))
+                    throw new IOException("此槽位有尚未处理的存档恢复材料，请先核对该槽位。");
                 WritePair(path, native, Encode(journal));
                 string message = "单挑回合已写入编号槽 " + slot + "。";
                 try
@@ -142,7 +143,7 @@ namespace MortalHelper.Game
             }
             catch (Exception e)
             {
-                Report("单挑保存失败：" + e.GetBaseException().Message);
+                AnytimeNative.SaveFailed("单挑保存失败：" + e.GetBaseException().Message);
                 return false;
             }
         }
@@ -158,6 +159,8 @@ namespace MortalHelper.Game
             {
                 if (!Numbered(slot)) throw new InvalidDataException("单挑必须从编号槽读取。");
                 string path = SlotFile(slot);
+                if (File.Exists(path + ".mhduel-pending"))
+                    throw new InvalidDataException("单挑存档提交曾中断；请核对 .dat/.mhduel 与 .bak 备份后再读取。");
                 var loaded = Decode(path + ".mhduel");
                 Validate(loaded);
                 if (!AnytimeDuelRandomPatch.Covered || loaded.Client != Application.version ||
@@ -471,17 +474,20 @@ namespace MortalHelper.Game
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             string extra = path + ".mhduel", first = path + ".mhduel-native-stage", second = extra + ".stage";
+            string marker = path + ".mhduel-pending";
             bool hadNative = File.Exists(path), hadExtra = File.Exists(extra), committedNative = false, committedExtra = false;
             try
             {
                 Stage(first, native); Stage(second, sidecar);
                 if (Hash(File.ReadAllBytes(first)) != Hash(native)) throw new IOException("原生档暂存校验失败。");
+                Stage(marker, Encoding.ASCII.GetBytes("pending"));
                 if (hadNative) File.Replace(first, path, path + ".bak"); else File.Move(first, path);
                 committedNative = true;
                 if (hadExtra) File.Replace(second, extra, extra + ".bak"); else File.Move(second, extra);
                 committedExtra = true;
                 if (Hash(File.ReadAllBytes(path)) != Hash(native) ||
                     Decode(extra).NativeHash != Hash(native)) throw new IOException("双文件提交校验失败。");
+                File.Delete(marker);
             }
             catch (Exception original)
             {
@@ -493,6 +499,7 @@ namespace MortalHelper.Game
                 if (rollback != null)
                     throw new IOException("双文件保存失败且回退未完成；请保留 .dat/.mhduel 和 .bak 成对核对。",
                         new AggregateException(original, rollback));
+                if (File.Exists(marker)) File.Delete(marker);
                 throw;
             }
             finally

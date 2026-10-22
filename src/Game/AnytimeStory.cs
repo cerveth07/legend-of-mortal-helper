@@ -37,9 +37,16 @@ namespace MortalHelper.Game
     }
 
     [Serializable]
+    internal sealed class AnytimeLuaRandomState
+    {
+        public int Next, NextP;
+        public int[] Seeds;
+    }
+
+    [Serializable]
     internal sealed class AnytimeStoryRecord
     {
-        public int Version = 1;
+        public int Version = 2;
         public string Client;
         public string NativeHash;
         public string Baseline;
@@ -50,6 +57,8 @@ namespace MortalHelper.Game
         public string WaitKey;
         public string BaselineRandomState;
         public string RandomState;
+        public string BaselineLuaRandomState;
+        public string LuaRandomState;
         public AnytimeLuaValue[] BaselineGlobals;
         public AnytimeLuaValue[] ExpectedGlobals;
         public AnytimeStoryEvent[] Events;
@@ -71,7 +80,7 @@ namespace MortalHelper.Game
         private static readonly List<string> WaitKinds = new List<string>();
         private static readonly List<string> WaitKeys = new List<string>();
         private static Script lua;
-        private static string script, scene, baseline, baselineRandomState, invalid;
+        private static string script, scene, baseline, baselineRandomState, baselineLuaRandomState, invalid;
         private static AnytimeLuaValue[] baselineGlobals;
         private static string pendingSlot, pendingPath, pendingNativeBackup, pendingSideBackup;
         private static string completedPath, completedHash;
@@ -79,6 +88,7 @@ namespace MortalHelper.Game
         private static int cursor, tokenSerial;
         private static int? replayDice;
         private static bool sceneReady, targetReached;
+        private static bool returningTitle;
         private static float targetAt, replayStarted;
         private static readonly List<BaseInputModule> LockedInputs = new List<BaseInputModule>();
 
@@ -114,7 +124,7 @@ namespace MortalHelper.Game
         internal static bool BeforeNativeSave(string slot)
         {
             string reason = BlockReason;
-            if (reason != null) { if (Plugin.Instance != null) Plugin.Instance.Status = reason; return false; }
+            if (reason != null) { AnytimeNative.SaveFailed(reason); return false; }
             try
             {
                 if (slot == null || slot.Length != 3 || slot == "000" ||
@@ -132,10 +142,13 @@ namespace MortalHelper.Game
                     WaitKind = WaitKinds[0], WaitKey = WaitKeys[0],
                     BaselineRandomState = baselineRandomState,
                     RandomState = JsonUtility.ToJson(UnityEngine.Random.state),
+                    BaselineLuaRandomState = baselineLuaRandomState,
+                    LuaRandomState = CaptureLuaRandom(lua),
                     BaselineGlobals = baselineGlobals, ExpectedGlobals = CaptureGlobals(lua),
                     Events = Events.ToArray(), Expected = Snapshot()
                 };
-                if (string.IsNullOrEmpty(record.BaselineRandomState) || record.BaselineRandomState == "{}" ||
+                if (string.IsNullOrEmpty(record.BaselineLuaRandomState) || string.IsNullOrEmpty(record.LuaRandomState) ||
+                    string.IsNullOrEmpty(record.BaselineRandomState) || record.BaselineRandomState == "{}" ||
                     string.IsNullOrEmpty(record.RandomState) || record.RandomState == "{}")
                     throw new InvalidDataException("无法序列化游戏随机状态。");
                 if (string.IsNullOrEmpty(record.Expected) || record.Expected.Length > MaximumSidecarBytes)
@@ -155,7 +168,7 @@ namespace MortalHelper.Game
                 AbortNativeSave();
                 DeleteIfExists(pendingNativeBackup);
                 DeleteIfExists(pendingSideBackup);
-                if (Plugin.Instance != null) Plugin.Instance.Status = "剧情存档准备失败：" + error.Message;
+                AnytimeNative.SaveFailed("剧情存档准备失败：" + error.Message);
                 return false;
             }
         }
@@ -189,8 +202,10 @@ namespace MortalHelper.Game
             catch (Exception error)
             {
                 completedPath = completedHash = null;
-                RollBack();
-                if (Plugin.Instance != null) Plugin.Instance.Status = "剧情存档未完成，槽位已回退：" + error.Message;
+                bool restored = RollBack();
+                AnytimeNative.SaveFailed(restored
+                    ? "剧情存档未完成，槽位已回退：" + error.Message
+                    : "剧情存档未完成，自动回退失败；请保留原生档和 .mha-rollback/.mha.rollback 备份：" + error.Message);
             }
         }
 
@@ -221,7 +236,7 @@ namespace MortalHelper.Game
         internal static void BeforeNativeLoad()
         {
             playback = null; Failed = Verified = false; Failure = null;
-            sceneReady = targetReached = false; replayDice = null; UnlockInput();
+            sceneReady = targetReached = returningTitle = false; replayDice = null; UnlockInput();
         }
 
         internal static void PrepareLoad(string slot, ref GameSave save)
@@ -240,6 +255,7 @@ namespace MortalHelper.Game
                 opening.CurrentStoryScript != record.Script || record.Events == null ||
                 record.BaselineGlobals == null || record.ExpectedGlobals == null ||
                 string.IsNullOrEmpty(record.BaselineRandomState) || string.IsNullOrEmpty(record.RandomState) ||
+                string.IsNullOrEmpty(record.BaselineLuaRandomState) || string.IsNullOrEmpty(record.LuaRandomState) ||
                 (record.WaitKind != "Say" && record.WaitKind != "Choose"))
                 throw new InvalidDataException("剧情附加记录缺少可重放的起点或目标。");
             if (record.Events.Length > MaximumEvents) throw new InvalidDataException("剧情事件记录超限。");
@@ -259,6 +275,17 @@ namespace MortalHelper.Game
 
         internal static void Tick()
         {
+            if (Failed)
+            {
+                LockInput();
+                var controller = SceneController.Instance;
+                if (!returningTitle && controller != null && !controller.IsLoading && !controller.IsPrepare)
+                {
+                    returningTitle = true;
+                    controller.LoadTitle();
+                }
+                return;
+            }
             if (!Replaying) return;
             LockInput();
             if (Time.unscaledTime - replayStarted > 120f) { Fail("剧情回放超过两分钟仍未到达存档位置。"); return; }
@@ -273,7 +300,10 @@ namespace MortalHelper.Game
                 if (!SameGlobals(CaptureGlobals(lua), playback.ExpectedGlobals))
                     throw new InvalidDataException("Lua 剧情变量与存档内容不同。");
                 UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.RandomState);
+                RestoreLuaRandom(lua, playback.LuaRandomState);
                 baseline = playback.Baseline; baselineGlobals = playback.BaselineGlobals;
+                baselineRandomState = playback.BaselineRandomState;
+                baselineLuaRandomState = playback.BaselineLuaRandomState;
                 script = playback.Script; scene = playback.Scene;
                 Events.Clear(); Events.AddRange(playback.Events);
                 playback = null; Verified = true; UnlockInput();
@@ -287,9 +317,10 @@ namespace MortalHelper.Game
         {
             AbortNativeSave(); playback = null; Verified = Failed = false; Failure = null;
             completedPath = completedHash = null;
-            lua = null; script = scene = baseline = baselineRandomState = invalid = null; baselineGlobals = null;
+            lua = null; script = scene = baseline = baselineRandomState = baselineLuaRandomState = invalid = null; baselineGlobals = null;
             Events.Clear(); WaitTokens.Clear(); WaitKinds.Clear(); WaitKeys.Clear();
             replayDice = null; sceneReady = targetReached = false; UnlockInput();
+            returningTitle = false;
         }
 
         internal static void EnvironmentFailed(Exception error)
@@ -322,6 +353,7 @@ namespace MortalHelper.Game
                 {
                     RestoreGlobals(lua, playback.BaselineGlobals);
                     UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.BaselineRandomState);
+                    RestoreLuaRandom(lua, playback.BaselineLuaRandomState);
                 }
                 catch (Exception error) { Fail("Lua 起点还原失败：" + error.Message); }
                 return;
@@ -337,38 +369,42 @@ namespace MortalHelper.Game
                 if (string.IsNullOrEmpty(baselineRandomState) || baselineRandomState == "{}")
                     throw new InvalidDataException("无法记录游戏随机状态。");
                 baselineGlobals = CaptureGlobals(lua);
+                baselineLuaRandomState = CaptureLuaRandom(lua);
             }
             catch (Exception error) { baseline = null; invalid = "无法记录剧情起点：" + error.Message; }
         }
 
         internal static bool BeforeSay(string text)
         {
+            if (Failed) throw new InvalidDataException(Failure);
             string key = Digest(text);
             if (!Replaying) return false;
             if (cursor == playback.Events.Length) { Reach("Say", key); return false; }
             var next = playback.Events[cursor];
-            if (next.Kind != "Say" || next.Key != key) { Fail("剧情对话顺序与存档不同。"); return false; }
+            if (next.Kind != "Say" || next.Key != key) AbortReplay("剧情对话顺序与存档不同。");
             cursor++; return true;
         }
         internal static void SayDone(string text) { Record(new AnytimeStoryEvent { Kind = "Say", Key = Digest(text) }); }
         internal static int BeforeChoose(string key, int count)
         {
+            if (Failed) throw new InvalidDataException(Failure);
             if (!Replaying) return 0;
             string digest = Digest(key);
             if (cursor == playback.Events.Length) { Reach("Choose", digest); return 0; }
             var next = playback.Events[cursor];
             if (next.Kind != "Choose" || next.Key != digest || next.Choice < 1 || next.Choice > count)
-            { Fail("剧情选项与存档不同。"); return 0; }
+                AbortReplay("剧情选项与存档不同。");
             cursor++; return next.Choice;
         }
         internal static void ChooseDone(string key, int choice)
         { Record(new AnytimeStoryEvent { Kind = "Choose", Key = Digest(key), Choice = choice }); }
         internal static double RandomDraw(double drawn)
         {
+            if (Failed) throw new InvalidDataException(Failure);
             if (Replaying)
             {
                 if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Random")
-                { Fail("剧情随机事件与存档不同。"); return drawn; }
+                    AbortReplay("剧情随机事件与存档不同。");
                 return playback.Events[cursor++].Number;
             }
             Record(new AnytimeStoryEvent { Kind = "Random", Number = drawn });
@@ -376,26 +412,33 @@ namespace MortalHelper.Game
         }
         internal static void BeforeDice(ref int random)
         {
+            if (Failed) throw new InvalidDataException(Failure);
             if (!Replaying) return;
             if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Dice")
-            { Fail("轮盘判定次数与存档不同。"); return; }
+                AbortReplay("轮盘判定次数与存档不同。");
             replayDice = playback.Events[cursor++].Choice;
             random = replayDice.Value;
         }
         internal static void AfterDice(DiceCheckResult result)
         {
+            if (Failed) throw new InvalidDataException(Failure);
             if (Replaying)
             {
                 if (!replayDice.HasValue || result == null || result.Random != replayDice.Value)
-                    Fail("轮盘判定结果与存档不同。");
+                    AbortReplay("轮盘判定结果与存档不同。");
                 replayDice = null;
             }
             else if (result != null)
                 Record(new AnytimeStoryEvent { Kind = "Dice", Choice = result.Random });
         }
-        internal static bool SkipWait() { return Replaying && !targetReached; }
+        internal static bool SkipWait()
+        {
+            if (Failed) throw new InvalidDataException(Failure);
+            return Replaying && !targetReached;
+        }
         internal static int EnterWait(string kind, string key)
         {
+            if (Failed) throw new InvalidDataException(Failure);
             int token = ++tokenSerial;
             WaitTokens.Add(token); WaitKinds.Add(kind); WaitKeys.Add(Digest(key));
             return token;
@@ -410,7 +453,7 @@ namespace MortalHelper.Game
         private static void Reach(string kind, string key)
         {
             if (kind != playback.WaitKind || key != playback.WaitKey)
-            { Fail("剧情等待位置与存档不同。"); return; }
+                AbortReplay("剧情等待位置与存档不同。");
             targetReached = true; targetAt = Time.unscaledTime;
         }
         private static void Record(AnytimeStoryEvent item)
@@ -421,9 +464,14 @@ namespace MortalHelper.Game
         }
         private static void Fail(string reason)
         {
-            Failed = true; Failure = reason; playback = null; UnlockInput();
+            Failed = true; Failure = reason; playback = null; LockInput();
             Plugin.Instance?.Gate.Fail("剧情存档恢复失败：" + reason);
             if (Plugin.Instance != null) Plugin.Instance.Status = "剧情恢复失败：" + reason + "；请重新读取原生存档。";
+        }
+        private static void AbortReplay(string reason)
+        {
+            Fail(reason);
+            throw new InvalidDataException(reason);
         }
         private static string Snapshot()
         {
@@ -496,6 +544,39 @@ namespace MortalHelper.Game
             using (var stream = new MemoryStream()) using (var sha = SHA256.Create())
             { new BinaryFormatter().Serialize(stream, value); stream.Position = 0; return Convert.ToBase64String(sha.ComputeHash(stream)); }
         }
+        private static readonly MethodInfo GetLuaRandom = AccessTools.Method(typeof(MoonSharp.Interpreter.CoreLib.MathModule), "GetRandom");
+        private static readonly MethodInfo SetLuaRandom = AccessTools.Method(typeof(MoonSharp.Interpreter.CoreLib.MathModule), "SetRandom");
+        private static readonly FieldInfo LuaRandomNext = AccessTools.Field(typeof(System.Random), "inext");
+        private static readonly FieldInfo LuaRandomNextP = AccessTools.Field(typeof(System.Random), "inextp");
+        private static readonly FieldInfo LuaRandomSeeds = AccessTools.Field(typeof(System.Random), "SeedArray");
+        private static string CaptureLuaRandom(Script interpreter)
+        {
+            if (GetLuaRandom == null || LuaRandomNext == null || LuaRandomNextP == null || LuaRandomSeeds == null || interpreter == null)
+                throw new InvalidDataException("无法读取 Lua 随机源。");
+            var random = GetLuaRandom.Invoke(null, new object[] { interpreter }) as System.Random;
+            if (random == null || random.GetType() != typeof(System.Random))
+                throw new InvalidDataException("Lua 随机源尚未初始化。");
+            var state = new AnytimeLuaRandomState {
+                Next = (int)LuaRandomNext.GetValue(random), NextP = (int)LuaRandomNextP.GetValue(random),
+                Seeds = (int[])((int[])LuaRandomSeeds.GetValue(random)).Clone()
+            };
+            return JsonUtility.ToJson(state);
+        }
+        private static void RestoreLuaRandom(Script interpreter, string encoded)
+        {
+            if (SetLuaRandom == null || LuaRandomNext == null || LuaRandomNextP == null || LuaRandomSeeds == null ||
+                interpreter == null || string.IsNullOrEmpty(encoded) || encoded.Length > 4096)
+                throw new InvalidDataException("无法恢复 Lua 随机源。");
+            var state = JsonUtility.FromJson<AnytimeLuaRandomState>(encoded);
+            if (state == null || state.Next < 0 || state.Next > 55 || state.NextP < 0 || state.NextP > 55 ||
+                state.Seeds == null || state.Seeds.Length != 56 || state.Seeds.Any(seed => seed < 0 || seed >= int.MaxValue))
+                throw new InvalidDataException("Lua 随机源记录无效。");
+            var random = new System.Random(0);
+            LuaRandomNext.SetValue(random, state.Next);
+            LuaRandomNextP.SetValue(random, state.NextP);
+            LuaRandomSeeds.SetValue(random, state.Seeds);
+            SetLuaRandom.Invoke(null, new object[] { interpreter, random });
+        }
         private static string PathFor(string slot) => (string)GetPath.Invoke(SaveSystem.Instance, new object[] { slot });
         private static AnytimeStoryRecord ReadRecord(string nativePath, GameSave native)
         {
@@ -503,13 +584,13 @@ namespace MortalHelper.Game
             var bytes = File.ReadAllBytes(side);
             if (bytes.Length == 0 || bytes.Length > MaximumSidecarBytes) throw new InvalidDataException("剧情附加记录大小无效。");
             var record = JsonUtility.FromJson<AnytimeStoryRecord>(Encoding.UTF8.GetString(bytes));
-            if (record == null || record.Version != 1 || record.Client != Application.version ||
+            if (record == null || record.Version != 2 || record.Client != Application.version ||
                 record.NativeHash != HashFile(nativePath) || native == null ||
                 !SameSnapshot(native, record.Expected) || native.CurrentScene != record.Scene)
                 throw new InvalidDataException("剧情附加记录与原生存档或当前游戏版本不匹配。");
             return record;
         }
-        private static void RollBack()
+        private static bool RollBack()
         {
             bool restored = false;
             try
@@ -527,10 +608,17 @@ namespace MortalHelper.Game
             }
             catch (Exception error) { Plugin.Instance?.Report(error); }
             finally { ClearPending(restored); }
+            return restored;
         }
         private static void ClearPending(bool clean)
         {
-            if (clean) { DeleteIfExists(pendingNativeBackup); DeleteIfExists(pendingSideBackup); }
+            if (clean)
+            {
+                try { DeleteIfExists(pendingNativeBackup); }
+                catch (Exception error) { Plugin.Instance?.Report(error); }
+                try { DeleteIfExists(pendingSideBackup); }
+                catch (Exception error) { Plugin.Instance?.Report(error); }
+            }
             pendingSlot = pendingPath = pendingNativeBackup = pendingSideBackup = null; pendingRecord = null;
         }
         private static void DeleteIfExists(string path) { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
