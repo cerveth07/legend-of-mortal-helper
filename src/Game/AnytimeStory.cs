@@ -93,7 +93,6 @@ namespace MortalHelper.Game
         private static bool sceneReady, targetReached;
         private static bool returningTitle;
         private static float targetAt, replayStarted;
-        private static readonly List<BaseInputModule> LockedInputs = new List<BaseInputModule>();
 
         internal static bool Replaying => playback != null && !Failed && !Verified;
         internal static bool Verified { get; private set; }
@@ -550,7 +549,7 @@ namespace MortalHelper.Game
             text.Append("; pending-slot=").Append(pendingSlot ?? "<none>");
             text.Append("; transaction=").Append(pendingTransaction == null ? "<none>" : pendingTransaction.State.ToString());
             if (blockedReason != null) text.Append("; rollback-blocked=").Append(blockedReason);
-            text.Append("; locked-inputs=").Append(LockedInputs.Count);
+            text.Append("; locked-inputs=").Append(InteractionLock.Held ? "held" : "free");
             return text.ToString();
         }
         private static string Event(AnytimeStoryEvent entry) =>
@@ -753,17 +752,8 @@ namespace MortalHelper.Game
             pendingTransaction = null;
             pendingSlot = pendingPath = null; pendingRecord = null;
         }
-        private static void LockInput()        {
-            var system = EventSystem.current;
-            if (system == null) return;
-            foreach (var input in system.GetComponents<BaseInputModule>())
-                if (input.enabled) { if (!LockedInputs.Contains(input)) LockedInputs.Add(input); input.enabled = false; }
-        }
-        private static void UnlockInput()
-        {
-            foreach (var input in LockedInputs) if (input != null) input.enabled = true;
-            LockedInputs.Clear();
-        }
+        private static void LockInput() { InteractionLock.Set(InteractionHold.Story, true); }
+        private static void UnlockInput() { InteractionLock.Set(InteractionHold.Story, false); }
     }
 
     public static class AnytimeStoryLua

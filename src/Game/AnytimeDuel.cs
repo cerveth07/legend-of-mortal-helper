@@ -52,7 +52,6 @@ namespace MortalHelper.Game
         private static readonly byte[] Magic = Encoding.ASCII.GetBytes("MHDL-01\n");
         private static readonly MethodInfo GetSlotFile = AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile");
         private static readonly MethodInfo CreateNative = AccessTools.Method(typeof(SaveSystem), "CreateSaveData");
-        private static readonly List<BaseInputModule> LockedInputs = new List<BaseInputModule>();
         private static CombatManager manager;
         private static Journal journal;
         private static Journal pending;
@@ -411,7 +410,7 @@ namespace MortalHelper.Game
                 ? ((CombatActionType)journal.Actions[pointIndex - 1]).ToString() : "<none>");
             text.Append("; waiting=").Append(waiting);
             text.Append("; injecting=").Append(injecting);
-            text.Append("; locked-inputs=").Append(LockedInputs.Count);
+            text.Append("; locked-inputs=").Append(InteractionLock.Held ? "held" : "free");
             return text.ToString();
         }
 
@@ -420,19 +419,9 @@ namespace MortalHelper.Game
             if (Plugin.Instance != null) { Plugin.Instance.Status = message; Plugin.Instance.Log(message); }
         }
 
-        private static void LockInput()
-        {
-            var events = EventSystem.current;
-            if (events == null) return;
-            foreach (var module in events.GetComponents<BaseInputModule>())
-                if (module.enabled) { if (!LockedInputs.Contains(module)) LockedInputs.Add(module); module.enabled = false; }
-        }
+        private static void LockInput() { InteractionLock.Set(InteractionHold.Duel, true); }
 
-        private static void UnlockInput()
-        {
-            foreach (var module in LockedInputs) if (module != null) module.enabled = true;
-            LockedInputs.Clear();
-        }
+        private static void UnlockInput() { InteractionLock.Set(InteractionHold.Duel, false); }
 
         private static bool Numbered(string slot) => slot != null && slot.Length == 3 && slot != "000" &&
             slot.All(c => c >= '0' && c <= '9');
