@@ -17,8 +17,11 @@ internal static class DuelJournalTests
     private static DuelJournal Example()
     {
         var value = new DuelJournal { Client = "1.0.0", SceneKey = "決鬥_001", NativeHash = Digest("native"),
-            RandomState = "{\"s0\":123}", FinalState = "state:玩家體力=45" };
+            RandomState = "{\"s0\":123}", FinalState = "state:玩家體力=45",
+            OpeningAssists = (int)(DuelAssist.Health | DuelAssist.Stamina) };
         value.Actions.Add(2); value.Actions.Add(4);
+        value.ActionAssists.Add(0);
+        value.ActionAssists.Add((int)(DuelAssist.Dodge | DuelAssist.ZeroDamage | DuelAssist.AlwaysHit));
         value.Draws.Add(new DuelDraw { Site = "Combat.dll:100:0", Kind = 0, Floating = 0.12345679f });
         value.Draws.Add(new DuelDraw { Site = "Combat.dll:101:1", Kind = 1, A = -9, B = 21, Integer = 20 });
         value.Draws.Add(new DuelDraw { Site = "Combat.dll:102:2", Kind = 2, X = -3.1234567f, Y = 10.5f, Floating = 0.9876543f });
@@ -32,7 +35,7 @@ internal static class DuelJournalTests
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         using (var sha = SHA256.Create())
-        { writer.Write(Encoding.ASCII.GetBytes("MHDL-02\n")); writer.Write(payload.Length);
+        { writer.Write(Encoding.ASCII.GetBytes("MHDL-03\n")); writer.Write(payload.Length);
           writer.Write(payload); writer.Write(sha.ComputeHash(payload)); return stream.ToArray(); }
     }
     public static int Run()
@@ -44,6 +47,8 @@ internal static class DuelJournalTests
             restored.RandomState == original.RandomState && restored.FinalState == original.FinalState &&
             restored.NativeHash == original.NativeHash, "metadata preserved");
         Check(restored.Actions.SequenceEqual(original.Actions), "all actions restored");
+        Check(restored.Format == 3 && restored.OpeningAssists == original.OpeningAssists &&
+            restored.ActionAssists.SequenceEqual(original.ActionAssists), "differing opening and per-action assist masks restored exactly");
         Check(restored.Draws.Count == 3 && restored.Points.Count == 3, "custom lists present");
         for (int i = 0; i < 3; i++)
         {
@@ -58,11 +63,13 @@ internal static class DuelJournalTests
         }
         Check(saved.SequenceEqual(DuelJournalCodec.Encode(restored)), "exact durable round trip");
         // Continue after restore and save again, including an unchanged random value.
-        restored.Actions.Add(3); restored.Draws.Add(new DuelDraw { Site = "next", Kind = 0, Floating = 1f });
+        restored.Actions.Add(3); restored.ActionAssists.Add((int)(DuelAssist.Health | DuelAssist.FirstStrike));
+        restored.Draws.Add(new DuelDraw { Site = "next", Kind = 0, Floating = 1f });
         restored.FinalState = "state:next";
         restored.Points.Add(new DuelPoint { Round = 5, DrawCount = 4, Digest = Digest(restored.FinalState) });
         var again = DuelJournalCodec.Decode(DuelJournalCodec.Encode(restored));
-        Check(again.Actions.Count == 3 && again.Draws.Count == 4 && again.Points.Last().Round == 5,
+        Check(again.Actions.Count == 3 && again.Draws.Count == 4 && again.Points.Last().Round == 5 &&
+            again.ActionAssists.Last() == (int)(DuelAssist.Health | DuelAssist.FirstStrike),
             "restored journal remains appendable");
         byte[] broken = (byte[])saved.Clone(); broken[20] ^= 1;
         Reject(() => DuelJournalCodec.Decode(broken), "corruption rejected");
@@ -92,14 +99,60 @@ internal static class DuelJournalTests
         {
             reader.ReadInt32();
             for (int i = 0; i < 5; i++) reader.ReadString();
+            reader.ReadInt32(); // v3 opening assist mask precedes the action count.
             int offset = (int)stream.Position;
             Buffer.BlockCopy(BitConverter.GetBytes(int.MaxValue), 0, excessive, offset, 4);
         }
         Reject(() => DuelJournalCodec.Decode(Seal(excessive)), "oversized count rejected before allocation");
         // No draws/actions is a legitimate save at the first stable action point.
-        var first = Example(); first.Actions.Clear(); first.Draws.Clear(); first.Points.RemoveRange(0, 2);
+        var first = Example(); first.Actions.Clear(); first.ActionAssists.Clear(); first.Draws.Clear(); first.Points.RemoveRange(0, 2);
         first.Points[0].DrawCount = 0;
         Check(DuelJournalCodec.Decode(DuelJournalCodec.Encode(first)).Draws.Count == 0, "zero draw checkpoint");
+        // Produced by the unmodified MHDL-02 production codec before v3 was
+        // introduced. This fixture has actions, random draws and checkpoints.
+        byte[] v2Fixture = Convert.FromBase64String("TUhETC0wMgqdAQAAAgAAAAUxLjAuMArmsbrprKVfMDAxLHZ2TXRMREZhS0pWMjhxYUNqU2Z0c1d1ekZxVFlYQ2NmTFhsQVJmUHFabzA9CnsiczAiOjEyM30Vc3RhdGU6546p5a626auU5YqbPTQ1AgAAAAIAAAAEAAAAAwAAABBDb21iYXQuZGxsOjEwMDowAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6tb8PRBDb21iYXQuZGxsOjEwMToxAQAAAPf///8VAAAAFAAAAAAAAAAAAAAAAAAAABBDb21iYXQuZGxsOjEwMjoyAgAAAAAAAAAAAAAAAAAAALfmR8AAAChB6tZ8PwMAAAABAAAAAQAAACxwNU43WkxqS3BZOERjaHUydXM5Y2VNc2pYK3ZnNXdzYmhNMlpWQlJob0k0PQIAAAACAAAALEZqWjZyTFo2U2dGOGphaXJsV2dzeXprSVkzZ1BjUlRkb0tEZ3hWWkV4OFE9BAAAAAMAAAAsc2ZKTjdqN09hMVByR1VlR3FxYXRSZ3YwcWRudGpDUm9CejBzLy91ZmZFST0DzLJXFhR7rFn7GTHqYpCN56VxSXwREw/JzgA1CeWD/A==");
+        var migrated = DuelJournalCodec.Decode(v2Fixture);
+        Check(migrated.Format == 3 && migrated.OpeningAssists == 0 &&
+            migrated.ActionAssists.SequenceEqual(new[] { 0, 0 }), "legacy v2 normalizes to explicit unassisted v3");
+        Check(migrated.Actions.SequenceEqual(original.Actions) && migrated.Draws.Count == 3 &&
+            migrated.Points.Last().Digest == original.Points.Last().Digest && migrated.FinalState == original.FinalState,
+            "legacy migration retains actions, RNG and strict target state");
+        byte[] rewritten = DuelJournalCodec.Encode(migrated);
+        Check(Encoding.ASCII.GetString(rewritten, 0, 8) == "MHDL-03\n", "migrated save re-encodes as v3");
+        migrated.Actions.Add(5); migrated.ActionAssists.Add((int)DuelAssist.Damage);
+        migrated.FinalState = "legacy continued";
+        migrated.Points.Add(new DuelPoint { Round = 5, DrawCount = 3, Digest = Digest(migrated.FinalState) });
+        var continued = DuelJournalCodec.Decode(DuelJournalCodec.Encode(migrated));
+        Check(continued.ActionAssists.SequenceEqual(new[] { 0, 0, (int)DuelAssist.Damage }) &&
+            continued.Points.Last().Round == 5, "migrated legacy journal accepts assisted continuation and second durable save");
+        byte[] wrongHeader = (byte[])v2Fixture.Clone(); wrongHeader[6] = (byte)'3';
+        Reject(() => DuelJournalCodec.Decode(wrongHeader), "v3 header with v2 payload accepted");
+        wrongHeader = (byte[])saved.Clone(); wrongHeader[6] = (byte)'2';
+        Reject(() => DuelJournalCodec.Decode(wrongHeader), "v2 header with v3 payload accepted");
+        bad = Example(); bad.OpeningAssists = 128;
+        Reject(() => DuelJournalCodec.Encode(bad), "unknown opening assist bit accepted");
+        bad = Example(); bad.ActionAssists[0] = -1;
+        Reject(() => DuelJournalCodec.Encode(bad), "negative action assist mask accepted");
+        bad = Example(); bad.OpeningAssists = (int)(DuelAssist.Damage | DuelAssist.ZeroDamage);
+        Reject(() => DuelJournalCodec.Encode(bad), "conflicting opening damage assists accepted");
+        bad = Example(); bad.ActionAssists[1] = (int)(DuelAssist.Damage | DuelAssist.ZeroDamage);
+        Reject(() => DuelJournalCodec.Encode(bad), "conflicting action damage assists accepted");
+        bad = Example(); bad.ActionAssists.RemoveAt(0);
+        Reject(() => DuelJournalCodec.Encode(bad), "action profile count mismatch accepted");
+        bad = Example(); bad.ActionAssists = null;
+        Reject(() => DuelJournalCodec.Encode(bad), "missing action profile list accepted");
+        // Re-sign invalid masks to exercise decode validation beyond checksum.
+        int openingOffset;
+        using (var stream = new MemoryStream(payload, false))
+        using (var reader = new BinaryReader(stream, Encoding.UTF8))
+        { reader.ReadInt32(); for (int i = 0; i < 5; i++) reader.ReadString(); openingOffset = (int)stream.Position; }
+        byte[] invalidOpening = (byte[])payload.Clone();
+        Buffer.BlockCopy(BitConverter.GetBytes(128), 0, invalidOpening, openingOffset, 4);
+        Reject(() => DuelJournalCodec.Decode(Seal(invalidOpening)), "checksum-valid unknown opening bit accepted on decode");
+        byte[] invalidAction = (byte[])payload.Clone();
+        int firstProfileOffset = openingOffset + 4 + 4 + original.Actions.Count * 4 + 4;
+        Buffer.BlockCopy(BitConverter.GetBytes((int)(DuelAssist.Damage | DuelAssist.ZeroDamage)), 0, invalidAction, firstProfileOffset, 4);
+        Reject(() => DuelJournalCodec.Decode(Seal(invalidAction)), "checksum-valid action conflict accepted on decode");
         string before = "3:hp\n2:104:buff3:a:b";
         string after = "3:hp\n1:94:buff3:a:c";
         string difference = DuelStateDifference.Compare(before, after);

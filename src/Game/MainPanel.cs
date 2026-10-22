@@ -552,7 +552,9 @@ namespace MortalHelper.Game
             if (sideMargin > .5f) GUILayout.Space(sideMargin);
             GUILayout.BeginVertical(GUIStyle.none, GUILayout.Width(viewportWidth), GUILayout.ExpandHeight(true));
 
-            if (!features) UiLabel("万象录辅助功能已暂停；已接入的功能不生效。", style.Description);
+            if (!features) UiLabel(AnytimeDuel.ApplyingRecordedAssists ?
+                "辅助已暂停；单挑当前行动按开始时设置完成，下次行动关闭辅助。" :
+                "万象录辅助功能已暂停。", style.Description);
             // Body width always reserves the scrollbar gutter. Hide its visual track
             // when content fits; showing/hiding it never changes text wrapping.
             scroll[page] = GUILayout.BeginScrollView(scroll[page], false, false, GUIStyle.none,
@@ -819,6 +821,7 @@ namespace MortalHelper.Game
 
         private void DuelSection()
         {
+            Note("单挑辅助（含总开关）从下一次行动生效；读取回合存档不会改动当前设置。");
             plugin.Options.DuelHealth.Value = DrawSwitchRow("主角生命不减少", plugin.Options.DuelHealth.Value,
                 "回合扣血与持续伤害归零；剧情强制改值与胜负保留。");
             plugin.Options.DuelStamina.Value = DrawSwitchRow("无限气力", plugin.Options.DuelStamina.Value,

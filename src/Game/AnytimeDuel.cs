@@ -36,7 +36,7 @@ namespace MortalHelper.Game
         private static Journal pending;
         private static byte[] opening, stagedOpening;
         private static string stagedSceneKey;
-        private static int pointIndex, drawIndex;
+        private static int pointIndex, drawIndex, roundAssists;
         private static float lastProgress;
         private static bool waiting, injecting, replaying, failed, sceneReady, finalVerified, returningTitle;
         private static string invalid;
@@ -56,17 +56,37 @@ namespace MortalHelper.Game
                 if (!waiting) return "请在双方结算结束且行动按钮出现后保存。";
                 if (SceneController.Instance == null || SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
                     return "场景仍在切换。";
-                if (HasAssist()) return "当前单挑辅助已开启，本场不支持回合存档。";
                 return null;
             }
         }
 
-        private static bool HasAssist()
+        private static int ConfiguredAssists
         {
-            var o = Plugin.Instance?.Options;
-            return o != null && (o.DuelHealth.Value || o.DuelStamina.Value || o.DuelDodge.Value ||
-                o.DuelDamage.Value || o.DuelZeroDamage.Value || o.DuelAlwaysHit.Value || o.DuelFirstStrike.Value);
+            get
+            {
+                var o = Plugin.Instance?.Options;
+                if (o == null || !Plugin.Active) return 0;
+                return (o.DuelHealth.Value ? (int)DuelAssist.Health : 0) |
+                    (o.DuelStamina.Value ? (int)DuelAssist.Stamina : 0) |
+                    (o.DuelDodge.Value ? (int)DuelAssist.Dodge : 0) |
+                    (o.DuelDamage.Value ? (int)DuelAssist.Damage : 0) |
+                    (o.DuelZeroDamage.Value ? (int)DuelAssist.ZeroDamage : 0) |
+                    (o.DuelAlwaysHit.Value ? (int)DuelAssist.AlwaysHit : 0) |
+                    (o.DuelFirstStrike.Value ? (int)DuelAssist.FirstStrike : 0);
+            }
         }
+
+        private static bool HasCurrentManager => manager != null && manager == CombatManager.Instance && journal != null &&
+            manager.gameObject.scene.name == "Combat" &&
+            PlayerStatManagerData.Instance != null && journal.SceneKey == PlayerStatManagerData.Instance.CurrentSceneKey;
+
+        // Recorded assists are the only mutations admitted through the recovery
+        // gate, and only for this verified duel instance. Never change preferences.
+        internal static bool ApplyingRecordedAssists => !failed && invalid == null && HasCurrentManager &&
+            Plugin.Instance != null && (Plugin.Instance.Gate.CanInteract ||
+                ((replaying || finalVerified) && Plugin.Instance.Gate.AwaitingNativeLoad));
+        internal static DuelAssist EffectiveAssists => failed ? DuelAssist.None :
+            (DuelAssist)(HasCurrentManager && invalid == null ? roundAssists : ConfiguredAssists);
 
         internal static void CaptureStart(string saveFile, object saved)
         {
@@ -209,7 +229,6 @@ namespace MortalHelper.Game
                 }
                 return;
             }
-            if (manager != null && !Replaying && HasAssist()) Invalidate("本场曾启用单挑辅助。请在新单挑中重新记录。");
             if (!Replaying) { UnlockInput(); return; }
             LockInput();
             // A stall, not total elapsed time: a long replay that keeps reaching
@@ -224,7 +243,7 @@ namespace MortalHelper.Game
         {
             manager = null; journal = null; pending = null; opening = null;
             stagedOpening = null; stagedSceneKey = null;
-            pointIndex = drawIndex = 0; waiting = injecting = replaying = failed = sceneReady = finalVerified = returningTitle = false;
+            pointIndex = drawIndex = roundAssists = 0; waiting = injecting = replaying = failed = sceneReady = finalVerified = returningTitle = false;
             lastProgress = 0f;
             invalid = null;
             UnlockInput();
@@ -242,13 +261,17 @@ namespace MortalHelper.Game
             {
                 failed = false;
                 replaying = false;
-                journal = new Journal { SceneKey = PlayerStatManagerData.Instance.CurrentSceneKey };
-                if (HasAssist()) Invalidate("本场开始时已开启单挑辅助。");
+                // A plain native load still owns the mutation gate during Start.
+                // Record what was actually permitted, not merely the preference.
+                roundAssists = Plugin.CanModifyProgress ? ConfiguredAssists : 0;
+                journal = new Journal { SceneKey = PlayerStatManagerData.Instance.CurrentSceneKey, OpeningAssists = roundAssists };
                 return;
             }
             journal = pending;
             pending = null;
             replaying = true;
+            roundAssists = journal.OpeningAssists;
+            Plugin.Instance?.Log("[Anytime] duel replay opening assists=" + roundAssists + "; object scene=" + manager.gameObject.scene.name);
             if (journal.SceneKey != PlayerStatManagerData.Instance.CurrentSceneKey)
             { Fail("战斗关卡与单挑存档不同。"); return; }
             RestoreOpeningFlags();
@@ -317,7 +340,7 @@ namespace MortalHelper.Game
                     journal.FinalState = state;
                     journal.Points.Add(new Point { Round = round, DrawCount = journal.Draws.Count, Digest = digest });
                     waiting = true;
-                    Plugin.Instance?.Log("[Anytime] duel checkpoint round=" + round + " draws=" + journal.Draws.Count + " actions=" + journal.Actions.Count);
+                    Plugin.Instance?.Log("[Anytime] duel checkpoint round=" + round + " draws=" + journal.Draws.Count + " actions=" + journal.Actions.Count + " assists=" + roundAssists);
                     if (journal.Points.Count > MaxActions + 1) Invalidate("本场行动日志达到上限。");
                     return;
                 }
@@ -342,7 +365,8 @@ namespace MortalHelper.Game
                 }
                 else
                 {
-                    int action = journal.Actions[pointIndex++];
+                    int action = journal.Actions[pointIndex];
+                    roundAssists = journal.ActionAssists[pointIndex++];
                     injecting = true;
                     try { manager.Action((CombatActionType)action); }
                     finally { injecting = false; }
@@ -395,7 +419,13 @@ namespace MortalHelper.Game
                 if (DuelAudit.Capture(manager) != journal.FinalState)
                     Invalidate("等待期间战斗数据已改变。");
                 if (journal.Actions.Count >= MaxActions) Invalidate("本场行动日志达到上限。");
-                if (invalid == null) journal.Actions.Add((int)action);
+                if (invalid == null)
+                {
+                    int configured = ConfiguredAssists;
+                    journal.Actions.Add((int)action);
+                    journal.ActionAssists.Add(configured);
+                    roundAssists = configured;
+                }
             }
             catch (Exception e) { Invalidate("无法核验行动前状态：" + e.GetBaseException().Message); }
             waiting = false;

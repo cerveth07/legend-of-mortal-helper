@@ -20,9 +20,18 @@ namespace MortalHelper.Game
         public string Digest;
     }
 
+    [Flags]
+    internal enum DuelAssist
+    {
+        None = 0, Health = 1, Stamina = 2, Dodge = 4, Damage = 8,
+        ZeroDamage = 16, AlwaysHit = 32, FirstStrike = 64
+    }
+
     internal sealed class DuelJournal
     {
-        public int Format = 2;
+        public int Format = 3;
+        public int OpeningAssists;
+        public List<int> ActionAssists = new List<int>();
         public string Client, SceneKey, NativeHash, RandomState, FinalState;
         public List<int> Actions = new List<int>();
         public List<DuelDraw> Draws = new List<DuelDraw>();
@@ -36,7 +45,7 @@ namespace MortalHelper.Game
         internal const int MaxFile = 32 * 1024 * 1024;
         internal const int MaxActions = 10000;
         internal const int MaxDraws = 1000000;
-        private static readonly byte[] Magic = Encoding.ASCII.GetBytes("MHDL-02\n");
+        private static readonly byte[] Magic = Encoding.ASCII.GetBytes("MHDL-03\n");
 
         internal static byte[] Encode(DuelJournal value)
         {
@@ -48,8 +57,11 @@ namespace MortalHelper.Game
                 writer.Write(value.Format);
                 writer.Write(value.Client); writer.Write(value.SceneKey); writer.Write(value.NativeHash);
                 writer.Write(value.RandomState); writer.Write(value.FinalState);
+                writer.Write(value.OpeningAssists);
                 writer.Write(value.Actions.Count);
                 foreach (int action in value.Actions) writer.Write(action);
+                writer.Write(value.ActionAssists.Count);
+                foreach (int assists in value.ActionAssists) writer.Write(assists);
                 writer.Write(value.Draws.Count);
                 foreach (var draw in value.Draws)
                 {
@@ -83,7 +95,8 @@ namespace MortalHelper.Game
                 byte[] header = reader.ReadBytes(Magic.Length);
                 if (Encoding.ASCII.GetString(header) == "MHDL-01\n")
                     throw new InvalidDataException("旧版单挑附档可能遗漏随机记录，无法保证完整恢复，请重新保存。");
-                if (!header.SequenceEqual(Magic)) throw new InvalidDataException("单挑附档头无效。");
+                bool legacy = Encoding.ASCII.GetString(header) == "MHDL-02\n";
+                if (!legacy && !header.SequenceEqual(Magic)) throw new InvalidDataException("单挑附档头无效。");
                 int length = reader.ReadInt32();
                 if (length <= 0 || length != bytes.Length - Magic.Length - 36)
                     throw new InvalidDataException("单挑附档长度无效。");
@@ -96,8 +109,18 @@ namespace MortalHelper.Game
                     var value = new DuelJournal { Format = fields.ReadInt32(),
                         Client = fields.ReadString(), SceneKey = fields.ReadString(), NativeHash = fields.ReadString(),
                         RandomState = fields.ReadString(), FinalState = fields.ReadString() };
+                    if (value.Format != (legacy ? 2 : 3))
+                        throw new InvalidDataException("单挑附档头与格式版本不一致。");
+                    if (!legacy) value.OpeningAssists = fields.ReadInt32();
                     int count = Count(fields, MaxActions, 4);
                     for (int i = 0; i < count; i++) value.Actions.Add(fields.ReadInt32());
+                    if (legacy)
+                        for (int i = 0; i < value.Actions.Count; i++) value.ActionAssists.Add(0);
+                    else
+                    {
+                        count = Count(fields, MaxActions, 4);
+                        for (int i = 0; i < count; i++) value.ActionAssists.Add(fields.ReadInt32());
+                    }
                     count = Count(fields, MaxDraws, 30);
                     for (int i = 0; i < count; i++) value.Draws.Add(new DuelDraw {
                         Site = fields.ReadString(), Kind = fields.ReadInt32(), A = fields.ReadInt32(),
@@ -108,6 +131,7 @@ namespace MortalHelper.Game
                         Round = fields.ReadInt32(), DrawCount = fields.ReadInt32(), Digest = fields.ReadString() });
                     if (payload.Position != payload.Length)
                         throw new InvalidDataException("单挑附档包含未识别内容。");
+                    value.Format = 3;
                     Validate(value);
                     return value;
                 }
@@ -124,13 +148,16 @@ namespace MortalHelper.Game
 
         internal static void Validate(DuelJournal value)
         {
-            if (value == null || value.Format != 2 || string.IsNullOrEmpty(value.Client) ||
+            if (value == null || value.Format != 3 || string.IsNullOrEmpty(value.Client) ||
                 string.IsNullOrEmpty(value.SceneKey) || string.IsNullOrEmpty(value.NativeHash) ||
                 string.IsNullOrEmpty(value.RandomState) || string.IsNullOrEmpty(value.FinalState) ||
-                value.Actions == null || value.Points == null || value.Draws == null ||
+                value.Actions == null || value.Points == null || value.Draws == null || value.ActionAssists == null ||
+                value.ActionAssists.Count != value.Actions.Count ||
                 value.Actions.Count > MaxActions || value.Draws.Count > MaxDraws ||
                 value.Points.Count != value.Actions.Count + 1)
                 throw new InvalidDataException("单挑记录结构不完整。");
+            ValidateAssistMask(value.OpeningAssists);
+            foreach (int assists in value.ActionAssists) ValidateAssistMask(assists);
             if (value.Actions.Any(action => action < 0 || action > 7))
                 throw new InvalidDataException("单挑行动类型无效。");
             int priorDraw = 0, priorRound = 0;
@@ -152,6 +179,15 @@ namespace MortalHelper.Game
                 if (draw.Kind == 0 && (draw.Floating < 0f || draw.Floating > 1f))
                     throw new InvalidDataException("单挑随机值超出范围。");
             }
+        }
+
+        internal static void ValidateAssistMask(int mask)
+        {
+            const int known = (int)(DuelAssist.Health | DuelAssist.Stamina | DuelAssist.Dodge | DuelAssist.Damage |
+                DuelAssist.ZeroDamage | DuelAssist.AlwaysHit | DuelAssist.FirstStrike);
+            if ((mask & ~known) != 0 ||
+                ((mask & (int)DuelAssist.Damage) != 0 && (mask & (int)DuelAssist.ZeroDamage) != 0))
+                throw new InvalidDataException("单挑辅助配置记录无效。");
         }
 
         private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
