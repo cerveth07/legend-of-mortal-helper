@@ -141,6 +141,10 @@ namespace MortalHelper.Game
                 AnytimeNative.SettleSlot(slot, path);
                 if (File.Exists(JournalFor(path)))
                     throw new InvalidDataException("此槽位有上次未完成的存档事务；请先读取该槽位让插件自动恢复。");
+                // A slot with no native file cannot own any companion. Move them
+                // aside so the "-required without sidecar" check below cannot
+                // block this slot forever, and keep them for manual recovery.
+                if (!File.Exists(path)) AnytimeNative.QuarantineOrphans(path);
                 // Legacy 0.1.x interruption markers carry no journal, so the only
                 // safe answer is to stop. They are only meaningful while a native
                 // file exists: with no .dat there is nothing that could be torn.

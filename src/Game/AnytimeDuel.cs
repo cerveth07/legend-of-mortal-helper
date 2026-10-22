@@ -131,7 +131,7 @@ namespace MortalHelper.Game
                 AnytimeNative.SettleSlot(slot, path);
                 if (SlotTransaction.Exists(SlotTransaction.JournalFor(path)))
                     throw new IOException("此槽位有尚未处理的存档事务，请先读取该槽位让插件自动恢复。");
-                if (!File.Exists(path)) AnytimeNative.PurgeOrphans(path);
+                if (!File.Exists(path)) AnytimeNative.QuarantineOrphans(path);
                 if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
                     File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending") ||
                     (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha")) ||

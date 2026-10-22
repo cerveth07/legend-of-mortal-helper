@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using HarmonyLib;
 using Mortal.Core;
@@ -131,7 +133,7 @@ namespace MortalHelper.Game
                     SaveFailed("此槽位有上次未完成的存档事务；请先读取该槽位让插件自动恢复。");
                     return false;
                 }
-                if (!File.Exists(path)) PurgeOrphans(path);
+                if (!File.Exists(path)) QuarantineOrphans(path);
                 if (!HasCompanion(path)) return true;
                 supersedeTransaction = SlotTransaction.Begin(SlotTransaction.JournalFor(path), "supersede", new[] {
                     path, path + ".mha", path + ".mha-required", path + ".mhduel", path + ".mhduel-required"
@@ -254,35 +256,94 @@ namespace MortalHelper.Game
             try { Plugin.Instance.Log("[Anytime] " + message); } catch (Exception) { }
         }
 
-        // Removes companion files left on a slot that has no native file at all.
-        // Such companions cannot describe anything, so keeping them would only
-        // block the next save with a "-required without sidecar" error. The old
-        // .mha-rollback copies are deliberately kept: with no .dat present they
-        // may be the only surviving copy of a save, and deleting them would be
-        // exactly the data loss this journal exists to prevent.
-        internal static void PurgeOrphans(string path)
+        // Companions that cannot belong to the current slot are moved aside instead
+        // of deleted. They are the only copy of an experimental record, and an
+        // accidental delete would otherwise destroy it silently. Moving keeps them
+        // out of the load path and leaves a coherent set for manual recovery.
+        internal static void QuarantineOrphans(string path)
         {
             if (string.IsNullOrEmpty(path) || File.Exists(path)) return;
-            DeleteIfExists(path + ".mha");
-            DeleteIfExists(path + ".mha-required");
-            DeleteIfExists(path + ".mhduel");
-            DeleteIfExists(path + ".mhduel-required");
-            DeleteIfExists(path + ".mha-pending");
-            DeleteIfExists(path + ".mhduel-pending");
+            var names = new List<string>();
+            foreach (string suffix in CompanionSuffixes)
+                if (File.Exists(path + suffix)) names.Add(Path.GetFileName(path + suffix));
+            if (names.Count == 0) return;
+            Preserve(Path.GetDirectoryName(path), names, "孤立附档");
         }
 
-        // Called after the game deleted a slot: the companions are now orphans.
+        // Called after the game deleted a slot.
         internal static void ForgetSlotFiles(string slot)
         {
             if (!Numbered(slot)) return;
             string path = PathFor(slot);
             if (string.IsNullOrEmpty(path) || File.Exists(path)) return;
-            PurgeOrphans(path);
             string journal = SlotTransaction.JournalFor(path);
-            if (!SlotTransaction.Exists(journal)) return;
-            var transaction = SlotTransaction.Read(journal);
-            if (transaction != null) transaction.Complete();
-            else DeleteIfExists(journal);
+            if (!SlotTransaction.Exists(journal))
+            {
+                QuarantineOrphans(path);
+                return;
+            }
+            SlotTransaction transaction = null;
+            try { transaction = SlotTransaction.Read(journal); }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
+            if (transaction != null && SlotTransaction.CanDiscardBackups(transaction.State))
+            {
+                // The transaction already reached a decided end, so only its own
+                // copies remain and nothing recoverable is lost by cleanup.
+                transaction.Complete();
+                return;
+            }
+            // Prepared, broken or unreadable: the journal's backups may hold the
+            // only intact copy of this slot. Nothing is deleted.
+            var names = new List<string>();
+            try
+            {
+                string directory = Path.GetDirectoryName(journal);
+                names.Add(Path.GetFileName(journal));
+                foreach (string candidate in Directory.GetFiles(directory, Path.GetFileName(journal) + ".b*"))
+                    names.Add(Path.GetFileName(candidate));
+            }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
+            foreach (string suffix in CompanionSuffixes)
+                if (File.Exists(path + suffix)) names.Add(Path.GetFileName(path + suffix));
+            Preserve(Path.GetDirectoryName(path), names, "未结算的存档事务");
+        }
+
+        private static readonly string[] CompanionSuffixes = {
+            ".mha", ".mha-required", ".mhduel", ".mhduel-required", ".mha-pending", ".mhduel-pending"
+        };
+
+        // Moves a coherent set of files into one quarantine folder, keeping their
+        // original names so a journal and its .bN backups still line up.
+        private static void Preserve(string directory, List<string> names, string why)
+        {
+            if (string.IsNullOrEmpty(directory) || names.Count == 0) return;
+            string folder = QuarantineFolder(directory);
+            int moved = 0;
+            foreach (string name in names)
+            {
+                try
+                {
+                    string source = Path.Combine(directory, name);
+                    if (!File.Exists(source)) continue;
+                    File.Move(source, Path.Combine(folder, name));
+                    moved++;
+                }
+                catch (Exception error) { Plugin.Instance?.Report(error); }
+            }
+            if (moved == 0) { try { Directory.Delete(folder); } catch (Exception) { } return; }
+            Report("已保留 " + moved + " 个" + why + "文件到 " + folder + "，未删除任何备份。");
+        }
+
+        private static string QuarantineFolder(string directory)
+        {
+            string root = Path.Combine(directory, "mh-quarantine");
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" +
+                (DateTime.UtcNow.Ticks % 10000L).ToString(CultureInfo.InvariantCulture);
+            string folder = Path.Combine(root, stamp);
+            for (int index = 2; Directory.Exists(folder); index++)
+                folder = Path.Combine(root, stamp + "-" + index.ToString(CultureInfo.InvariantCulture));
+            Directory.CreateDirectory(folder);
+            return folder;
         }
 
         internal static void BeginLoad(SaveSystem save, out string previous)

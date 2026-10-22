@@ -56,18 +56,24 @@ namespace MortalHelper.Game
         }
 
         // A numbered load whose scene never arrives would otherwise hold the
-        // recovery lock forever, blocking every save and every speed change.
+        // recovery lock in NativeLoading forever. The lock is not "released" here:
+        // an unfinished load cannot be certified, so the gate moves to Failed and
+        // only a load that actually completes may return it to Idle.
         internal static void CheckStalled()
         {
-            if (!claimed || Plugin.Instance == null) return;
-            if (Plugin.Instance.Gate.Phase != Core.RecoveryPhase.NativeLoading) { claimed = false; return; }
+            if (!claimed || Plugin.Instance == null) { claimed = false; return; }
+            if (!Plugin.Instance.Gate.AwaitingNativeLoad) { claimed = false; return; }
             var controller = SceneController.Instance;
             if (controller != null && (controller.IsLoading || controller.IsPrepare)) return;
             if (Time.unscaledTime - beganAt < StallSeconds) return;
             claimed = false;
-            Plugin.Instance.Gate.Fail("原生存档场景加载在 " + (int)StallSeconds +
-                " 秒内没有完成；已解除恢复锁，请重新读取存档。");
-            Plugin.Instance.Status = "原生存档未完成加载；请重新读取存档。";
+            string reason = "原生存档场景加载在 " + (int)StallSeconds +
+                " 秒内没有完成，当前游戏状态无法确认。操作保持锁定；请重新读取一个有效的原生存档来解除锁定。";
+            Plugin.Instance.Gate.NativeLoadAborted(reason);
+            if (Plugin.Instance.Panel != null) Plugin.Instance.Panel.Visible = true;
+            Plugin.Instance.Status = reason;
+            try { Plugin.Instance.Log("[Anytime] native load stalled; gate=failed (lock retained)"); }
+            catch (Exception) { }
         }
 
         internal static IEnumerator ObserveScene(IEnumerator native, string scene)

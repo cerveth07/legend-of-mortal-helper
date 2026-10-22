@@ -80,6 +80,14 @@ namespace MortalHelper.Core
             return !string.IsNullOrEmpty(journalPath) && File.Exists(journalPath);
         }
 
+        // Only a decided transaction may have its backups removed. A prepared or
+        // broken one still describes a slot whose current files cannot be trusted,
+        // so its backups may be the only intact copy left.
+        public static bool CanDiscardBackups(SlotTransactionState state)
+        {
+            return state == SlotTransactionState.Committed || state == SlotTransactionState.RolledBack;
+        }
+
         public static string HashFile(string path)
         {
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))

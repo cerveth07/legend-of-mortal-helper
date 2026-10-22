@@ -81,18 +81,23 @@ class SafetyWiringTests(unittest.TestCase):
 
     def test_settled_journal_finishes_forward_only_for_a_verified_replacement(self):
         native = read("src/Game/AnytimeNative.cs")
-        settle = between(native, "internal static void SettleSlot(", "internal static void PurgeOrphans(")
+        settle = between(native, "internal static void SettleSlot(", "internal static void QuarantineOrphans(")
         self.assertIn("transaction.ReplacementHash", settle)
         self.assertIn("SlotTransaction.HashFile(path) == transaction.ReplacementHash", settle)
         self.assertLess(settle.index("if (forward)"), settle.index("transaction.Rollback()"))
         self.assertIn("SlotTransactionState.Broken", settle)
 
-    def test_slot_delete_retires_the_companions(self):
+    def test_slot_delete_never_destroys_an_unsettled_transaction(self):
         native = read("src/Game/AnytimeNative.cs")
         self.assertIn('[HarmonyPatch(typeof(SaveSystem), "DeleteSaveData")]', native)
-        forget = between(native, "internal static void ForgetSlotFiles(", "internal static void BeginLoad(")
-        self.assertIn("PurgeOrphans(path)", forget)
-        self.assertIn("transaction.Complete()", forget)
+        forget = between(native, "internal static void ForgetSlotFiles(", "private static readonly string[] CompanionSuffixes")
+        # Backups are only released when the transaction already reached a decided
+        # end. A prepared or broken journal still describes the only intact copy.
+        self.assertIn("SlotTransaction.CanDiscardBackups(transaction.State)", forget)
+        self.assertLess(forget.index("SlotTransaction.CanDiscardBackups(transaction.State)"),
+                        forget.index("transaction.Complete()"))
+        self.assertIn("Preserve(Path.GetDirectoryName(path)", forget)
+        self.assertNotIn("File.Delete", forget)
 
     def test_stale_companion_never_rejects_a_complete_native_save(self):
         story = read("src/Game/AnytimeStory.cs")
@@ -117,12 +122,16 @@ class SafetyWiringTests(unittest.TestCase):
         self.assertIn("SlotTransaction.Exists(SlotTransaction.JournalFor(path))", native)
         self.assertIn("if (File.Exists(JournalFor(path)))", story)
 
-    def test_orphan_companions_are_purged_instead_of_blocking_saves(self):
+    def test_orphan_companions_are_moved_aside_not_deleted(self):
         native = read("src/Game/AnytimeNative.cs")
-        purge = between(native, "internal static void PurgeOrphans(", "internal static void ForgetSlotFiles(")
-        self.assertIn("|| File.Exists(path)) return;", purge)
-        for suffix in (".mha", ".mha-required", ".mhduel", ".mhduel-required"):
-            self.assertIn(suffix, purge)
+        orphans = between(native, "internal static void QuarantineOrphans(", "internal static void ForgetSlotFiles(")
+        self.assertIn("|| File.Exists(path)) return;", orphans)
+        self.assertIn("Preserve(", orphans)
+        self.assertNotIn("File.Delete", orphans)
+        self.assertIn(".mha-required", read("src/Game/AnytimeNative.cs"))
+        preserve = between(native, "private static void Preserve(", "private static string QuarantineFolder(")
+        self.assertIn("File.Move(", preserve)
+        self.assertNotIn("File.Delete", preserve)
 
     def test_replay_keys_never_share_an_unknown_placeholder(self):
         recovery = read("src/Game/StoryRecovery.cs")
@@ -139,12 +148,30 @@ class SafetyWiringTests(unittest.TestCase):
 
     def test_legacy_rollback_copies_are_never_deleted(self):
         native = read("src/Game/AnytimeNative.cs")
-        purge = between(native, "internal static void PurgeOrphans(", "internal static void ForgetSlotFiles(")
-        # With no .dat present these copies may be the only surviving save.
-        self.assertNotIn('DeleteIfExists(path + ".mha-rollback")', purge)
-        self.assertNotIn('DeleteIfExists(path + ".mha.rollback")', purge)
+        # The companion list drives what may be moved; the legacy copies are not in it.
+        self.assertNotIn(".mha-rollback", native)
+        self.assertNotIn(".mha.rollback", native)
         story = read("src/Game/AnytimeStory.cs")
         self.assertIn("请勿手动删除", story)
+
+    def test_a_stalled_load_keeps_the_lock_and_still_has_a_way_out(self):
+        boundary = read("src/Game/NativeLoadBoundary.cs")
+        stalled = between(boundary, "internal static void CheckStalled()", "internal static IEnumerator ObserveScene(")
+        self.assertIn("Gate.NativeLoadAborted(", stalled)
+        self.assertNotIn("NativeLoadCompleted", stalled)
+        # The message must not claim the lock was released when it was not.
+        self.assertNotIn("已解除恢复锁", stalled)
+        self.assertIn("保持锁定", stalled)
+        replay = read("src/Game/StoryReplay.cs")
+        complete = between(replay, "internal static void OnNativeLoadCompleted()", "internal sealed class Host")
+        self.assertIn("Gate.AwaitingNativeLoad", complete)
+        self.assertLess(complete.index("AwaitingNativeLoad"), complete.index("NativeLoadCompleted()"))
+
+    def test_input_lock_is_reasserted_for_a_new_scene(self):
+        lock_source = read("src/Game/InteractionLock.cs")
+        self.assertIn("internal static void Refresh()", lock_source)
+        self.assertIn("ReferenceEquals(system, lockedSystem)", lock_source)
+        self.assertIn("InteractionLock.Refresh();", read("src/Game/Plugin.cs"))
 
     def test_manual_speed_change_is_gated(self):
         plugin = read("src/Game/Plugin.cs")

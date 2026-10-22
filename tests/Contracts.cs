@@ -310,7 +310,40 @@ internal static class Contracts
         }
         finally { if(Directory.Exists(folder))Directory.Delete(folder,true); }
         TransactionChecks();
+        LoadGateChecks();
         Console.WriteLine("PASS: "+passed+" contract checks; no Unity runtime or player save accessed.");
+    }
+
+    // The recovery gate is the only thing standing between an unfinished native
+    // load and a save written on top of a half-applied state. A timeout must not
+    // become a fake success, and there must still be a real way out.
+    private static void LoadGateChecks()
+    {
+        var gate = new OperationGate();
+        Check(gate.CanInteract, "a fresh gate blocked interaction");
+        gate.NativeLoadStarted();
+        Check(gate.AwaitingNativeLoad && !gate.CanInteract, "native load did not close the gate");
+        gate.NativeLoadAborted("stalled");
+        Check(gate.Phase == RecoveryPhase.Failed, "stalled load did not end in Failed");
+        Check(!gate.CanInteract, "stalled load reopened the gate without finishing");
+        Check(gate.Reason == "stalled", "stalled load lost its reason");
+        Reject(() => gate.NativeLoadAborted("again"), "aborting a load that is not running was allowed");
+        Reject(() => gate.NativeLoadCompleted(), "a load that never started was certified complete");
+        // The only way out of Failed is a load that actually completes.
+        gate.NativeLoadStarted();
+        Check(gate.AwaitingNativeLoad, "a load could not start from Failed");
+        gate.NativeLoadCompleted();
+        Check(gate.CanInteract && gate.Phase == RecoveryPhase.Idle, "a completed load did not reopen the gate");
+        Reject(() => gate.NativeLoadCompleted(), "completing twice was allowed");
+
+        Check(SlotTransaction.CanDiscardBackups(SlotTransactionState.Committed),
+            "committed transaction backups were treated as unrecoverable");
+        Check(SlotTransaction.CanDiscardBackups(SlotTransactionState.RolledBack),
+            "rolled back transaction backups were treated as unrecoverable");
+        Check(!SlotTransaction.CanDiscardBackups(SlotTransactionState.Prepared),
+            "prepared transaction backups were treated as disposable");
+        Check(!SlotTransaction.CanDiscardBackups(SlotTransactionState.Broken),
+            "broken transaction backups were treated as disposable");
     }
 
     private sealed class Fixture
@@ -336,8 +369,7 @@ internal static class Contracts
 
     // File-level fault injection over a private temp directory. Every case
     // checks the bytes on disk, not just that an exception was thrown.
-    private static void TransactionChecks()
-    {
+    private static void TransactionChecks()    {
         string root = Path.Combine(Path.GetTempPath(), "mhtx-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(root);
         try

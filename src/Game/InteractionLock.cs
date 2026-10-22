@@ -16,6 +16,7 @@ namespace MortalHelper.Game
     {
         private static readonly List<BaseInputModule> Disabled = new List<BaseInputModule>();
         private static InteractionHold holds;
+        private static EventSystem lockedSystem;
 
         internal static bool Held => holds != InteractionHold.None;
 
@@ -24,25 +25,43 @@ namespace MortalHelper.Game
             InteractionHold next = active ? holds | owner : holds & ~owner;
             if (next == holds) return;
             holds = next;
-            var system = EventSystem.current;
-            if (system == null) return;
-            if (holds != InteractionHold.None)
-            {
-                foreach (var module in system.GetComponents<BaseInputModule>())
-                    if (module.enabled) { if (!Disabled.Contains(module)) Disabled.Add(module); module.enabled = false; }
-                return;
-            }
-            foreach (var module in Disabled) if (module != null) module.enabled = true;
-            Disabled.Clear();
+            if (holds == InteractionHold.None) { Release(); return; }
+            Refresh();
         }
 
-        // Losing the EventSystem while holding the lock would otherwise leave the
-        // stale list behind for the next scene.
-        internal static void Reset()
+        // Re-asserts the lock while it is held. A scene that finishes loading
+        // during a replay creates a fresh EventSystem whose input modules start
+        // enabled; without this the player could click through a restore that is
+        // still in progress. It also re-disables a module the game re-enabled.
+        internal static void Refresh()
+        {
+            if (holds == InteractionHold.None) return;
+            var system = EventSystem.current;
+            if (system == null) return;
+            if (!ReferenceEquals(system, lockedSystem))
+            {
+                // Modules from the previous scene are already gone, so there is
+                // nothing to restore there; track the live ones instead.
+                Disabled.Clear();
+                lockedSystem = system;
+            }
+            foreach (var module in system.GetComponents<BaseInputModule>())
+                if (module.enabled) { if (!Disabled.Contains(module)) Disabled.Add(module); module.enabled = false; }
+        }
+
+        private static void Release()
         {
             foreach (var module in Disabled) if (module != null) module.enabled = true;
             Disabled.Clear();
+            lockedSystem = null;
+        }
+
+        // Dropping the lock state without holding a scene: used when the plugin is
+        // torn down or the game returns to the title.
+        internal static void Reset()
+        {
             holds = InteractionHold.None;
+            Release();
         }
     }
 }
