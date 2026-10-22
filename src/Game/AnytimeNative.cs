@@ -116,10 +116,18 @@ namespace MortalHelper.Game
             {
                 AnytimeStory.AfterNativeSave(path, data);
                 // A successful story commit supersedes a prior duel record.
-                if (AnytimeStory.NativeSaveSucceeded(path, data)) DeleteIfExists(path + ".mhduel");
+                if (AnytimeStory.NativeSaveSucceeded(path, data))
+                {
+                    DeleteIfExists(path + ".mhduel");
+                    DeleteIfExists(path + ".mhduel-required");
+                }
             }
             else if (AnytimeStory.ForgetAfterOrdinarySave(path, data))
+            {
+                // A verified ordinary save supersedes old duel replay state.
                 DeleteIfExists(path + ".mhduel");
+                DeleteIfExists(path + ".mhduel-required");
+            }
         }
 
         internal static void EndSave(SaveScope previous)
