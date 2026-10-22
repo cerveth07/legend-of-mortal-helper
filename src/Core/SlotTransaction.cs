@@ -204,13 +204,6 @@ namespace MortalHelper.Core
             TryDelete(JournalPath + ".tmp");
         }
 
-        // Abandons a transaction that never wrote anything. Only safe before the
-        // caller has modified a participant, so it never restores or deletes.
-        public void Discard()
-        {
-            Complete();
-        }
-
         public SlotRollbackReport Rollback()
         {
             var report = new SlotRollbackReport();
