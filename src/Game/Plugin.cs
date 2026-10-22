@@ -111,6 +111,12 @@ namespace MortalHelper.Game
         // fight the game's own pause and slow-motion handling.
         internal void ApplySpeed(float value)
         {
+            // Manual time scaling would perturb replay wait and action ordering.
+            if (!Gate.CanInteract)
+            {
+                Status = "恢复期间不能调整游戏速度。";
+                return;
+            }
             value = Mathf.Clamp(value, 0.25f, 5f);
             Options.Speed.Value = value;
             Time.timeScale = value;
