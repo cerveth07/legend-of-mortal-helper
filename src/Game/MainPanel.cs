@@ -1377,7 +1377,10 @@ namespace MortalHelper.Game
             badgeTitleStyle.font = style.BadgeFont ?? style.UiFont;
             badgeTitleStyle.fontSize = Mathf.Clamp(Mathf.FloorToInt(titleH / 4f), 10, 20);
             badgeTitleStyle.normal.textColor = new Color(.92f, .88f, .79f, 1f);
-            UiLabel(new Rect(badge.x + 2f * s, titleY, badge.width - 4f * s, titleH), "萬\n象\n錄", badgeTitleStyle);
+            // The badge is the fixed brand scroll: it always reads 萬象錄 in traditional
+            // characters, independent of the panel language toggle. Routing it through
+            // UiLabel converted 萬/錄 to 万/录 and turned the scroll into simplified text.
+            GUI.Label(new Rect(badge.x + 2f * s, titleY, badge.width - 4f * s, titleH), "萬\n象\n錄", badgeTitleStyle);
             float tagWidth = Mathf.Max(1f, badge.width - 14f * s);
             Rect tagRect = new Rect(badge.x + (badge.width - tagWidth) * .5f, footerY, tagWidth, footerH);
             GUI.DrawTexture(new Rect(badge.x + 10f * s, footerY - 3f * s, Mathf.Max(1f, badge.width - 20f * s), line), style.AccentSoft);
