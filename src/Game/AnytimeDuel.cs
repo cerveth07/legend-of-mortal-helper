@@ -382,6 +382,7 @@ namespace MortalHelper.Game
         private static void Fail(string reason)
         {
             if (failed) return;
+            string detail = Describe(reason);
             failed = true;
             replaying = false;
             pending = null;
@@ -392,6 +393,26 @@ namespace MortalHelper.Game
             LockInput();
             Plugin.Instance?.Gate.Fail("单挑恢复中止：" + reason);
             Report("单挑恢复中止：" + reason + "。请重新读取存档。");
+            try { Plugin.Instance?.Log("[Anytime] " + detail); } catch (Exception) { }
+        }
+        // Names the round, the action and random tape positions, and whether the
+        // live state differed from the recorded digest. Missing data is reported
+        // as absent rather than defaulted into a value that could look valid.
+        private static string Describe(string reason)
+        {
+            var text = new StringBuilder("duel recovery failed: reason=").Append(reason);
+            text.Append("; scene-key=").Append(PlayerStatManagerData.Instance?.CurrentSceneKey ?? "<none>");
+            text.Append("; round=").Append(manager == null ? "<none>" : manager.CurrentRounds.ToString());
+            text.Append("; recorded-scene-key=").Append(journal == null ? "<none>" : journal.SceneKey ?? "<none>");
+            text.Append("; points=").Append(pointIndex).Append('/').Append(journal == null ? -1 : journal.Points.Count);
+            text.Append("; actions=").Append(journal == null ? -1 : journal.Actions.Count);
+            text.Append("; draws=").Append(drawIndex).Append('/').Append(journal == null ? -1 : journal.Draws.Count);
+            text.Append("; last-action=").Append(journal != null && pointIndex > 0 && pointIndex - 1 < journal.Actions.Count
+                ? ((CombatActionType)journal.Actions[pointIndex - 1]).ToString() : "<none>");
+            text.Append("; waiting=").Append(waiting);
+            text.Append("; injecting=").Append(injecting);
+            text.Append("; locked-inputs=").Append(LockedInputs.Count);
+            return text.ToString();
         }
 
         private static void Report(string message)

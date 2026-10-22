@@ -68,7 +68,12 @@ namespace MortalHelper.Game
             baseline = json;
             scene = active;
             client = "lom:" + Application.version;
-            script = string.IsNullOrEmpty(HintAdapter.ScriptName) ? "unknown" : HintAdapter.ScriptName;
+            // A checkpoint without a script name cannot produce reproducible
+            // replay keys, so it is refused instead of being recorded under a
+            // placeholder that would later match an unrelated script.
+            if (!ScriptKnown)
+            { Status = "当前剧情脚本名不可用，无法记录可重放的检查点。"; return false; }
+            script = HintAdapter.ScriptName;
             Events.Clear();
             scriptForDice = null; diceOrdinal = 0;
             Recording = true;
@@ -84,24 +89,32 @@ namespace MortalHelper.Game
 
         // Keys must be reproducible at replay time, so they are derived from the live
         // script name plus either the option text or the dice ordinal inside it.
+        // A missing script name is never folded into a shared placeholder: two
+        // different scripts would then produce identical keys and a recorded
+        // choice could match the wrong menu during replay.
+        internal static bool ScriptKnown => !string.IsNullOrEmpty(HintAdapter.ScriptName);
+
         internal static string ChoiceKey(string scriptName, string text)
         {
-            string script = string.IsNullOrEmpty(scriptName) ? "unknown" : scriptName;
+            if (string.IsNullOrEmpty(scriptName))
+                throw new InvalidDataException("当前剧情脚本名不可用，无法生成可靠的重放键。");
             string option = (text ?? "").Trim();
             if (option.Length > 160) option = option.Substring(0, 160);
-            return "C\u0001" + script + "\u0001" + option;
+            return "C\u0001" + scriptName + "\u0001" + option;
         }
 
         internal static string DiceKey(string scriptName, int ordinal)
         {
-            string script = string.IsNullOrEmpty(scriptName) ? "unknown" : scriptName;
-            return "D\u0001" + script + "\u0001" + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (string.IsNullOrEmpty(scriptName))
+                throw new InvalidDataException("当前剧情脚本名不可用，无法生成可靠的重放键。");
+            return "D\u0001" + scriptName + "\u0001" + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        internal static string CurrentScript => string.IsNullOrEmpty(HintAdapter.ScriptName) ? "unknown" : HintAdapter.ScriptName;
+        internal static string CurrentScript => HintAdapter.ScriptName ?? "";
 
         internal static void NoteDice(int value)
         {
+            if (!ScriptKnown) return;
             string script = CurrentScript;
             if (script != scriptForDice) { scriptForDice = script; diceOrdinal = 0; }
             Add(EventKind.Dice, DiceKey(script, ++diceOrdinal), value);
@@ -111,6 +124,7 @@ namespace MortalHelper.Game
         {
             // Option markers remain installed even when recording is off.
             // Never index the event list unless this exact click was added.
+            if (!ScriptKnown) return;
             if (Add(EventKind.Choice, ChoiceKey(CurrentScript, text), 1) && !string.IsNullOrEmpty(text))
                 Events[Events.Count - 1].Data = text.Length > 200 ? text.Substring(0, 200) : text;
         }

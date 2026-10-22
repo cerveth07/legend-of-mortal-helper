@@ -143,9 +143,10 @@ namespace MortalHelper.Game
                 if (File.Exists(JournalFor(path)))
                     throw new InvalidDataException("此槽位有上次未完成的存档事务；请先读取该槽位让插件自动恢复。");
                 // Legacy 0.1.x interruption markers carry no journal, so the only
-                // safe answer is to stop and keep them for manual recovery.
-                if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
-                    File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending"))
+                // safe answer is to stop. They are only meaningful while a native
+                // file exists: with no .dat there is nothing that could be torn.
+                bool nativeExists = File.Exists(path);
+                if (nativeExists && (File.Exists(path + ".mha-pending") || File.Exists(path + ".mhduel-pending")))
                     throw new InvalidDataException("此槽位有上一版本中断的存档记录，请先恢复备份。");
                 if (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha"))
                     throw new InvalidDataException("此槽位缺少必需的剧情附档，请先恢复完整备份。");
@@ -271,9 +272,10 @@ namespace MortalHelper.Game
             if (save == null) return;
             string path = PathFor(slot);
             if (string.IsNullOrEmpty(path)) return;
-            if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
-                File.Exists(path + ".mha.rollback"))
+            if (File.Exists(path + ".mha-pending"))
                 throw new InvalidDataException("此槽位的剧情存档中断；请从备份恢复后再读档。");
+            if (File.Exists(path + ".mha-rollback") || File.Exists(path + ".mha.rollback"))
+                Report("此槽位仍保留上一版本的 .mha-rollback 备份；读取不依赖它，请勿手动删除。");
             if (!File.Exists(path + ".mha"))
             {
                 if (!File.Exists(path + ".mha-required")) return;
@@ -518,10 +520,43 @@ namespace MortalHelper.Game
         }
         private static void Fail(string reason)
         {
+            // Describe before clearing playback, so the report names the exact
+            // position instead of only the symptom.
+            string detail = Describe(reason);
             Failed = true; Failure = reason; playback = null; LockInput();
             Plugin.Instance?.Gate.Fail("剧情存档恢复失败：" + reason);
             if (Plugin.Instance != null) Plugin.Instance.Status = "剧情恢复失败：" + reason + "；请重新读取原生存档。";
+            try { Plugin.Instance?.Log("[Anytime] " + detail); } catch (Exception) { }
         }
+        // Diagnostics deliberately spell out "none" for an unavailable value and
+        // never substitute a default that could be mistaken for a match.
+        private static string Describe(string reason)
+        {
+            var text = new StringBuilder("story recovery failed: reason=").Append(reason);
+            text.Append("; scene=").Append(scene ?? "<none>");
+            text.Append("; script=").Append(script ?? "<none>");
+            text.Append("; live-script=").Append(PlayerStatManagerData.Instance?.CurrentStoryScript ?? "<none>");
+            if (playback != null)
+            {
+                text.Append("; target=").Append(playback.WaitKind).Append(':').Append(Short(playback.WaitKey));
+                text.Append("; progress=").Append(cursor).Append('/').Append(playback.Events.Length);
+                text.Append("; last-replayed=").Append(cursor > 0 ? Event(playback.Events[cursor - 1]) : "<none>");
+                text.Append("; failing=").Append(cursor < playback.Events.Length ? Event(playback.Events[cursor]) : "<recorded end>");
+                text.Append("; expected-bytes=").Append(playback.Expected == null ? "<none>" : playback.Expected.Length.ToString());
+            }
+            else text.Append("; progress=<no active replay>");
+            text.Append("; waits=").Append(WaitTokens.Count);
+            if (WaitTokens.Count == 1) text.Append('(').Append(WaitKinds[0]).Append(':').Append(Short(WaitKeys[0])).Append(')');
+            text.Append("; pending-slot=").Append(pendingSlot ?? "<none>");
+            text.Append("; transaction=").Append(pendingTransaction == null ? "<none>" : pendingTransaction.State.ToString());
+            if (blockedReason != null) text.Append("; rollback-blocked=").Append(blockedReason);
+            text.Append("; locked-inputs=").Append(LockedInputs.Count);
+            return text.ToString();
+        }
+        private static string Event(AnytimeStoryEvent entry) =>
+            entry == null ? "<null>" : entry.Kind + ":" + Short(entry.Key);
+        private static string Short(string digest) =>
+            string.IsNullOrEmpty(digest) ? "<empty>" : digest.Substring(0, Math.Min(8, digest.Length));
         private static void AbortReplay(string reason)
         {
             Fail(reason);

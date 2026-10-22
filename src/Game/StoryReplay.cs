@@ -252,6 +252,7 @@ namespace MortalHelper.Game
         {
             if (controller == null || !controller.Replaying || PendingDice.HasValue) return;
             if (controller.NextEvent == null || controller.NextEvent.Kind != EventKind.Dice) return;
+            if (!StoryRecovery.ScriptKnown) { Stop("无法确定当前剧情脚本名，重放已中止。"); return; }
             string script = StoryRecovery.CurrentScript;
             if (script != diceScript) { diceScript = script; diceOrdinal = 0; }
             string key = StoryRecovery.DiceKey(script, diceOrdinal + 1);
@@ -299,6 +300,7 @@ namespace MortalHelper.Game
                 return;
             }
             var buttons = menu.GetComponentsInChildren<NormalOptionButton>(false);
+            if (!StoryRecovery.ScriptKnown) { Stop("无法确定当前剧情脚本名，重放已中止。"); return; }
             var fingerprint = new StringBuilder(StoryRecovery.CurrentScript).Append(':')
                 .Append(menu.GetInstanceID());
             Button match = null;

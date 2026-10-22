@@ -124,6 +124,28 @@ class SafetyWiringTests(unittest.TestCase):
         for suffix in (".mha", ".mha-required", ".mhduel", ".mhduel-required"):
             self.assertIn(suffix, purge)
 
+    def test_replay_keys_never_share_an_unknown_placeholder(self):
+        recovery = read("src/Game/StoryRecovery.cs")
+        # The placeholder may still be named in explanatory comments, but no code
+        # path may substitute it for a missing script name.
+        self.assertNotIn('? "unknown" :', recovery)
+        self.assertNotIn('"unknown";', recovery)
+        for builder in ("internal static string ChoiceKey(", "internal static string DiceKey("):
+            body = between(recovery, builder, "}")
+            self.assertIn("if (string.IsNullOrEmpty(scriptName))", body)
+            self.assertIn("throw new InvalidDataException(", body)
+        replay = read("src/Game/StoryReplay.cs")
+        self.assertEqual(replay.count("if (!StoryRecovery.ScriptKnown)"), 2)
+
+    def test_legacy_rollback_copies_are_never_deleted(self):
+        native = read("src/Game/AnytimeNative.cs")
+        purge = between(native, "internal static void PurgeOrphans(", "internal static void ForgetSlotFiles(")
+        # With no .dat present these copies may be the only surviving save.
+        self.assertNotIn('DeleteIfExists(path + ".mha-rollback")', purge)
+        self.assertNotIn('DeleteIfExists(path + ".mha.rollback")', purge)
+        story = read("src/Game/AnytimeStory.cs")
+        self.assertIn("请勿手动删除", story)
+
     def test_manual_speed_change_is_gated(self):
         plugin = read("src/Game/Plugin.cs")
         method = between(plugin, "internal void ApplySpeed(", "private void SceneChanged(")

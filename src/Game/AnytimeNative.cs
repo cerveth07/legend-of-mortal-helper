@@ -242,12 +242,24 @@ namespace MortalHelper.Game
             var report = transaction.Rollback();
             if (!report.Complete)
                 throw new InvalidDataException("此槽位上次未完成的存档无法回退：" + report.Detail);
-            SaveFailed("上次未完成的存档已回退到保存前的状态：" + Path.GetFileName(path));
+            Report("上次未完成的存档已回退到保存前的状态：" + Path.GetFileName(path));
+        }
+
+        // Status and log only: settlement can happen during a load prefix, where
+        // forcing the mod panel open would fight the game's own loading screen.
+        private static void Report(string message)
+        {
+            if (Plugin.Instance == null) return;
+            Plugin.Instance.Status = message;
+            try { Plugin.Instance.Log("[Anytime] " + message); } catch (Exception) { }
         }
 
         // Removes companion files left on a slot that has no native file at all.
         // Such companions cannot describe anything, so keeping them would only
-        // block the next save with a "-required without sidecar" error.
+        // block the next save with a "-required without sidecar" error. The old
+        // .mha-rollback copies are deliberately kept: with no .dat present they
+        // may be the only surviving copy of a save, and deleting them would be
+        // exactly the data loss this journal exists to prevent.
         internal static void PurgeOrphans(string path)
         {
             if (string.IsNullOrEmpty(path) || File.Exists(path)) return;
@@ -257,8 +269,6 @@ namespace MortalHelper.Game
             DeleteIfExists(path + ".mhduel-required");
             DeleteIfExists(path + ".mha-pending");
             DeleteIfExists(path + ".mhduel-pending");
-            DeleteIfExists(path + ".mha-rollback");
-            DeleteIfExists(path + ".mha.rollback");
         }
 
         // Called after the game deleted a slot: the companions are now orphans.
