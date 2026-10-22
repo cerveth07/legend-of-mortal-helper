@@ -97,11 +97,11 @@ namespace MortalHelper.Game
                 if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract) return "恢复锁定期间不能存档。";
                 if (SceneController.Instance == null || SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
                     return "请等场景加载完成。";
+                if (invalid != null) return invalid;
                 if (SaveSystem.Instance == null || lua == null || string.IsNullOrEmpty(baseline) || baselineGlobals == null ||
                     !string.Equals(active, scene, StringComparison.Ordinal) ||
                     !string.Equals(script, PlayerStatManagerData.Instance?.CurrentStoryScript, StringComparison.Ordinal))
                     return "当前剧情尚未建立可重放的脚本起点。";
-                if (invalid != null) return invalid;
                 if (WaitTokens.Count != 1 || (WaitKinds[0] != "Say" && WaitKinds[0] != "Choose"))
                     return "请在对话或选项稳定等待时存档。";
                 if (DiceAdapter.Dialog != null && DiceAdapter.Dialog.isActiveAndEnabled)
@@ -450,7 +450,9 @@ namespace MortalHelper.Game
             var values = new List<AnytimeLuaValue>();
             foreach (TablePair pair in interpreter.Globals.Pairs)
             {
-                if (pair.Key.Type != DataType.String || pair.Key.String == "__mortal_anytime") continue;
+                // MoonSharp owns this registry table; it is not story state.
+                if (pair.Key.Type != DataType.String || pair.Key.String == "__mortal_anytime" ||
+                    pair.Key.String == "_MOONSHARP") continue;
                 DynValue value = pair.Value;
                 if (value.Type == DataType.Table && !StandardLuaTables.Contains(pair.Key.String))
                     throw new InvalidDataException("剧情包含暂不支持的 Lua 表变量：" + pair.Key.String);
@@ -562,9 +564,10 @@ namespace MortalHelper.Game
     internal static class AnytimeStoryEnvironmentPatch
     {
         private static readonly string Preamble = @"
-if not __mortal_anytime_wrapped and say and choose and choosetimer and wait and math and math.random then
+if not __mortal_anytime_wrapped and say and choose and wait and math and math.random then
   __mortal_anytime_wrapped = true
-  local raw_say, raw_choose, raw_timer, raw_wait, raw_random = say, choose, choosetimer, wait, math.random
+  local raw_say, raw_choose, raw_wait, raw_random = say, choose, wait, math.random
+  local raw_timer = choosetimer
   local function options_key(options)
     local pieces = {tostring(#options)}
     for i = 1, #options do
@@ -589,15 +592,17 @@ if not __mortal_anytime_wrapped and say and choose and choosetimer and wait and 
     __mortal_anytime.choose_done(key, answer)
     return answer
   end
-  choosetimer = function(options, duration, default)
-    local key = options_key(options) .. ':' .. tostring(duration) .. ':' .. tostring(default)
-    local selected = __mortal_anytime.before_choose(key, #options)
-    if selected > 0 then return selected end
-    local token = __mortal_anytime.enter_wait('Choose', key)
-    local answer = raw_timer(options, duration, default)
-    __mortal_anytime.leave_wait(token)
-    __mortal_anytime.choose_done(key, answer)
-    return answer
+  if raw_timer then
+    choosetimer = function(options, duration, default)
+      local key = options_key(options) .. ':' .. tostring(duration) .. ':' .. tostring(default)
+      local selected = __mortal_anytime.before_choose(key, #options)
+      if selected > 0 then return selected end
+      local token = __mortal_anytime.enter_wait('Choose', key)
+      local answer = raw_timer(options, duration, default)
+      __mortal_anytime.leave_wait(token)
+      __mortal_anytime.choose_done(key, answer)
+      return answer
+    end
   end
   wait = function(duration)
     if __mortal_anytime.skip_wait() then return end

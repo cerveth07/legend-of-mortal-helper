@@ -32,18 +32,22 @@ namespace MortalHelper.Game
             }
         }
 
-        internal static bool CanOffer
+        internal static bool CanOffer => Availability == null;
+
+        internal static bool CanOfferStory => StoryScene && CanOffer;
+
+        internal static string Availability
         {
             get
             {
-                if (!Enabled || !Plugin.Instance.Gate.CanInteract) return false;
-                if (SceneManager.GetActiveScene().name == "Combat") return AnytimeDuel.BlockReason == null;
-                return StoryScene && AnytimeStory.BlockReason == null;
+                if (!Enabled) return "随时存档开关已关闭。";
+                if (!Plugin.Instance.Gate.CanInteract) return "恢复流程进行中。";
+                string scene = SceneManager.GetActiveScene().name;
+                if (scene == "Combat") return AnytimeDuel.BlockReason;
+                if (scene == "Story" || scene == "Break") return AnytimeStory.BlockReason;
+                return "当前场景不支持随时存档。";
             }
         }
-
-        internal static bool CanOfferStory => Enabled && Plugin.Instance.Gate.CanInteract &&
-            StoryScene && AnytimeStory.BlockReason == null;
 
         internal static string ManualLoadSlot => loadingSlot;
 

@@ -1170,6 +1170,8 @@ namespace MortalHelper.Game
                 plugin.Options.Config.Save();
             }
             Note("中途档含配套恢复记录；复制、备份或移动存档时需一并保留。");
+            string availability = AnytimeNative.Availability;
+            Note(availability == null ? "当前可用：可在游戏系统菜单选择编号槽。" : "当前不可用：" + availability);
             Section("存档格数");
             int configured = plugin.Options.SlotCount.Value;
             bool custom = configured >= 2 && configured <= 999;
