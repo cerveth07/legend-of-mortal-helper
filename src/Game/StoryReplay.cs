@@ -154,6 +154,9 @@ namespace MortalHelper.Game
                 var store = new ArchiveStore(folder);
                 var document = store.Load(slot, fromBackup);
                 if (document == null || document.Kind != RecoveryKind.Story) { status = "该槽位不是剧情检查点。"; return false; }
+                var opening = JsonUtility.FromJson<GameSave>(document.Baseline);
+                if (opening == null || opening.CurrentScene != document.Scene)
+                { status = "检查点场景与原生基线不一致，拒绝恢复。"; return false; }
                 if (document.ExpectedState == null ||
                     !document.ExpectedState.StartsWith(ReplayStateDigest.Prefix, StringComparison.Ordinal))
                 {

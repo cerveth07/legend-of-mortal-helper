@@ -4,6 +4,7 @@ using System.IO;
 using Mortal.Core;
 using MortalHelper.Recovery;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace MortalHelper.Game
 {
@@ -14,7 +15,7 @@ namespace MortalHelper.Game
         private const int MaximumBaseline = 3500000;
         private const string Folder = "mhr";
         private static readonly List<RecordedEvent> Events = new List<RecordedEvent>();
-        private static string baseline, client, script;
+        private static string baseline, client, script, scene;
         private static string scriptForDice;
         private static int diceOrdinal;
 
@@ -47,12 +48,22 @@ namespace MortalHelper.Game
             if (Recording) { Status = "已经在记录中。"; return false; }
             if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
             { Status = "恢复锁定期间不能录制；请先正常读档。"; return false; }
+            string active = SceneManager.GetActiveScene().name;
+            if ((active != "Story" && active != "Break") || SceneController.Instance == null ||
+                SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+            { Status = "请在已加载完成的剧情场景开始录制。"; return false; }
             string json;
             try { json = SaveSystem.Instance == null ? null : SaveSystem.Instance.GetCurrentSaveData(); }
             catch (Exception error) { Status = "读取当前进度失败：" + error.Message; return false; }
             if (string.IsNullOrEmpty(json)) { Status = "当前没有可记录的进度（需要进入周目且已完成加载）。"; return false; }
             if (json.Length > MaximumBaseline) { Status = "当前进度快照过大（" + json.Length + " 字符），超过上限。"; return false; }
+            GameSave native;
+            try { native = JsonUtility.FromJson<GameSave>(json); }
+            catch (Exception error) { Status = "原生进度解析失败：" + error.Message; return false; }
+            if (native == null || native.CurrentScene != active)
+            { Status = "原生进度与当前剧情场景不一致，不能录制。"; return false; }
             baseline = json;
+            scene = active;
             client = "lom:" + Application.version;
             script = string.IsNullOrEmpty(HintAdapter.ScriptName) ? "unknown" : HintAdapter.ScriptName;
             Events.Clear();
@@ -171,16 +182,23 @@ namespace MortalHelper.Game
             if (!Recording) { Status = "先开始记录再保存检查点。"; return false; }
             if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract)
             { Status = "恢复锁定期间不能保存检查点。"; return false; }
+            if (SceneManager.GetActiveScene().name != scene || SceneController.Instance == null ||
+                SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+            { Status = "剧情场景已切换或仍在加载，请重新开始录制。"; return false; }
             string folder = Directory;
             if (folder == null) { Status = "无法创建记录目录。"; return false; }
             try
             {
+                var live = SaveSystem.Instance == null ? null :
+                    JsonUtility.FromJson<GameSave>(SaveSystem.Instance.GetCurrentSaveData());
+                if (live == null || live.CurrentScene != scene)
+                    throw new InvalidDataException("原生进度与当前剧情场景不一致。");
                 var document = new RecoveryDocument
                 {
                     Kind = RecoveryKind.Story,
                     Client = client,
                     Script = script,
-                    Scene = "Story",
+                    Scene = scene,
                     Checkpoint = "manual:" + DateTime.UtcNow.ToString("yyyyMMddHHmmss"),
                     Baseline = baseline,
                     ExpectedState = Summary()
