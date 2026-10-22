@@ -13,6 +13,7 @@ using System.Text;
 using HarmonyLib;
 using Mortal.Combat;
 using Mortal.Core;
+using MortalHelper.Core;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -128,6 +129,10 @@ namespace MortalHelper.Game
                 journal.RandomState = JsonUtility.ToJson(UnityEngine.Random.state);
                 Validate(journal);
                 string path = SlotFile(slot);
+                AnytimeNative.SettleSlot(slot, path);
+                if (SlotTransaction.Exists(SlotTransaction.JournalFor(path)))
+                    throw new IOException("此槽位有尚未处理的存档事务，请先读取该槽位让插件自动恢复。");
+                if (!File.Exists(path)) AnytimeNative.PurgeOrphans(path);
                 if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
                     File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending") ||
                     (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha")) ||
@@ -166,7 +171,7 @@ namespace MortalHelper.Game
                 if (!Numbered(slot)) return false;
                 string path = SlotFile(slot);
                 if (File.Exists(path + ".mhduel-pending"))
-                    throw new InvalidDataException("单挑存档提交曾中断；请核对 .dat/.mhduel 与 .bak 备份后再读取。");
+                    throw new InvalidDataException("单挑存档提交曾中断；请核对 .dat/.mhduel 与备份后再读取。");
                 if (!File.Exists(path + ".mhduel"))
                 {
                     if (File.Exists(path + ".mhduel-required"))
@@ -175,9 +180,21 @@ namespace MortalHelper.Game
                 }
                 var loaded = Decode(path + ".mhduel");
                 Validate(loaded);
+                if (loaded.NativeHash != Hash(File.ReadAllBytes(path)))
+                {
+                    // The document does not describe this file, so an ordinary
+                    // native save has taken the slot over. Keep the document and
+                    // let the player load the complete native save they have.
+                    if (File.Exists(path + ".mhduel-required"))
+                        throw new InvalidDataException("此槽位的单挑附档与原生档不匹配（附档必需标记仍在），" +
+                            "不能确认哪一个才是完整存档。请从完整备份恢复后再读取。");
+                    Quarantine(path + ".mhduel");
+                    Report("该槽位的单挑附档属于更早的存档，已保留为 .mhduel.stale 并按原生存档载入。");
+                    return false;
+                }
                 if (!AnytimeDuelRandomPatch.Covered || loaded.Client != Application.version ||
-                    loaded.SceneKey != gameSave.CurrentSceneKey || loaded.NativeHash != Hash(File.ReadAllBytes(path)))
-                    throw new InvalidDataException("客户端、战斗关卡或原生文件与单挑记录不匹配。");
+                    loaded.SceneKey != gameSave.CurrentSceneKey)
+                    throw new InvalidDataException("客户端或战斗关卡与单挑记录不匹配。");
                 pending = loaded;
                 replayStarted = Time.unscaledTime;
                 return true;
@@ -485,43 +502,47 @@ namespace MortalHelper.Game
             { file.Write(bytes, 0, bytes.Length); file.Flush(true); }
         }
 
+        private static void Replace(string staged, string destination)
+        {
+            if (File.Exists(destination)) File.Replace(staged, destination, null);
+            else File.Move(staged, destination);
+        }
+
+        // The native file and the journal must become valid together. The pair is
+        // staged, both members are re-read and verified, and only then does the
+        // transaction claim a commit; a crash before that point restores the exact
+        // pre-save combination recorded in the journal.
         private static void WritePair(string path, byte[] native, byte[] sidecar)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             string extra = path + ".mhduel", first = path + ".mhduel-native-stage", second = extra + ".stage";
-            string marker = path + ".mhduel-pending";
             string required = path + ".mhduel-required";
-            bool hadRequired = File.Exists(required);
-            bool hadNative = File.Exists(path), hadExtra = File.Exists(extra), committedNative = false, committedExtra = false;
+            var transaction = SlotTransaction.Begin(SlotTransaction.JournalFor(path), "duel", new[] {
+                path, extra, required, path + ".mha", path + ".mha-required"
+            });
             try
             {
                 Stage(first, native); Stage(second, sidecar);
                 if (Hash(File.ReadAllBytes(first)) != Hash(native)) throw new IOException("原生档暂存校验失败。");
-                Stage(marker, Encoding.ASCII.GetBytes("pending"));
-                if (hadNative) File.Replace(first, path, path + ".bak"); else File.Move(first, path);
-                committedNative = true;
-                if (hadExtra) File.Replace(second, extra, extra + ".bak"); else File.Move(second, extra);
-                committedExtra = true;
+                Replace(first, path);
+                Replace(second, extra);
                 if (Hash(File.ReadAllBytes(path)) != Hash(native) ||
                     Decode(extra).NativeHash != Hash(native)) throw new IOException("双文件提交校验失败。");
-                // A pending marker protects the write until both files and the
-                // persistent replay requirement have committed successfully.
+                // A duel save owns the slot, so a stale story companion is retired
+                // inside the same transaction rather than after it.
                 Stage(required, Encoding.ASCII.GetBytes("1"));
-                File.Delete(marker);
+                DeleteIfExists(path + ".mha");
+                DeleteIfExists(path + ".mha-required");
+                transaction.RecordReplacement(SlotTransaction.HashFile(path));
+                transaction.Commit();
+                transaction.Complete();
             }
             catch (Exception original)
             {
-                Exception rollback = null;
-                try { if (committedExtra) Restore(extra, hadExtra); }
-                catch (Exception e) { rollback = e; }
-                try { if (committedNative) Restore(path, hadNative); }
-                catch (Exception e) { rollback = rollback == null ? e : new AggregateException(rollback, e); }
-                if (rollback != null)
-                    throw new IOException("双文件保存失败且回退未完成；请保留 .dat/.mhduel 和 .bak 成对核对。",
-                        new AggregateException(original, rollback));
-                // Restore the previous marker state only after complete rollback.
-                if (!hadRequired && File.Exists(required)) File.Delete(required);
-                if (File.Exists(marker)) File.Delete(marker);
+                var report = transaction.Rollback();
+                if (!report.Complete)
+                    throw new IOException("双文件保存失败且回退未完成；事务日志与备份已保留。",
+                        new AggregateException(original, new InvalidOperationException(report.Detail)));
                 throw;
             }
             finally
@@ -531,10 +552,20 @@ namespace MortalHelper.Game
             }
         }
 
-        private static void Restore(string path, bool existed)
+        private static void DeleteIfExists(string path)
+        { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
+
+        // Never delete a companion the player might still need; a rename keeps it
+        // out of the load path and leaves it recoverable by hand.
+        private static void Quarantine(string path)
         {
-            if (!existed) { if (File.Exists(path)) File.Delete(path); return; }
-            File.Copy(path + ".bak", path, true);
+            try
+            {
+                string target = path + ".stale";
+                if (File.Exists(target)) File.Delete(target);
+                File.Move(path, target);
+            }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
         }
 
         private static Draw DrawRandom(Draw requested, Func<Draw> fresh)

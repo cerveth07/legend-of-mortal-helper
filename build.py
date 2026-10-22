@@ -52,7 +52,8 @@ def run_tests(dotnet, compiler=None, base=None, framework=None):
         command = [str(test_exe)] if os.name == 'nt' or dotnet.lower().endswith('.exe') else ['mono', str(test_exe)]
     else:
         command = [dotnet, 'run', '--project', native_path(ROOT / 'tests' / 'Contracts.csproj', dotnet.lower().endswith('.exe')), '--configuration', 'Release']
-    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            errors='replace')
     print(result.stdout, end='')
     match = re.search(r'^PASS: ([1-9][0-9]*) contract checks(?:[;.]|\s*$)', result.stdout, re.M)
     if result.returncode or not match:

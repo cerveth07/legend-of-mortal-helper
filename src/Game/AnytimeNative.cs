@@ -1,9 +1,9 @@
 using System;
 using System.IO;
 using HarmonyLib;
-using Mortal.Combat;
 using Mortal.Core;
 using Mortal.Story;
+using MortalHelper.Core;
 using UnityEngine.SceneManagement;
 
 namespace MortalHelper.Game
@@ -11,12 +11,18 @@ namespace MortalHelper.Game
     // The game's numbered slots remain the only user-facing save and load path.
     // Unlocking their button never grants permission to write an incomplete save:
     // the SaveGameData prefix checks the same state immediately before I/O.
+    //
+    // Every write that can touch a numbered slot also opens a journal for that
+    // slot, so an interrupted save is settled deterministically on the next load
+    // or save instead of being guessed from whatever files happen to be left.
     internal static class AnytimeNative
     {
         [ThreadStatic] private static string savingSlot;
         [ThreadStatic] private static bool savingStory;
         [ThreadStatic] private static string loadingSlot;
         private static string offeredScene;
+        private static SlotTransaction supersedeTransaction;
+        private static string supersedePath;
         internal struct SaveScope
         {
             internal string Slot;
@@ -92,20 +98,54 @@ namespace MortalHelper.Game
             {
                 if (Enabled)
                 {
-                    if (AnytimeDuel.SaveToSlot(slot))
-                    {
-                        try { ForgetStorySidecar(slot); }
-                        catch (Exception error) { Plugin.Instance.Report(error); }
-                    }
+                    // The duel writer owns the whole slot pair and retires a stale
+                    // story companion inside its own transaction.
+                    AnytimeDuel.SaveToSlot(slot);
                     return false;
                 }
             }
             bool story = Enabled && StoryScene;
-            if (story && !AnytimeStory.BeforeNativeSave(slot))
-                return false;
+            if (story && !AnytimeStory.BeforeNativeSave(slot)) return false;
+            if (!story && !BeginSupersede(slot)) return false;
             savingSlot = slot;
             savingStory = story;
             return true;
+        }
+
+        // An ordinary native save owns the slot afterwards. Snapshot the old
+        // companions first so a crash between "the game rewrote the .dat" and
+        // "the companions were retired" is finished forward next time instead of
+        // leaving a sidecar that rejects a perfectly good native save.
+        private static bool BeginSupersede(string slot)
+        {
+            supersedeTransaction = null;
+            supersedePath = null;
+            if (!Numbered(slot)) return true;
+            try
+            {
+                string path = PathFor(slot);
+                if (string.IsNullOrEmpty(path)) return true;
+                SettleSlot(slot, path);
+                if (SlotTransaction.Exists(SlotTransaction.JournalFor(path)))
+                {
+                    SaveFailed("此槽位有上次未完成的存档事务；请先读取该槽位让插件自动恢复。");
+                    return false;
+                }
+                if (!File.Exists(path)) PurgeOrphans(path);
+                if (!HasCompanion(path)) return true;
+                supersedeTransaction = SlotTransaction.Begin(SlotTransaction.JournalFor(path), "supersede", new[] {
+                    path, path + ".mha", path + ".mha-required", path + ".mhduel", path + ".mhduel-required"
+                });
+                supersedePath = path;
+                return true;
+            }
+            catch (Exception error)
+            {
+                supersedeTransaction = null;
+                supersedePath = null;
+                SaveFailed("准备覆盖存档失败：" + error.GetBaseException().Message);
+                return false;
+            }
         }
 
         internal static void SavedData(string path, object data)
@@ -115,43 +155,137 @@ namespace MortalHelper.Game
             if (savingStory)
             {
                 AnytimeStory.AfterNativeSave(path, data);
-                // A successful story commit supersedes a prior duel record.
-                if (AnytimeStory.NativeSaveSucceeded(path, data))
-                {
-                    DeleteIfExists(path + ".mhduel");
-                    DeleteIfExists(path + ".mhduel-required");
-                }
+                return;
             }
-            else if (AnytimeStory.ForgetAfterOrdinarySave(path, data))
+            if (supersedeTransaction == null || !string.Equals(path, supersedePath, StringComparison.Ordinal)) return;
+            var transaction = supersedeTransaction;
+            supersedeTransaction = null;
+            supersedePath = null;
+            try
             {
-                // A verified ordinary save supersedes old duel replay state.
-                DeleteIfExists(path + ".mhduel");
-                DeleteIfExists(path + ".mhduel-required");
+                if (!AnytimeStory.OrdinalSaveVerified(path, data))
+                    throw new IOException("普通存档写入后内容校验不一致。");
+                transaction.RecordReplacement(SlotTransaction.HashFile(path));
+                FinishOperation(transaction, path);
+            }
+            catch (Exception error)
+            {
+                var report = transaction.Rollback();
+                SaveFailed(report.Complete
+                    ? "普通存档未完成，槽位已回退：" + error.GetBaseException().Message
+                    : "普通存档未完成且回退失败；已保留事务日志与备份：" + error.GetBaseException().Message +
+                        "；" + report.Detail);
             }
         }
 
         internal static void EndSave(SaveScope previous)
         {
             if (savingStory) AnytimeStory.AbortNativeSave();
+            else AbandonSupersede();
             savingSlot = previous.Slot;
             savingStory = previous.Story;
         }
 
-        private static void ForgetStorySidecar(string slot)
+        private static void AbandonSupersede()
         {
-            string path = (string)AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile")
-                .Invoke(SaveSystem.Instance, new object[] { slot });
-            DeleteIfExists(path + ".mha");
-            DeleteIfExists(path + ".mha-required");
+            var transaction = supersedeTransaction;
+            supersedeTransaction = null;
+            supersedePath = null;
+            if (transaction == null) return;
+            var report = transaction.Rollback();
+            if (!report.Complete) SaveFailed("覆盖前的存档无法完整回退，已保留事务日志与备份：" + report.Detail);
         }
 
-        private static void DeleteIfExists(string path)
-        { if (File.Exists(path)) File.Delete(path); }
+        // Applies the operation's companion retirement, then releases the journal.
+        internal static void FinishOperation(SlotTransaction transaction, string path)
+        {
+            if (transaction == null) return;
+            RetireCompanions(transaction.Operation, path);
+            transaction.Complete();
+        }
+
+        private static void RetireCompanions(string operation, string path)
+        {
+            bool story = operation == "story", duel = operation == "duel", supersede = operation == "supersede";
+            // A story commit supersedes any duel record, and a duel commit
+            // supersedes any story record: the slot has exactly one meaning.
+            if (story || supersede) { DeleteIfExists(path + ".mhduel"); DeleteIfExists(path + ".mhduel-required"); }
+            if (duel || supersede) { DeleteIfExists(path + ".mha"); DeleteIfExists(path + ".mha-required"); }
+        }
+
+        // Settles any journal left on the slot. Called before the game reads the
+        // native file and before a new write touches the slot.
+        internal static void SettleSlot(string slot, string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            string journal = SlotTransaction.JournalFor(path);
+            SlotTransaction transaction;
+            try { transaction = SlotTransaction.Read(journal); }
+            catch (Exception error)
+            { throw new InvalidDataException("存档事务日志无法读取：" + error.GetBaseException().Message); }
+            if (transaction == null) return;
+            if (transaction.State == SlotTransactionState.Broken)
+                throw new InvalidDataException("此槽位上次存档失败且回退未完成；事务日志与备份仍保留在 " + journal +
+                    "。请从完整备份恢复该槽位后再读取。");
+            if (transaction.State == SlotTransactionState.Committed || transaction.State == SlotTransactionState.RolledBack)
+            { transaction.Complete(); return; }
+            // A prepared transaction is finished forward only when the caller had
+            // already verified the replacement file it recorded.
+            bool forward = !string.IsNullOrEmpty(transaction.ReplacementHash) && File.Exists(path) &&
+                SlotTransaction.HashFile(path) == transaction.ReplacementHash;
+            if (forward)
+            {
+                RetireCompanions(transaction.Operation, path);
+                transaction.Complete();
+                return;
+            }
+            var report = transaction.Rollback();
+            if (!report.Complete)
+                throw new InvalidDataException("此槽位上次未完成的存档无法回退：" + report.Detail);
+            SaveFailed("上次未完成的存档已回退到保存前的状态：" + Path.GetFileName(path));
+        }
+
+        // Removes companion files left on a slot that has no native file at all.
+        // Such companions cannot describe anything, so keeping them would only
+        // block the next save with a "-required without sidecar" error.
+        internal static void PurgeOrphans(string path)
+        {
+            if (string.IsNullOrEmpty(path) || File.Exists(path)) return;
+            DeleteIfExists(path + ".mha");
+            DeleteIfExists(path + ".mha-required");
+            DeleteIfExists(path + ".mhduel");
+            DeleteIfExists(path + ".mhduel-required");
+            DeleteIfExists(path + ".mha-pending");
+            DeleteIfExists(path + ".mhduel-pending");
+            DeleteIfExists(path + ".mha-rollback");
+            DeleteIfExists(path + ".mha.rollback");
+        }
+
+        // Called after the game deleted a slot: the companions are now orphans.
+        internal static void ForgetSlotFiles(string slot)
+        {
+            if (!Numbered(slot)) return;
+            string path = PathFor(slot);
+            if (string.IsNullOrEmpty(path) || File.Exists(path)) return;
+            PurgeOrphans(path);
+            string journal = SlotTransaction.JournalFor(path);
+            if (!SlotTransaction.Exists(journal)) return;
+            var transaction = SlotTransaction.Read(journal);
+            if (transaction != null) transaction.Complete();
+            else DeleteIfExists(journal);
+        }
 
         internal static void BeginLoad(SaveSystem save, out string previous)
         {
             previous = loadingSlot;
             loadingSlot = save == null ? null : save.CurrentSlot;
+            if (save == null || !Numbered(loadingSlot)) return;
+            try { SettleSlot(loadingSlot, PathFor(loadingSlot)); }
+            catch (Exception error)
+            {
+                Plugin.Instance?.Gate.Fail("读取前无法确认存档事务状态：" + error.GetBaseException().Message);
+                throw;
+            }
         }
 
         internal static void EndLoad(string previous) { loadingSlot = previous; }
@@ -177,6 +311,27 @@ namespace MortalHelper.Game
                 throw;
             }
         }
+
+        internal static bool Numbered(string slot) =>
+            slot != null && slot.Length == 3 && slot != "000" && slot[0] >= '0' && slot[0] <= '9' &&
+            slot[1] >= '0' && slot[1] <= '9' && slot[2] >= '0' && slot[2] <= '9';
+
+        internal static string PathFor(string slot)
+        {
+            string path = (string)AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile")
+                .Invoke(SaveSystem.Instance, new object[] { slot });
+            if (!string.IsNullOrEmpty(path)) Directory.CreateDirectory(Path.GetDirectoryName(path));
+            return path;
+        }
+
+        private static bool HasCompanion(string path)
+        {
+            return File.Exists(path + ".mha") || File.Exists(path + ".mha-required") ||
+                File.Exists(path + ".mhduel") || File.Exists(path + ".mhduel-required");
+        }
+
+        private static void DeleteIfExists(string path)
+        { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
     }
 
     [HarmonyPatch(typeof(SaveSystem), "SaveGameData", new Type[] { typeof(string) })]
@@ -217,6 +372,19 @@ namespace MortalHelper.Game
     {
         [HarmonyPriority(Priority.Low)]
         private static void Prefix(ref GameSave __0) { AnytimeNative.PrepareLoad(ref __0); }
+    }
+
+    // The game deletes only the native file. Leftover companions would make the
+    // next save in that slot refuse to write ("required companion missing"), so
+    // they are retired as soon as the native file is gone.
+    [HarmonyPatch(typeof(SaveSystem), "DeleteSaveData")]
+    internal static class AnytimeDeletePatch
+    {
+        private static void Postfix(string __0)
+        {
+            try { AnytimeNative.ForgetSlotFiles(__0); }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
+        }
     }
 
     [HarmonyPatch(typeof(MenuPanel), "ToggleSaveButton")]
