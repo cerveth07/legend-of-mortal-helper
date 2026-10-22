@@ -386,12 +386,16 @@ namespace MortalHelper.Game
                     throw new InvalidDataException("无法记录游戏随机状态。");
                 baselineGlobals = CaptureGlobals(lua);
                 baselineLuaRandomState = CaptureLuaRandom(lua);
+                try { Plugin.Instance?.Log("[Anytime] baseline captured scene=" + scene + " script=" + script +
+                    " globals=" + baselineGlobals.Length); }
+                catch (Exception) { }
             }
             catch (Exception error)
             {
                 baseline = null;
                 invalid = "无法记录剧情起点：" + error.Message;
-                Plugin.Instance?.Log("[Anytime] " + invalid);
+                try { Plugin.Instance?.Log("[Anytime] " + invalid); }
+                catch (Exception) { }
             }
         }
 
@@ -532,6 +536,23 @@ namespace MortalHelper.Game
             values.Sort((x, y) => string.CompareOrdinal(x.Key, y.Key));
             return values.ToArray();
         }
+#if !NO_PROBE
+        internal static string ReadOnlySelfTest()
+        {
+            var probe = new Script(CoreModules.None);
+            probe.Globals.Set("_MOONSHARP", DynValue.NewTable(probe));
+            probe.Globals.Set("number", DynValue.NewNumber(42));
+            probe.Globals.Set("text", DynValue.NewString("ok"));
+            probe.Globals.Set("flag", DynValue.NewBoolean(true));
+            var values = CaptureGlobals(probe);
+            bool globalsOk = !values.Any(v => v.Key == "_MOONSHARP") &&
+                values.Any(v => v.Key == "number") && values.Any(v => v.Key == "text") &&
+                values.Any(v => v.Key == "flag");
+            return "globals=" + (globalsOk ? "ok" : "failed") + "; baseline=" +
+                (string.IsNullOrEmpty(baseline) ? "none" : "captured") + "; availability=" +
+                (AnytimeNative.Availability ?? "available");
+        }
+#endif
         private static void RestoreGlobals(Script interpreter, AnytimeLuaValue[] values)
         {
             foreach (var item in values)
@@ -734,7 +755,24 @@ end";
             if (flag.Type == DataType.Boolean && flag.Boolean) return;
             if (!registered) { UserData.RegisterType(typeof(AnytimeStoryLua)); registered = true; }
             interpreter.Globals.Set("__mortal_anytime", UserData.CreateStatic(typeof(AnytimeStoryLua)));
-            interpreter.DoString(Preamble);
+            try { interpreter.DoString(Preamble); }
+            catch (Exception error) { LogWrapper(interpreter, error.Message); throw; }
+            LogWrapper(interpreter, null);
+        }
+        private static void LogWrapper(Script interpreter, string error)
+        {
+            if (Plugin.Instance == null) return;
+            try
+            {
+                var functions = new List<string>();
+                foreach (string name in new[] { "say", "choose", "choosetimer", "wait" })
+                    if (interpreter.Globals.Get(name).Type == DataType.Function) functions.Add(name);
+                DynValue flag = interpreter.Globals.Get("__mortal_anytime_wrapped");
+                Plugin.Instance.Log("[Anytime] lua wrapped=" + (flag.Type == DataType.Boolean && flag.Boolean) +
+                    " functions=" + string.Join(",", functions.ToArray()) +
+                    (error == null ? "" : " error=" + error));
+            }
+            catch (Exception) { }
         }
         private static void Postfix(LuaEnvironment __instance)
         {

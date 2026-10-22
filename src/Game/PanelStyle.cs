@@ -80,7 +80,7 @@ namespace MortalHelper.Game
         {
             Scale = scale;
             if (uiFont != null) UiFont = uiFont;
-            int size = Mathf.Max(14, (int)(16 * Scale));
+            int size = Mathf.Max(13, (int)(15 * Scale));
             foreach (var style in new[] { Tab, TabHover, Description, Entry,
                 SwitchState, SwitchOnLabel, SwitchOffLabel, FooterLabel, FooterValue, ButtonStyle, IconButton, Notice })
                 style.font = UiFont;
@@ -91,23 +91,23 @@ namespace MortalHelper.Game
             Title.alignment = TextAnchor.MiddleCenter; Title.wordWrap = false; Title.clipping = TextClipping.Clip;
             Title.padding = new RectOffset(0, 0, 0, 0); Title.margin = new RectOffset(0, 0, 0, 0); Title.contentOffset = Vector2.zero;
             SectionTitle.fontSize = size + 1; SectionTitle.normal.textColor = AccentColor;
-            Tab.fontSize = Mathf.Max(12, size - 2); Tab.normal.textColor = Secondary;
-            TabHover.fontSize = Mathf.Max(12, size - 2); TabHover.normal.textColor = Primary;
-            Description.fontSize = Mathf.Max(12, size - 2); Description.normal.textColor = Secondary;
-            Tight.font = UiFont; Tight.fontSize = Mathf.Max(12, size - 2); Tight.normal.textColor = Secondary;
+            Tab.fontSize = Mathf.Max(11, size - 2); Tab.normal.textColor = Secondary;
+            TabHover.fontSize = Mathf.Max(11, size - 2); TabHover.normal.textColor = Primary;
+            Description.fontSize = Mathf.Max(11, size - 2); Description.normal.textColor = Secondary;
+            Tight.font = UiFont; Tight.fontSize = Mathf.Max(11, size - 2); Tight.normal.textColor = Secondary;
             Entry.fontSize = size; Entry.normal.textColor = Primary;
-            SwitchState.fontSize = Mathf.Max(11, size - 3); SwitchState.normal.textColor = Secondary;
+            SwitchState.fontSize = Mathf.Max(10, size - 3); SwitchState.normal.textColor = Secondary;
             SwitchOnLabel.fontSize = SwitchState.fontSize; SwitchOnLabel.normal.textColor = AccentColor;
             SwitchOffLabel.fontSize = SwitchState.fontSize; SwitchOffLabel.normal.textColor = Secondary;
-            DangerStyle.fontSize = Mathf.Max(11, size - 3); DangerStyle.normal.textColor = DangerColor;
+            DangerStyle.fontSize = Mathf.Max(10, size - 3); DangerStyle.normal.textColor = DangerColor;
             DangerStyle.font = UiFont; DangerStyle.padding = new RectOffset(7, 7, 3, 3);
             DangerStyle.margin = new RectOffset(0, 0, 0, 0); DangerStyle.border = new RectOffset(1, 1, 1, 1);
             DangerStyle.normal.background = Button; DangerStyle.hover.background = ButtonHover;
             DangerStyle.active.background = ButtonActive; DangerStyle.focused.background = ButtonHover;
             DangerStyle.hover.textColor = new Color(1f, .66f, .58f);
             DangerStyle.active.textColor = new Color(1f, .72f, .66f);
-            FooterLabel.fontSize = Mathf.Max(11, size - 3); FooterLabel.normal.textColor = Secondary;
-            FooterValue.fontSize = Mathf.Max(11, size - 3); FooterValue.normal.textColor = AccentColor;
+            FooterLabel.fontSize = Mathf.Max(10, size - 3); FooterLabel.normal.textColor = Secondary;
+            FooterValue.fontSize = Mathf.Max(10, size - 3); FooterValue.normal.textColor = AccentColor;
 
             if (Skin != null) Object.Destroy(Skin);
             Skin = Object.Instantiate(GUI.skin);
@@ -115,7 +115,7 @@ namespace MortalHelper.Game
             Skin.label.font = UiFont; Skin.label.fontSize = size; Skin.label.normal.textColor = Primary; Skin.label.wordWrap = true;
 
             var button = Skin.button;
-            button.font = UiFont; button.fontSize = Mathf.Max(12, size - 2); button.alignment = TextAnchor.MiddleCenter;
+            button.font = UiFont; button.fontSize = Mathf.Max(11, size - 2); button.alignment = TextAnchor.MiddleCenter;
             button.padding = new RectOffset(8, 8, 3, 3);
             button.normal.background = Transparent; button.hover.background = Hover;
             button.active.background = AccentSoft; button.focused.background = Hover;

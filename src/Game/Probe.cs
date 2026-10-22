@@ -20,6 +20,7 @@ namespace MortalHelper.Game
                 plugin.Log("Probe (read-only): scene=" + SceneManager.GetActiveScene().name +
                     "; loaded=" + GameAccess.Loaded + "; canEdit=" + GameAccess.CanEditValues +
                     "; dice=" + (DiceAdapter.Dialog != null) + "; timeScale=" + Time.timeScale);
+                plugin.Log("Probe (read-only): " + AnytimeStory.ReadOnlySelfTest());
             }
             catch (Exception error) { plugin.Report(error); }
         }

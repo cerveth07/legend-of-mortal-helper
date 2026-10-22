@@ -14,10 +14,10 @@ namespace MortalHelper.Game
     internal sealed class MainPanel
     {
         private const float ExpandDuration = .22f;
-        private const float BadgeWidth = 58f;
-        private const float BadgeHeight = 168f;
-        private const float MinWidth = 420f;
-        private const float MinHeight = 600f;
+        private const float BadgeWidth = 52f;
+        private const float BadgeHeight = 152f;
+        private const float MinWidth = 400f;
+        private const float MinHeight = 570f;
 
         private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "存档设置", "语言" };
         private static readonly string[] StoryViews = { "剧情", "回想" };
@@ -29,6 +29,14 @@ namespace MortalHelper.Game
             "銀兩","個人貢獻度","門派資產","門派名聲","門派人數","向心力","心理衛生","武學點數","鍛造","毒藥",
             "體力","內力","武功拳掌","武功暗器","武功刀劍","輕功","學問","嘴力","抗毒","抗麻",
             "性情","處世","道德","修養","命運","陰陽內功" });
+        private static readonly string[] StatFamilies = { "全部", "资源门派", "人物状态", "武学技艺", "才学性情", "抗性" };
+        private static readonly Dictionary<string, int> StatFamilyOf = new Dictionary<string, int> {
+            { "銀兩", 1 }, { "個人貢獻度", 1 }, { "門派資產", 1 }, { "門派名聲", 1 }, { "門派人數", 1 }, { "向心力", 1 },
+            { "體力", 2 }, { "內力", 2 }, { "心理衛生", 2 }, { "武學點數", 2 }, { "命運", 2 }, { "陰陽內功", 2 },
+            { "武功拳掌", 3 }, { "武功暗器", 3 }, { "武功刀劍", 3 }, { "輕功", 3 }, { "鍛造", 3 }, { "毒藥", 3 },
+            { "學問", 4 }, { "嘴力", 4 }, { "性情", 4 }, { "處世", 4 }, { "道德", 4 }, { "修養", 4 },
+            { "抗毒", 5 }, { "抗麻", 5 }
+        };
         private static readonly Dictionary<string, string> StatNames = new Dictionary<string, string> {
             { "銀兩", "金钱" }, { "個人貢獻度", "个人贡献" }, { "門派資產", "门派资产" }, { "門派名聲", "门派名声" },
             { "門派人數", "门派人数" }, { "向心力", "向心力" }, { "心理衛生", "心情" }, { "武學點數", "武学点数" },
@@ -45,6 +53,8 @@ namespace MortalHelper.Game
         private Rect masterRect;
         private bool recoveryOpen;
         private bool editOpen = true;
+        private bool statsOpen = true, itemsOpen, worldOpen;
+        private int statFamily;
         private bool confirmResetSlots, confirmClearComments;
         private bool confirmRestoreMain, confirmRestoreBackup;
         private readonly Dictionary<string, string> relationshipEdits = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -151,15 +161,17 @@ namespace MortalHelper.Game
             scroll[target] = new Vector2(0f, 100000f);
         }
 
-        private readonly float[] numericSectionY = new float[3];
         private bool firstSection;
 
         internal void TourJumpToSection(int section) { JumpToNumericSection(section); }
 
         private void JumpToNumericSection(int section)
         {
-            if (section < 0 || section >= numericSectionY.Length) return;
-            scroll[3] = new Vector2(0f, numericSectionY[section]);
+            if (section < 0 || section > 2) return;
+            statsOpen = section == 0;
+            itemsOpen = section == 1;
+            worldOpen = section == 2;
+            scroll[3] = Vector2.zero;
         }
 
         internal float TourScrollY { get { return scroll[page].y; } }
@@ -179,8 +191,10 @@ namespace MortalHelper.Game
             int savedPage = page, savedLastPage = lastPage;
             int savedStory = storyView, savedBattle = battleView, savedGrowth = growthView;
             int savedLover = loverIndex;
+            int savedStatFamily = statFamily;
             bool savedDraft = loverDraftLoaded, savedAll = showAllItems;
             bool savedVisible = Visible, savedRecovery = recoveryOpen;
+            bool savedStats = statsOpen, savedItems = itemsOpen, savedWorld = worldOpen;
             GameItemType savedCategory = itemType;
             Vector2[] savedScroll = (Vector2[])scroll.Clone();
             return () =>
@@ -190,6 +204,8 @@ namespace MortalHelper.Game
                 storyView = savedStory; battleView = savedBattle; growthView = savedGrowth;
                 itemType = savedCategory; showAllItems = savedAll;
                 recoveryOpen = savedRecovery;
+                statsOpen = savedStats; itemsOpen = savedItems; worldOpen = savedWorld;
+                statFamily = savedStatFamily;
                 loverIndex = savedLover; loverDraftLoaded = savedDraft;
                 Array.Copy(savedScroll, scroll, scroll.Length);
             };
@@ -525,9 +541,6 @@ namespace MortalHelper.Game
             if (sideMargin > .5f) GUILayout.Space(sideMargin);
             GUILayout.BeginVertical(GUIStyle.none, GUILayout.Width(viewportWidth), GUILayout.ExpandHeight(true));
 
-            // Keep section shortcuts outside the scroll view so speed/items remain
-            // reachable even after scrolling through a long inventory.
-            if (page == 3 && features) DrawNumericJumpBar();
             if (!features) UiLabel("万象录辅助功能已暂停；已接入的功能不生效。", style.Description);
             // Body width always reserves the scrollbar gutter. Hide its visual track
             // when content fits; showing/hiding it never changes text wrapping.
@@ -951,48 +964,32 @@ namespace MortalHelper.Game
             return true;
         }
 
-        private void DrawNumericJumpBar()
-        {
-            string[] labels = { "属性", "物品", "速度" };
-            float gap = 8f * scale;
-            float width = (ContentWidth() - 2f * gap) / 3f;
-            GUILayout.BeginHorizontal();
-            for (int i = 0; i < labels.Length; i++)
-            {
-                if (i > 0) GUILayout.Space(gap);
-                if (UiButton(labels[i], style.SubtleStyle, GUILayout.Width(width), GUILayout.Height(RowH)))
-                {
-                    int section = i;
-                    Defer(() => JumpToNumericSection(section));
-                }
-            }
-            GUILayout.EndHorizontal();
-            GUILayout.Space(6f * scale);
-        }
-
         private void NumericPage()
         {
-            Section("属性");
-            StatsBody();
-            Section("物品数量");
-            ItemsBody();
-            Section("游戏速度");
-            GUILayout.BeginHorizontal();
-            float speedWidth = Mathf.Max(64f * scale, style.FooterValue.CalcSize(new GUIContent("5.00×")).x);
-            float speed = GUILayout.HorizontalSlider(plugin.Options.Speed.Value, 0.25f, 5f,
-                GUILayout.Width(ContentWidth() - speedWidth - 8f * scale));
-            GUILayout.Space(8f * scale);
-            UiLabel(speed.ToString("0.00") + "×", style.FooterValue, GUILayout.Width(speedWidth));
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            if (UiButton("0.5×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(0.5f);
-            if (UiButton("1×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(1f);
-            if (UiButton("1.5×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(1.5f);
-            if (UiButton("2×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(2f);
-            if (UiButton("3×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(3f);
-            GUILayout.EndHorizontal();
-            if (Mathf.Abs(speed - plugin.Options.Speed.Value) > 0.02f) plugin.ApplySpeed(speed);
-            Note("只改引擎时间倍率；原生暂停、慢动作与快进各有自己的状态。");
+            statsOpen = Fold("角色属性 · " + Editable.Count + " 项", statsOpen, () => statsOpen = !statsOpen);
+            if (statsOpen) StatsBody();
+            itemsOpen = Fold("物品数量（可能剧透）", itemsOpen, () => itemsOpen = !itemsOpen);
+            if (itemsOpen) ItemsBody();
+            worldOpen = Fold("世界与规则 · 速度 " + plugin.Options.Speed.Value.ToString("0.00") + "×", worldOpen, () => worldOpen = !worldOpen);
+            if (worldOpen)
+            {
+                GUILayout.BeginHorizontal();
+                float speedWidth = Mathf.Max(64f * scale, style.FooterValue.CalcSize(new GUIContent("5.00×")).x);
+                float speed = GUILayout.HorizontalSlider(plugin.Options.Speed.Value, 0.25f, 5f,
+                    GUILayout.Width(ContentWidth() - speedWidth - 8f * scale));
+                GUILayout.Space(8f * scale);
+                UiLabel(speed.ToString("0.00") + "×", style.FooterValue, GUILayout.Width(speedWidth));
+                GUILayout.EndHorizontal();
+                GUILayout.BeginHorizontal();
+                if (UiButton("0.5×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(0.5f);
+                if (UiButton("1×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(1f);
+                if (UiButton("1.5×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(1.5f);
+                if (UiButton("2×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(2f);
+                if (UiButton("3×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(3f);
+                GUILayout.EndHorizontal();
+                if (Mathf.Abs(speed - plugin.Options.Speed.Value) > 0.02f) plugin.ApplySpeed(speed);
+                Note("仅调整时间倍率；暂停与慢动作仍由游戏控制。");
+            }
             UndoSection();
         }
 
@@ -1007,6 +1004,12 @@ namespace MortalHelper.Game
             UiLabel("筛选", style.Description, GUILayout.Width(45f * scale));
             searchEdit = GUILayout.TextField(searchEdit, 80, GUILayout.ExpandWidth(true));
             GUILayout.EndHorizontal();
+            var familyLabels = new string[StatFamilies.Length];
+            for (int i = 0; i < familyLabels.Length; i++) familyLabels[i] = Localize(StatFamilies[i]);
+            int selectedFamily = GUILayout.SelectionGrid(statFamily, familyLabels, 3, style.Segment,
+                GUILayout.Height(RowH * 2f + 4f * scale));
+            if (selectedFamily != statFamily && selectedFamily >= 0 && selectedFamily < StatFamilies.Length)
+                Defer(() => statFamily = selectedFamily);
             float width = ContentWidth(), gap = 8f * scale;
             bool stacked = width < 520f * scale;
             float applyWidth = Mathf.Max(64f * scale, style.ButtonStyle.CalcSize(new GUIContent("应用")).x);
@@ -1018,6 +1021,8 @@ namespace MortalHelper.Game
                 if (!string.IsNullOrEmpty(search) && name.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 string key = stat.StatType.ToString();
                 string buffer;
+                int family;
+                if (statFamily != 0 && (!StatFamilyOf.TryGetValue(key, out family) || family != statFamily)) continue;
                 if (!statEdits.TryGetValue(key, out buffer)) { buffer = stat.Value.ToString(); statEdits[key] = buffer; }
                 string range = stat.Min + "～" + stat.Max;
                 float rangeWidth = stacked || !editable ? (width - gap) * .42f : Mathf.Min(width * .28f,
@@ -1262,13 +1267,17 @@ namespace MortalHelper.Game
         private void LanguagePage()
         {
             Section("语言");
-            bool traditional = plugin.Options.TraditionalChinese.Value;
-            bool next = DrawSwitchRow("繁體中文", traditional, "关闭为简体中文；切换后立即生效并保存设置。");
-            if (next != traditional)
+            int current = plugin.Options.TraditionalChinese.Value ? 1 : 0;
+            int next = GUILayout.SelectionGrid(current,
+                new[] { Localize("简体中文"), Localize("繁体中文") }, 1, style.Segment,
+                GUILayout.Height(RowH * 2f + 4f * scale));
+            if (next != current)
             {
-                plugin.Options.TraditionalChinese.Value = next;
+                plugin.Options.TraditionalChinese.Value = next == 1;
                 plugin.Options.Config.Save();
+                plugin.Status = next == 1 ? "面板已切换为繁體中文。" : "面板已切换为简体中文。";
             }
+            Note("点选即切换，立即生效并保存设置。");
         }
 
         private void DrawBottomBar()
@@ -1351,7 +1360,7 @@ namespace MortalHelper.Game
                     clipping = TextClipping.Overflow
                 };
             badgeTitleStyle.font = style.BadgeFont ?? style.UiFont;
-            badgeTitleStyle.fontSize = Mathf.Clamp(Mathf.FloorToInt(titleH / 3.3f), 11, 24);
+            badgeTitleStyle.fontSize = Mathf.Clamp(Mathf.FloorToInt(titleH / 4f), 10, 20);
             badgeTitleStyle.normal.textColor = new Color(.92f, .88f, .79f, 1f);
             UiLabel(new Rect(badge.x + 2f * s, titleY, badge.width - 4f * s, titleH), "萬\n象\n錄", badgeTitleStyle);
             float tagWidth = Mathf.Max(1f, badge.width - 14f * s);
@@ -1365,7 +1374,7 @@ namespace MortalHelper.Game
                     clipping = TextClipping.Overflow
                 };
             badgeKeyStyle.font = style.UiFont;
-            badgeKeyStyle.fontSize = Mathf.Clamp(Mathf.FloorToInt(footerH * .62f), 11, 20);
+            badgeKeyStyle.fontSize = Mathf.Clamp(Mathf.FloorToInt(footerH * .62f), 10, 18);
             badgeKeyStyle.normal.textColor = new Color(.90f, .76f, .48f, 1f);
             UiLabel(new Rect(tagRect.x, tagRect.y - 1f, tagRect.width, tagRect.height + 2f),
                 plugin.Options.Toggle.Value.ToString(), badgeKeyStyle);
@@ -1456,11 +1465,6 @@ namespace MortalHelper.Game
             float textHeight = style.SectionTitle.CalcHeight(new GUIContent(Localize(title)), width);
             float rowHeight = Mathf.Max(RowH, Mathf.Ceil(textHeight));
             Rect row = GUILayoutUtility.GetRect(1f, rowHeight, GUILayout.ExpandWidth(true), GUILayout.Height(rowHeight));
-            if (page == 3 && Event.current.type == EventType.Repaint)
-            {
-                int section = title == "属性" ? 0 : title == "物品数量" ? 1 : title == "游戏速度" ? 2 : -1;
-                if (section >= 0) numericSectionY[section] = Mathf.Max(0f, row.y - 6f * scale);
-            }
             float barWidth = Mathf.Max(2f, Mathf.Round(2f * scale));
             // Measured at scale 1: the glyph ink is 16px tall and sits 3px below the
             // line-box centre, so a bar matched to the line box reads as too high and

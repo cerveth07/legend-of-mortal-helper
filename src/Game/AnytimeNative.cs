@@ -78,6 +78,16 @@ namespace MortalHelper.Game
                 SaveFailed("恢复期间不能存档。");
                 return false;
             }
+            // Game-owned autosave slots do not use the numbered manual-save path.
+            // Leave them to the native saver while keeping unsafe manual slots guarded.
+            if (Enabled && slot != null && slot.StartsWith("auto", StringComparison.OrdinalIgnoreCase))
+            {
+                savingSlot = null;
+                savingStory = false;
+                try { Plugin.Instance.Log("[Save] native non-numbered slot=" + slot); }
+                catch (Exception) { }
+                return true;
+            }
             if (SceneManager.GetActiveScene().name == "Combat")
             {
                 if (Enabled)
@@ -141,6 +151,7 @@ namespace MortalHelper.Game
         internal static void PrepareLoad(ref GameSave data)
         {
             if (data == null || loadingSlot == null || Plugin.Instance == null) return;
+            if (StoryReplay.LoadingBaseline) return;
             // LoadGameData may return early for an empty or unreadable slot.
             // Keep the current fight/story journal until native data is applied.
             AnytimeStory.BeforeNativeLoad();
@@ -212,7 +223,10 @@ namespace MortalHelper.Game
     {
         private static void Postfix(MenuPanel __instance)
         {
-            if (AnytimeNative.CanOffer) { AnytimeNative.MarkOffered(); __instance.ToggleSaveButton(true); }
+            bool available = AnytimeNative.CanOffer;
+            try { Plugin.Instance?.Log("[Anytime] save menu " + (available ? "available" : AnytimeNative.Availability)); }
+            catch (Exception) { }
+            if (available) { AnytimeNative.MarkOffered(); __instance.ToggleSaveButton(true); }
             else if (AnytimeNative.OfferedHere) __instance.ToggleSaveButton(false);
         }
     }
