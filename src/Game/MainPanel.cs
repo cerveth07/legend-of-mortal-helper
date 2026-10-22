@@ -219,6 +219,16 @@ namespace MortalHelper.Game
                 + " scale=" + scale.ToString("0.00");
         }
 
+        internal bool EditingTextField { get; private set; }
+        private string EditableTextField(string id, string value, int maxLength, params GUILayoutOption[] options)
+        {
+            string name = "mortal-helper-text:" + id;
+            GUI.SetNextControlName(name);
+            string result = GUILayout.TextField(value, maxLength, options);
+            if (GUI.GetNameOfFocusedControl() == name) EditingTextField = true;
+            return result;
+        }
+
         internal int Page
         {
             get { return page; }
@@ -266,6 +276,7 @@ namespace MortalHelper.Game
             }
             GUISkin previous = GUI.skin;
             bool previousEnabled = GUI.enabled;
+            EditingTextField = false;
             GUI.skin = style.Skin;
             if (plugin.Options.AutoTour.Value) GUI.enabled = false;
             try
@@ -921,7 +932,7 @@ namespace MortalHelper.Game
                     GUILayout.BeginHorizontal();
                 }
                 else GUILayout.Space(gap);
-                buffer = GUILayout.TextField(buffer, 5, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
+                buffer = EditableTextField("relationship:" + key, buffer, 5, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
                 relationshipEdits[key] = buffer;
                 GUILayout.Space(gap);
                 if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
@@ -973,6 +984,8 @@ namespace MortalHelper.Game
             worldOpen = Fold("世界与规则 · 速度 " + plugin.Options.Speed.Value.ToString("0.00") + "×", worldOpen, () => worldOpen = !worldOpen);
             if (worldOpen)
             {
+                bool wasEnabled = GUI.enabled;
+                GUI.enabled = wasEnabled && plugin.Gate.CanInteract;
                 GUILayout.BeginHorizontal();
                 float speedWidth = Mathf.Max(64f * scale, style.FooterValue.CalcSize(new GUIContent("5.00×")).x);
                 float speed = GUILayout.HorizontalSlider(plugin.Options.Speed.Value, 0.25f, 5f,
@@ -988,7 +1001,9 @@ namespace MortalHelper.Game
                 if (UiButton("3×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(3f);
                 GUILayout.EndHorizontal();
                 if (Mathf.Abs(speed - plugin.Options.Speed.Value) > 0.02f) plugin.ApplySpeed(speed);
-                Note("仅调整时间倍率；暂停与慢动作仍由游戏控制。");
+                GUI.enabled = wasEnabled;
+                Note(plugin.Gate.CanInteract ? "仅调整时间倍率；暂停与慢动作仍由游戏控制。"
+                    : "恢复过程中速度控制已锁定。");
             }
             UndoSection();
         }
@@ -1002,7 +1017,7 @@ namespace MortalHelper.Game
             if (!editable) Note("当前不能修改（战斗中 / 加载中 / 恢复中）；下面是只读预览。");
             GUILayout.BeginHorizontal();
             UiLabel("筛选", style.Description, GUILayout.Width(45f * scale));
-            searchEdit = GUILayout.TextField(searchEdit, 80, GUILayout.ExpandWidth(true));
+            searchEdit = EditableTextField("stat-search", searchEdit, 80, GUILayout.ExpandWidth(true));
             GUILayout.EndHorizontal();
             var familyLabels = new string[StatFamilies.Length];
             for (int i = 0; i < familyLabels.Length; i++) familyLabels[i] = Localize(StatFamilies[i]);
@@ -1048,7 +1063,7 @@ namespace MortalHelper.Game
                     GUILayout.BeginHorizontal();
                 }
                 else GUILayout.Space(gap);
-                buffer = GUILayout.TextField(buffer, 9, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
+                buffer = EditableTextField("stat:" + key, buffer, 9, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
                 statEdits[key] = buffer;
                 GUILayout.Space(gap);
                 if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
@@ -1091,7 +1106,7 @@ namespace MortalHelper.Game
             showAllItems = DrawSwitchRow("也列出数量为 0 的物品", showAllItems, "勾选后可以给未持有的物品直接设置数量，等同于生成。");
             GUILayout.BeginHorizontal();
             UiLabel("筛选", style.Description, GUILayout.Width(45f * scale));
-            itemSearchEdit = GUILayout.TextField(itemSearchEdit, 80, GUILayout.ExpandWidth(true));
+            itemSearchEdit = EditableTextField("item-search", itemSearchEdit, 80, GUILayout.ExpandWidth(true));
             GUILayout.EndHorizontal();
             Note("可按名称或物品 ID 搜索；每行右侧直接输入数量后点「应用」。");
             ItemDataCollection collection = tab == 0 ? database.Books : tab == 1 ? database.Miscs
@@ -1131,7 +1146,7 @@ namespace MortalHelper.Game
                     GUILayout.BeginHorizontal();
                 }
                 else GUILayout.Space(gap);
-                buffer = GUILayout.TextField(buffer, 7, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
+                buffer = EditableTextField("item:" + key, buffer, 7, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
                 itemEdits[key] = buffer;
                 GUILayout.Space(gap);
                 if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
@@ -1183,7 +1198,7 @@ namespace MortalHelper.Game
             UiLabel(custom ? "当前生效：" + configured + " 格" : "当前生效：游戏默认", style.Entry);
             GUILayout.BeginHorizontal();
             if (string.IsNullOrEmpty(slotCountText)) slotCountText = configured.ToString();
-            slotCountText = GUILayout.TextField(slotCountText, 4, GUILayout.Width(72f * scale), GUILayout.Height(RowH));
+            slotCountText = EditableTextField("slot-count", slotCountText, 4, GUILayout.Width(72f * scale), GUILayout.Height(RowH));
             if (UiButton("保存格数", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
             {
                 int parsed;
@@ -1225,7 +1240,7 @@ namespace MortalHelper.Game
             {
                 UiLabel("当前选中槽位：" + selected, style.Entry);
                 if (commentSlot != selected) { commentSlot = selected; slotComment = SaveSlotComments.Get(selected); }
-                slotComment = GUILayout.TextField(slotComment, 60, GUILayout.Height(RowH));
+                slotComment = EditableTextField("slot-comment", slotComment, 60, GUILayout.Height(RowH));
                 GUILayout.BeginHorizontal();
                 if (UiButton("保存备注", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
                 { string comment = slotComment; Defer(() => { SaveSlotComments.Set(selected, comment); plugin.Status = "备注已保存。"; }); }
