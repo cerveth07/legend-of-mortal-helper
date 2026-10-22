@@ -92,7 +92,7 @@ namespace MortalHelper.Game
         private static int? replayDice;
         private static bool sceneReady, targetReached;
         private static bool returningTitle;
-        private static float targetAt, replayStarted;
+        private static float targetAt, lastProgress;
 
         internal static bool Replaying => playback != null && !Failed && !Verified;
         internal static bool Verified { get; private set; }
@@ -312,7 +312,7 @@ namespace MortalHelper.Game
             playback = record; save = opening; cursor = 0;
             sceneReady = false; targetReached = false; targetAt = 0f;
             replayDice = null;
-            replayStarted = Time.unscaledTime; Verified = Failed = false; Failure = null;
+            lastProgress = Time.unscaledTime; Verified = Failed = false; Failure = null;
             Events.Clear(); WaitTokens.Clear(); WaitKinds.Clear(); WaitKeys.Clear();
             LockInput();
         }
@@ -334,7 +334,11 @@ namespace MortalHelper.Game
             }
             if (!Replaying) return;
             LockInput();
-            if (Time.unscaledTime - replayStarted > 120f) { Fail("剧情回放超过两分钟仍未到达存档位置。"); return; }
+            // Measure a stall, not the total elapsed time: a long script that keeps
+            // consuming events is making progress even when the whole replay takes
+            // several minutes.
+            if (Time.unscaledTime - lastProgress > 120f)
+            { Fail("剧情回放超过两分钟没有匹配到记录的下一个事件（已重放 " + cursor + " 个）。"); return; }
             if (!sceneReady || !targetReached || Time.unscaledTime - targetAt < .25f) return;
             try
             {
@@ -437,7 +441,7 @@ namespace MortalHelper.Game
             if (cursor == playback.Events.Length) { Reach("Say", key); return false; }
             var next = playback.Events[cursor];
             if (next.Kind != "Say" || next.Key != key) AbortReplay("剧情对话顺序与存档不同。");
-            cursor++; return true;
+            cursor++; lastProgress = Time.unscaledTime; return true;
         }
         internal static void SayDone(string text) { Record(new AnytimeStoryEvent { Kind = "Say", Key = Digest(text) }); }
         internal static int BeforeChoose(string key, int count)
@@ -449,7 +453,7 @@ namespace MortalHelper.Game
             var next = playback.Events[cursor];
             if (next.Kind != "Choose" || next.Key != digest || next.Choice < 1 || next.Choice > count)
                 AbortReplay("剧情选项与存档不同。");
-            cursor++; return next.Choice;
+            cursor++; lastProgress = Time.unscaledTime; return next.Choice;
         }
         internal static void ChooseDone(string key, int choice)
         { Record(new AnytimeStoryEvent { Kind = "Choose", Key = Digest(key), Choice = choice }); }
@@ -460,6 +464,7 @@ namespace MortalHelper.Game
             {
                 if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Random")
                     AbortReplay("剧情随机事件与存档不同。");
+                lastProgress = Time.unscaledTime;
                 return playback.Events[cursor++].Number;
             }
             Record(new AnytimeStoryEvent { Kind = "Random", Number = drawn });
@@ -472,6 +477,7 @@ namespace MortalHelper.Game
             if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Dice")
                 AbortReplay("轮盘判定次数与存档不同。");
             replayDice = playback.Events[cursor++].Choice;
+            lastProgress = Time.unscaledTime;
             random = replayDice.Value;
         }
         internal static void AfterDice(DiceCheckResult result)

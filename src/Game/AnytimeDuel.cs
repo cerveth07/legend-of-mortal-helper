@@ -58,7 +58,7 @@ namespace MortalHelper.Game
         private static byte[] opening, stagedOpening;
         private static string stagedSceneKey;
         private static int pointIndex, drawIndex;
-        private static float replayStarted;
+        private static float lastProgress;
         private static bool waiting, injecting, replaying, failed, sceneReady, finalVerified, returningTitle;
         private static string invalid;
 
@@ -195,7 +195,7 @@ namespace MortalHelper.Game
                     loaded.SceneKey != gameSave.CurrentSceneKey)
                     throw new InvalidDataException("客户端或战斗关卡与单挑记录不匹配。");
                 pending = loaded;
-                replayStarted = Time.unscaledTime;
+                lastProgress = Time.unscaledTime;
                 return true;
             }
             catch (Exception e)
@@ -229,7 +229,11 @@ namespace MortalHelper.Game
             if (manager != null && !Replaying && HasAssist()) Invalidate("本场曾启用单挑辅助。请在新单挑中重新记录。");
             if (!Replaying) { UnlockInput(); return; }
             LockInput();
-            if (Time.unscaledTime - replayStarted > 120f) { Fail("单挑回放超过两分钟仍未到达存档回合。"); return; }
+            // A stall, not total elapsed time: a long replay that keeps reaching
+            // action points is still making progress.
+            if (Time.unscaledTime - lastProgress > 120f)
+            { Fail("单挑回放超过两分钟没有出现下一个行动点（停点 " + pointIndex + "/" +
+                (journal == null ? 0 : journal.Points.Count) + "）。"); return; }
             if (manager != null && Time.timeScale != 1f) Time.timeScale = 1f;
         }
 
@@ -238,7 +242,7 @@ namespace MortalHelper.Game
             manager = null; journal = null; pending = null; opening = null;
             stagedOpening = null; stagedSceneKey = null;
             pointIndex = drawIndex = 0; waiting = injecting = replaying = failed = sceneReady = finalVerified = returningTitle = false;
-            replayStarted = 0f;
+            lastProgress = 0f;
             invalid = null;
             UnlockInput();
         }
@@ -296,6 +300,7 @@ namespace MortalHelper.Game
         private static void ArriveAtActionPoint()
         {
                 if (manager == null || failed || invalid != null) return;
+                lastProgress = Time.unscaledTime;
                 string state = DuelAudit.Capture(manager);
                 string digest = Hash(Encoding.UTF8.GetBytes(state));
                 int round = manager.CurrentRounds;
