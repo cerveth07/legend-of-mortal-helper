@@ -62,6 +62,9 @@ namespace MortalHelper.Game
             catch (Exception error) { Status = "原生进度解析失败：" + error.Message; return false; }
             if (native == null || native.CurrentScene != active)
             { Status = "原生进度与当前剧情场景不一致，不能录制。"; return false; }
+            // Replay.Host.LoadBaseline rejects these fields: refuse at capture time.
+            if (native.TimeTick <= 0 || string.IsNullOrEmpty(native.CurrentStoryScript))
+            { Status = "原生进度缺少有效时间戳或剧情脚本，不能建立可重放起点。"; return false; }
             baseline = json;
             scene = active;
             client = "lom:" + Application.version;
