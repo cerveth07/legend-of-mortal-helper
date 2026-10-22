@@ -130,7 +130,8 @@ namespace MortalHelper.Game
                 string path = SlotFile(slot);
                 if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
                     File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending") ||
-                    (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha")))
+                    (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha")) ||
+                    (File.Exists(path + ".mhduel-required") && !File.Exists(path + ".mhduel")))
                     throw new IOException("此槽位有尚未处理的存档恢复材料，请先核对该槽位。");
                 WritePair(path, native, Encode(journal));
                 string message = "单挑回合已写入编号槽 " + slot + "。";
@@ -159,10 +160,19 @@ namespace MortalHelper.Game
             if (gameSave == null || gameSave.CurrentScene != "Combat") return false;
             try
             {
-                if (!Numbered(slot)) throw new InvalidDataException("单挑必须从编号槽读取。");
+                // Ordinary native Combat saves have no replay sidecar. A persistent
+                // requirement marker distinguishes NEW replay-dependent saves.
+                // Legacy unmarked companions remain readable when still present.
+                if (!Numbered(slot)) return false;
                 string path = SlotFile(slot);
                 if (File.Exists(path + ".mhduel-pending"))
                     throw new InvalidDataException("单挑存档提交曾中断；请核对 .dat/.mhduel 与 .bak 备份后再读取。");
+                if (!File.Exists(path + ".mhduel"))
+                {
+                    if (File.Exists(path + ".mhduel-required"))
+                        throw new InvalidDataException("单挑中途档缺少必需的 .mhduel 附档；请恢复完整备份。");
+                    return false;
+                }
                 var loaded = Decode(path + ".mhduel");
                 Validate(loaded);
                 if (!AnytimeDuelRandomPatch.Covered || loaded.Client != Application.version ||
@@ -480,6 +490,8 @@ namespace MortalHelper.Game
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             string extra = path + ".mhduel", first = path + ".mhduel-native-stage", second = extra + ".stage";
             string marker = path + ".mhduel-pending";
+            string required = path + ".mhduel-required";
+            bool hadRequired = File.Exists(required);
             bool hadNative = File.Exists(path), hadExtra = File.Exists(extra), committedNative = false, committedExtra = false;
             try
             {
@@ -492,6 +504,9 @@ namespace MortalHelper.Game
                 committedExtra = true;
                 if (Hash(File.ReadAllBytes(path)) != Hash(native) ||
                     Decode(extra).NativeHash != Hash(native)) throw new IOException("双文件提交校验失败。");
+                // A pending marker protects the write until both files and the
+                // persistent replay requirement have committed successfully.
+                Stage(required, Encoding.ASCII.GetBytes("1"));
                 File.Delete(marker);
             }
             catch (Exception original)
@@ -504,6 +519,8 @@ namespace MortalHelper.Game
                 if (rollback != null)
                     throw new IOException("双文件保存失败且回退未完成；请保留 .dat/.mhduel 和 .bak 成对核对。",
                         new AggregateException(original, rollback));
+                // Restore the previous marker state only after complete rollback.
+                if (!hadRequired && File.Exists(required)) File.Delete(required);
                 if (File.Exists(marker)) File.Delete(marker);
                 throw;
             }
