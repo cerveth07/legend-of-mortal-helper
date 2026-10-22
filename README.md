@@ -98,7 +98,7 @@ UI 为用户自制，保留原有界面；不能因代码曾位于旧整合项�
 
 | 功能 | 用法 | 说明 |
 |---|---|---|
-| 随时存档（实验） | 在本页开启后，使用游戏「系统→储存游戏」的编号槽位；在剧情对话或选项等待处、单挑行动按钮出现时保存，再从游戏原生读档列表读取 | 剧情档附带 `.mha` 和 `.mha-required`，单挑档附带 `.mhduel`；这些文件都需要与同槽 `.dat` 一起备份和移动。群战、轮盘动画、单挑结算中暂不支持；读取会重放并核验，失败会中止解锁 |
+| 随时存档（实验） | 在本页开启后，使用游戏「系统→储存游戏」的编号槽位；在剧情对话或选项等待处、单挑行动按钮出现时保存，再从游戏原生读档列表读取 | 剧情档附带 `.mha` 和 `.mha-required`，单挑档附带 `.mhduel` 和 `.mhduel-required`；这些文件都需要与同槽 `.dat` 一起备份和移动。群战、轮盘动画、单挑结算中暂不支持；读取会重放并核验，失败会中止解锁 |
 | 存档格数 | 输入 2～999 后点「保存格数」，重新打开存档/读档界面生效；点「恢复默认」用游戏原值 | 只改变列表建多少个槽位，**不改动任何存档文件** |
 | 存档备注 | 在游戏存档列表选中槽位后按 `F2`，面板跳到本页编辑；备注显示在槽位标题下方 `〔备注〕…` | 存配置目录 `cerveth.mortal.helper.slots.txt`（旧版放在存档目录，本版不改动存档目录） |
 | 按最近存档排序 | `F3` 切换 | 仅重排读档列表行顺序，槽位编号与文件不变 |
@@ -155,7 +155,7 @@ LegendOfMortal/
 
 ## 三、备份、升级与卸载
 
-- **备份**：退出游戏后复制完整存档目录（含随时存档生成的 `.mha`、`.mhduel`）、`BepInEx\config`（含本插件的 `cerveth.mortal.helper.cfg`、`*.choices.txt`、`*.slots.txt`、`mhr\`）、以及 `BepInEx\plugins` 下的插件。
+- **备份**：退出游戏后复制完整存档目录（含随时存档生成的 `.mha`、`.mha-required`、`.mhduel`、`.mhduel-required`）、`BepInEx\config`（含本插件的 `cerveth.mortal.helper.cfg`、`*.choices.txt`、`*.slots.txt`、`mhr\`）、以及 `BepInEx\plugins` 下的插件。
 - **升级**：替换 `MortalHelper.dll` 即可；配置与记录文件保留。
 - **卸载**：只移走本插件 `MortalHelper.dll`；共用加载器和其他插件应保留。已制作的剧情或单挑中途档依赖插件重放，卸载后应从普通原生存档读取。关闭开关不会删除已有的中途档附加记录，也不会撤销已写入的数值或备注。
 
@@ -178,7 +178,7 @@ LegendOfMortal/
 | Save | `SlotCount` / `SortRecent` / `AnytimeSave` | 0 / false / false | 存档格数（0 = 游戏默认）、排序、实验性随时存档 |
 | Diagnostics | `AutoTour` / `PreviewEditable` / `DiagnoseScript` | false | 自动切视图截图（`BepInEx/config/mh/`）、只读渲染编辑表、切换剧本时输出脚本名与可解析分支数（都没有面板入口）；`SelfTest` 只在 `--diagnostics` 开发构建里存在 |
 
-备注、分支和检查点记录在配置目录：`cerveth.mortal.helper.choices.txt`、`cerveth.mortal.helper.slots.txt`、`mhr\slot-00N.mhr`。随时存档开启后，编号槽位的原生 `.dat` 旁还会写入 `.mha` 与 `.mha-required`（剧情），或 `.mhduel`（单挑）；哈希用于发现配对文件损坏或被覆盖，不代表防篡改签名。
+备注、分支和检查点记录在配置目录：`cerveth.mortal.helper.choices.txt`、`cerveth.mortal.helper.slots.txt`、`mhr\slot-00N.mhr`。随时存档开启后，编号槽位的原生 `.dat` 旁还会写入 `.mha` 与 `.mha-required`（剧情），或 `.mhduel` 与 `.mhduel-required`（单挑）；哈希用于发现配对文件损坏或被覆盖，不代表防篡改签名。
 
 ## 五、已知限制与未实现
 
