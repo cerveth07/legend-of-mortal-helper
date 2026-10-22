@@ -97,6 +97,8 @@ namespace MortalHelper.Game
         internal static bool Verified { get; private set; }
         internal static bool Failed { get; private set; }
         internal static string Failure { get; private set; }
+        private static bool SameScript(string left, string right) =>
+            string.Equals(left ?? "", right ?? "", StringComparison.Ordinal);
         internal static string BlockReason
         {
             get
@@ -111,7 +113,7 @@ namespace MortalHelper.Game
                 if (invalid != null) return invalid;
                 if (SaveSystem.Instance == null || lua == null || string.IsNullOrEmpty(baseline) || baselineGlobals == null ||
                     !string.Equals(active, scene, StringComparison.Ordinal) ||
-                    !string.Equals(script, PlayerStatManagerData.Instance?.CurrentStoryScript, StringComparison.Ordinal))
+                    !SameScript(script, PlayerStatManagerData.Instance?.CurrentStoryScript))
                     return "当前剧情尚未建立可重放的脚本起点。";
                 if (WaitTokens.Count != 1 || (WaitKinds[0] != "Say" && WaitKinds[0] != "Choose"))
                     return "请在对话或选项稳定等待时存档。";
@@ -266,7 +268,7 @@ namespace MortalHelper.Game
             var record = ReadRecord(path, save);
             var opening = JsonUtility.FromJson<GameSave>(record.Baseline);
             if (opening == null || opening.CurrentScene != record.Scene ||
-                opening.CurrentStoryScript != record.Script || record.Events == null ||
+                !SameScript(opening.CurrentStoryScript, record.Script) || record.Events == null ||
                 record.BaselineGlobals == null || record.ExpectedGlobals == null ||
                 string.IsNullOrEmpty(record.BaselineRandomState) || string.IsNullOrEmpty(record.RandomState) ||
                 string.IsNullOrEmpty(record.BaselineLuaRandomState) || string.IsNullOrEmpty(record.LuaRandomState) ||
@@ -361,7 +363,7 @@ namespace MortalHelper.Game
             }
             if (Replaying)
             {
-                if (playback.Script != PlayerStatManagerData.Instance?.CurrentStoryScript)
+                if (!SameScript(playback.Script, PlayerStatManagerData.Instance?.CurrentStoryScript))
                 { Fail("剧情脚本与存档起点不一致。"); return; }
                 try
                 {
@@ -385,7 +387,12 @@ namespace MortalHelper.Game
                 baselineGlobals = CaptureGlobals(lua);
                 baselineLuaRandomState = CaptureLuaRandom(lua);
             }
-            catch (Exception error) { baseline = null; invalid = "无法记录剧情起点：" + error.Message; }
+            catch (Exception error)
+            {
+                baseline = null;
+                invalid = "无法记录剧情起点：" + error.Message;
+                Plugin.Instance?.Log("[Anytime] " + invalid);
+            }
         }
 
         internal static bool BeforeSay(string text)
