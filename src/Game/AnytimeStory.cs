@@ -138,7 +138,8 @@ namespace MortalHelper.Game
                 string path = PathFor(slot);
                 if (string.IsNullOrEmpty(path)) throw new IOException("无法定位原生存档槽位。");
                 if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
-                    File.Exists(path + ".mha.rollback"))
+                    File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending") ||
+                    (File.Exists(path + ".mhduel-required") && !File.Exists(path + ".mhduel")))
                     throw new InvalidDataException("此槽位有上次中断的存档记录，请先恢复备份。");
                 if (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha"))
                     throw new InvalidDataException("此槽位缺少必需的剧情附档，请先恢复完整备份。");
