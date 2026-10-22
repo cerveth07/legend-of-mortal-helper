@@ -43,10 +43,14 @@ def run_tests(dotnet, compiler=None, base=None, framework=None):
         output = ROOT / 'artifacts'
         test_exe = output / 'ContractTests.exe'
         test_exe.unlink(missing_ok=True)
-        pure = sorted((ROOT / 'src' / 'Core').glob('*.cs')) + sorted((ROOT / 'src' / 'Recovery').glob('*.cs')) + [ROOT / 'src' / 'Game' / 'UiLanguage.cs']
+        pure = sorted((ROOT / 'src' / 'Core').glob('*.cs')) + sorted((ROOT / 'src' / 'Recovery').glob('*.cs')) + [
+            ROOT / 'src' / 'Game' / name for name in
+            ['UiLanguage.cs', 'AnytimeStoryCodec.cs', 'AnytimeDuelJournal.cs', 'DuelSaveMenuState.cs']]
+        suites = [ROOT / 'tests' / name for name in
+                  ['Contracts.cs', 'StoryContracts.cs', 'DuelJournalTests.cs', 'DuelSaveMenuStateTests.cs']]
         run_compiler(dotnet, compiler, base + ['-target:exe', '-out:' + str(test_exe)] +
                      ['-r:' + str(framework / n) for n in ['mscorlib.dll', 'System.dll', 'System.Core.dll']] +
-                     pure + [ROOT / 'tests' / 'Contracts.cs'], output / 'tests.rsp')
+                     pure + suites, output / 'tests.rsp')
         if os.name != 'nt' and dotnet.lower().endswith('.exe'):
             test_exe.chmod(test_exe.stat().st_mode | 0o111)
         command = [str(test_exe)] if os.name == 'nt' or dotnet.lower().endswith('.exe') else ['mono', str(test_exe)]

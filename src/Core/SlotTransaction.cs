@@ -188,18 +188,21 @@ namespace MortalHelper.Core
         public void RecordReplacement(string hash)
         {
             if (string.IsNullOrEmpty(hash)) throw new ArgumentException("替换文件哈希为空。", nameof(hash));
+            string previous = ReplacementHash;
             ReplacementHash = hash;
-            Persist();
+            try { Persist(); }
+            catch { ReplacementHash = previous; throw; }
         }
 
         public void Commit()
         {
-            State = SlotTransactionState.Committed;
-            Persist();
+            PersistState(SlotTransactionState.Committed);
         }
 
         public void Complete()
         {
+            if (!CanDiscardBackups(State))
+                throw new InvalidOperationException("事务尚未持久化提交或回退决定，不能删除备份。");
             for (int index = 0; index < entries.Count; index++)
             {
                 string backup = entries[index].BackupPath;
@@ -215,7 +218,14 @@ namespace MortalHelper.Core
         public SlotRollbackReport Rollback()
         {
             var report = new SlotRollbackReport();
-            if (State == SlotTransactionState.RolledBack || State == SlotTransactionState.Committed)
+            if (State == SlotTransactionState.Committed)
+            {
+                // Companion retirement may still be pending. The operation owner
+                // must finish it before cleanup; rollback cannot undo a commit.
+                report.Detail = "事务已提交，不能回退；已保留日志与备份，待读取时完成清理。";
+                return report;
+            }
+            if (State == SlotTransactionState.RolledBack)
             {
                 report.Complete = true;
                 Complete();
@@ -274,8 +284,12 @@ namespace MortalHelper.Core
                 report.Detail = "回退未完成，已保留事务日志与备份：" + string.Join("、", report.Blockers.ToArray());
                 return report;
             }
-            State = SlotTransactionState.RolledBack;
-            TryPersist();
+            try { PersistState(SlotTransactionState.RolledBack); }
+            catch (Exception error)
+            {
+                report.Detail = "原始文件已恢复，但回退决定无法持久化；已保留日志与全部备份：" + error.Message;
+                return report;
+            }
             report.Complete = true;
             report.Detail = "已按事务日志恢复到写入前状态。";
             Complete();
@@ -291,8 +305,17 @@ namespace MortalHelper.Core
             catch (UnauthorizedAccessException) { return false; }
         }
 
+        private void PersistState(SlotTransactionState next)
+        {
+            SlotTransactionState previous = State;
+            State = next;
+            try { Persist(); }
+            catch { State = previous; throw; }
+        }
+
         private void Persist()
         {
+            Step("persist:" + StateCode(State));
             var text = new StringBuilder(Header).Append('\n');
             text.Append("op=").Append(Escape(Operation)).Append('\n');
             text.Append("state=").Append(StateCode(State)).Append('\n');

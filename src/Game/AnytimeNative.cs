@@ -202,6 +202,7 @@ namespace MortalHelper.Game
         internal static void FinishOperation(SlotTransaction transaction, string path)
         {
             if (transaction == null) return;
+            if (transaction.State != SlotTransactionState.Committed) transaction.Commit();
             RetireCompanions(transaction.Operation, path);
             transaction.Complete();
         }
@@ -229,7 +230,9 @@ namespace MortalHelper.Game
             if (transaction.State == SlotTransactionState.Broken)
                 throw new InvalidDataException("此槽位上次存档失败且回退未完成；事务日志与备份仍保留在 " + journal +
                     "。请从完整备份恢复该槽位后再读取。");
-            if (transaction.State == SlotTransactionState.Committed || transaction.State == SlotTransactionState.RolledBack)
+            if (transaction.State == SlotTransactionState.Committed)
+            { FinishOperation(transaction, path); return; }
+            if (transaction.State == SlotTransactionState.RolledBack)
             { transaction.Complete(); return; }
             // A prepared transaction is finished forward only when the caller had
             // already verified the replacement file it recorded.
@@ -237,8 +240,7 @@ namespace MortalHelper.Game
                 SlotTransaction.HashFile(path) == transaction.ReplacementHash;
             if (forward)
             {
-                RetireCompanions(transaction.Operation, path);
-                transaction.Complete();
+                FinishOperation(transaction, path);
                 return;
             }
             var report = transaction.Rollback();
@@ -378,7 +380,11 @@ namespace MortalHelper.Game
             }
             catch (Exception error)
             {
-                Plugin.Instance.Gate.Fail("中途档读取失败：" + error.GetBaseException().Message);
+                string reason = "中途档读取失败：" + error.GetBaseException().Message;
+                Plugin.Instance.Gate.Fail(reason);
+                Plugin.Instance.Status = reason;
+                if (Plugin.Instance.Panel != null) Plugin.Instance.Panel.Visible = true;
+                Plugin.Instance.Log("[Anytime] load rejected slot=" + loadingSlot + " reason=" + reason);
                 throw;
             }
         }
@@ -473,6 +479,11 @@ namespace MortalHelper.Game
             bool available = AnytimeNative.CanOffer;
             try { Plugin.Instance?.Log("[Anytime] save menu " + (available ? "available" : AnytimeNative.Availability)); }
             catch (Exception) { }
+            if (SceneManager.GetActiveScene().name == "Combat")
+            {
+                DuelSaveMenu.Ensure(__instance, available);
+                return;
+            }
             if (available) { AnytimeNative.MarkOffered(); __instance.ToggleSaveButton(true); }
             else if (AnytimeNative.OfferedHere) __instance.ToggleSaveButton(false);
         }

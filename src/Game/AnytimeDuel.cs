@@ -16,6 +16,9 @@ using Mortal.Core;
 using MortalHelper.Core;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using Draw = MortalHelper.Game.DuelDraw;
+using Point = MortalHelper.Game.DuelPoint;
+using Journal = MortalHelper.Game.DuelJournal;
 
 namespace MortalHelper.Game
 {
@@ -24,32 +27,8 @@ namespace MortalHelper.Game
     // Neither file is usable as an in-combat save without the other one.
     internal static class AnytimeDuel
     {
-        [Serializable] private sealed class Draw
-        {
-            public string Site;
-            public int Kind, A, B, Integer;
-            public float X, Y, Floating;
-        }
-
-        [Serializable] private sealed class Point
-        {
-            public int Round, DrawCount;
-            public string Digest;
-        }
-
-        [Serializable] private sealed class Journal
-        {
-            public int Format = 1;
-            public string Client, SceneKey, NativeHash, RandomState, FinalState;
-            public List<int> Actions = new List<int>();
-            public List<Draw> Draws = new List<Draw>();
-            public List<Point> Points = new List<Point>();
-        }
-
-        private const int MaxFile = 32 * 1024 * 1024;
-        private const int MaxActions = 10000;
-        private const int MaxDraws = 1000000;
-        private static readonly byte[] Magic = Encoding.ASCII.GetBytes("MHDL-01\n");
+        private const int MaxActions = DuelJournalCodec.MaxActions;
+        private const int MaxDraws = DuelJournalCodec.MaxDraws;
         private static readonly MethodInfo GetSlotFile = AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile");
         private static readonly MethodInfo CreateNative = AccessTools.Method(typeof(SaveSystem), "CreateSaveData");
         private static CombatManager manager;
@@ -194,6 +173,10 @@ namespace MortalHelper.Game
                 if (!AnytimeDuelRandomPatch.Covered || loaded.Client != Application.version ||
                     loaded.SceneKey != gameSave.CurrentSceneKey)
                     throw new InvalidDataException("客户端或战斗关卡与单挑记录不匹配。");
+                // Preserve the verified opening for a subsequent save after replay.
+                // CaptureStart deliberately does not replace it during recovery.
+                stagedOpening = File.ReadAllBytes(path);
+                stagedSceneKey = loaded.SceneKey;
                 pending = loaded;
                 lastProgress = Time.unscaledTime;
                 return true;
@@ -253,6 +236,7 @@ namespace MortalHelper.Game
             opening = stagedSceneKey == PlayerStatManagerData.Instance.CurrentSceneKey ? stagedOpening : null;
             stagedOpening = null; stagedSceneKey = null;
             waiting = false;
+            Plugin.Instance?.Log("[Anytime] duel begin scene=" + PlayerStatManagerData.Instance.CurrentSceneKey + " replay=" + (pending != null));
             pointIndex = drawIndex = 0;
             if (pending == null)
             {
@@ -266,35 +250,57 @@ namespace MortalHelper.Game
             pending = null;
             replaying = true;
             if (journal.SceneKey != PlayerStatManagerData.Instance.CurrentSceneKey)
-                Fail("战斗关卡与单挑存档不同。");
+            { Fail("战斗关卡与单挑存档不同。"); return; }
+            RestoreOpeningFlags();
         }
 
-        private static IEnumerator ObserveActionPoint(IEnumerator source)
+        private static void RestoreOpeningFlags()
         {
-            try
+            // Native Load applies flags before Unity loads Combat's scene assets.
+            // Scene deserialization may overwrite asset-backed flag states. Apply
+            // the verified opening again before the combat coroutine executes,
+            // never the desired replay target or a hard-coded flag value.
+            if (opening == null) throw new InvalidDataException("单挑开场原生档缺失。");
+            var saved = ReadNative(opening);
+            var missions = MissionManagerData.Instance;
+            if (missions?.FlagsCollection == null || saved.EventFlags == null || saved.EventFlags.Count > 10000)
+                throw new InvalidDataException("单挑开场旗标集合缺失或超限。");
+            var live = new List<FlagData>();
+            foreach (var collection in missions.FlagsCollection)
             {
-                while (true)
-                {
-                    bool advanced;
-                    object current = null;
-                    try { advanced = source.MoveNext(); if (advanced) current = source.Current; }
-                    catch (Exception e)
-                    {
-                        if (replaying) Fail("行动点协程异常：" + e.GetBaseException().Message);
-                        else Invalidate("行动点协程异常：" + e.GetBaseException().Message);
-                        throw;
-                    }
-                    if (!advanced) break;
-                    yield return current;
-                }
-                try { ArriveAtActionPoint(); }
-                catch (Exception e)
-                {
-                    if (replaying) Fail(e.GetBaseException().Message);
-                    else Invalidate("无法记录单挑状态：" + e.GetBaseException().Message);
-                }
+                if (collection?.List == null) throw new InvalidDataException("单挑开场含空旗标集合。");
+                live.AddRange(collection.List);
             }
-            finally { (source as IDisposable)?.Dispose(); }
+            var identities = new Dictionary<FlagData, int>();
+            var names = new string[live.Count]; var aliases = new int[live.Count];
+            for (int i = 0; i < live.Count; i++)
+            {
+                var flag = live[i];
+                if (flag == null) throw new InvalidDataException("单挑开场含空旗标：" + i);
+                if (!identities.TryGetValue(flag, out int alias)) { alias = identities.Count; identities.Add(flag, alias); }
+                names[i] = flag.name; aliases[i] = alias;
+            }
+            var expectedNames = new string[saved.EventFlags.Count];
+            var values = new int[saved.EventFlags.Count];
+            for (int i = 0; i < saved.EventFlags.Count; i++)
+            {
+                var value = saved.EventFlags[i];
+                if (value == null) throw new InvalidDataException("单挑开场含空旗标记录：" + i);
+                expectedNames[i] = value.Name; values[i] = value.State;
+            }
+            DuelFlagRestorePlan.Validate(names, aliases, expectedNames, values);
+            for (int i = 0; i < live.Count; i++) live[i].State = values[i];
+            Plugin.Instance?.Log("[Anytime] duel opening flags restored count=" + live.Count);
+        }
+
+        private static void ActionPointCompleted()
+        {
+            try { ArriveAtActionPoint(); }
+            catch (Exception e)
+            {
+                if (replaying) Fail(e.GetBaseException().Message);
+                else Invalidate("无法记录单挑状态：" + e.GetBaseException().Message);
+            }
         }
 
         private static void ArriveAtActionPoint()
@@ -311,13 +317,17 @@ namespace MortalHelper.Game
                     journal.FinalState = state;
                     journal.Points.Add(new Point { Round = round, DrawCount = journal.Draws.Count, Digest = digest });
                     waiting = true;
+                    Plugin.Instance?.Log("[Anytime] duel checkpoint round=" + round + " draws=" + journal.Draws.Count + " actions=" + journal.Actions.Count);
                     if (journal.Points.Count > MaxActions + 1) Invalidate("本场行动日志达到上限。");
                     return;
                 }
                 if (pointIndex >= journal.Points.Count) throw new InvalidDataException("出现额外行动点。");
                 Point expected = journal.Points[pointIndex];
                 if (expected.Round != round || expected.DrawCount != drawIndex || expected.Digest != digest)
+                {
+                    DiagnoseState(state, expected.Digest);
                     throw new InvalidDataException("单挑第 " + round + " 回合状态或随机序列不一致。");
+                }
                 if (pointIndex == journal.Actions.Count)
                 {
                     if (drawIndex != journal.Draws.Count || state != journal.FinalState)
@@ -337,6 +347,29 @@ namespace MortalHelper.Game
                     try { manager.Action((CombatActionType)action); }
                     finally { injecting = false; }
                 }
+        }
+
+        private static void DiagnoseState(string actual, string expectedDigest)
+        {
+            try
+            {
+                string directory = Path.Combine(BepInEx.Paths.BepInExRootPath, "MortalHelperDiagnostics",
+                    "duel-" + DateTime.UtcNow.ToString("yyyyMMddTHHmmssfff", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, "actual.txt"), actual, new UTF8Encoding(false));
+                bool target = pointIndex == journal.Actions.Count;
+                string difference;
+                if (target)
+                {
+                    File.WriteAllText(Path.Combine(directory, "expected.txt"), journal.FinalState, new UTF8Encoding(false));
+                    difference = DuelStateDifference.Compare(journal.FinalState, actual);
+                }
+                else difference = "Intermediate point has a digest only; full expected state is available at the saved target. Expected digest=" + expectedDigest;
+                File.WriteAllText(Path.Combine(directory, "difference.txt"), difference, new UTF8Encoding(false));
+                Plugin.Instance?.Log("[Anytime] duel state diagnostics=" + directory + "; " +
+                    (difference.Length > 1800 ? difference.Substring(0, 1800) : difference));
+            }
+            catch (Exception error) { Plugin.Instance?.Log("[Anytime] duel diagnostics failed: " + error.GetBaseException().Message); }
         }
 
         private static void CompleteReplay()
@@ -380,6 +413,7 @@ namespace MortalHelper.Game
         {
             if (manager == null || replaying || invalid != null) return;
             invalid = "本场回合保存已停用：" + reason;
+            Plugin.Instance?.Log("[Anytime] " + invalid);
             waiting = false;
         }
 
@@ -454,62 +488,16 @@ namespace MortalHelper.Game
             using (var sha = SHA256.Create()) return Convert.ToBase64String(sha.ComputeHash(bytes));
         }
 
-        private static byte[] Encode(Journal value)
-        {
-            byte[] data = Encoding.UTF8.GetBytes(JsonUtility.ToJson(value));
-            if (data.Length > MaxFile - 64) throw new InvalidDataException("单挑记录超过 32 MB。" );
-            using (var stream = new MemoryStream())
-            using (var writer = new BinaryWriter(stream))
-            {
-                writer.Write(Magic);
-                writer.Write(data.Length);
-                writer.Write(data);
-                writer.Write(Convert.FromBase64String(Hash(data)));
-                return stream.ToArray();
-            }
-        }
+        private static byte[] Encode(Journal value) => DuelJournalCodec.Encode(value);
 
         private static Journal Decode(string path)
         {
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-            using (var reader = new BinaryReader(stream))
-            {
-                if (stream.Length < Magic.Length + 4 + 32 || stream.Length > MaxFile ||
-                    !reader.ReadBytes(Magic.Length).SequenceEqual(Magic))
-                    throw new InvalidDataException("单挑附档头或文件大小无效。");
-                int length = reader.ReadInt32();
-                if (length <= 0 || length != stream.Length - Magic.Length - 4 - 32)
-                    throw new InvalidDataException("单挑附档长度无效。");
-                byte[] data = reader.ReadBytes(length);
-                if (!reader.ReadBytes(32).SequenceEqual(Convert.FromBase64String(Hash(data))))
-                    throw new InvalidDataException("单挑附档内容校验失败。");
-                return JsonUtility.FromJson<Journal>(Encoding.UTF8.GetString(data));
-            }
+            if (new FileInfo(path).Length > DuelJournalCodec.MaxFile)
+                throw new InvalidDataException("单挑附档超过 32 MB。");
+            return DuelJournalCodec.Decode(File.ReadAllBytes(path));
         }
 
-        private static void Validate(Journal value)
-        {
-            if (value == null || value.Format != 1 || string.IsNullOrEmpty(value.Client) ||
-                string.IsNullOrEmpty(value.SceneKey) || string.IsNullOrEmpty(value.NativeHash) ||
-                string.IsNullOrEmpty(value.RandomState) || string.IsNullOrEmpty(value.FinalState) ||
-                value.Actions == null || value.Points == null || value.Draws == null ||
-                value.Actions.Count > MaxActions || value.Draws.Count > MaxDraws ||
-                value.Points.Count != value.Actions.Count + 1)
-                throw new InvalidDataException("单挑记录结构不完整。");
-            int prior = 0;
-            foreach (var point in value.Points)
-            {
-                if (point == null || point.Round < 1 || point.DrawCount < prior ||
-                    point.DrawCount > value.Draws.Count || string.IsNullOrEmpty(point.Digest))
-                    throw new InvalidDataException("单挑行动点记录无效。");
-                prior = point.DrawCount;
-            }
-            if (prior != value.Draws.Count || value.Points.Last().Digest != Hash(Encoding.UTF8.GetBytes(value.FinalState)))
-                throw new InvalidDataException("单挑目标状态校验失败。");
-            foreach (var draw in value.Draws)
-                if (draw == null || string.IsNullOrEmpty(draw.Site) || draw.Kind < 0 || draw.Kind > 2)
-                    throw new InvalidDataException("单挑随机记录无效。");
-        }
+        private static void Validate(Journal value) => DuelJournalCodec.Validate(value);
 
         private static void Stage(string path, byte[] bytes)
         {
@@ -613,17 +601,38 @@ namespace MortalHelper.Game
         [HarmonyPatch(typeof(CombatManager), "Start")]
         private static class BattleBeginPatch
         {
-            private static void Postfix(CombatManager __instance)
+            private static void Postfix(CombatManager __instance, ref IEnumerator __result)
             {
-                try { Begin(__instance); }
+                bool ready = false;
+                try { Begin(__instance); ready = !failed; }
                 catch (Exception e) { Fail("单挑初始化失败：" + e.GetBaseException().Message); }
+                finally
+                {
+                    // Unity has not started this iterator yet, so stopping live
+                    // coroutines cannot prevent its initialization/autosave.
+                    if (!ready) __result = null;
+                }
             }
         }
 
-        [HarmonyPatch(typeof(CombatUIManager), "ShowAction")]
+        [HarmonyPatch]
         private static class ActionPointPatch
         {
-            private static void Postfix(ref IEnumerator __result) { __result = ObserveActionPoint(__result); }
+            // Patch execution of the coroutine rather than its tiny factory.
+            // Mono may inline the factory before Harmony replaces its result.
+            private static MethodBase TargetMethod() =>
+                AccessTools.EnumeratorMoveNext(AccessTools.Method(typeof(CombatUIManager), "ShowAction"));
+            private static void Postfix(bool __result)
+            { if (!__result) ActionPointCompleted(); }
+            private static Exception Finalizer(Exception __exception)
+            {
+                if (__exception != null)
+                {
+                    string reason = "行动点协程异常：" + __exception.GetBaseException().Message;
+                    if (replaying) Fail(reason); else Invalidate(reason);
+                }
+                return __exception;
+            }
         }
 
         [HarmonyPatch(typeof(CombatManager), "Action")]

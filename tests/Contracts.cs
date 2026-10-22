@@ -311,6 +311,9 @@ internal static class Contracts
         finally { if(Directory.Exists(folder))Directory.Delete(folder,true); }
         TransactionChecks();
         LoadGateChecks();
+        passed += StoryContracts.Run();
+        passed += DuelJournalTests.Run();
+        passed += DuelSaveMenuStateTests.Run();
         Console.WriteLine("PASS: "+passed+" contract checks; no Unity runtime or player save accessed.");
     }
 
@@ -484,6 +487,9 @@ internal static class Contracts
             var pending = SlotTransaction.Read(forward.Journal);
             Check(pending.ReplacementHash == verified, "verified replacement hash not persisted");
             Check(pending.ReplacementHash == SlotTransaction.HashFile(forward.Native), "forward decision would not match");
+            Reject(() => pending.Complete(), "undecided transaction discarded its backups");
+            Check(File.Exists(forward.Journal + ".b0"), "undecided cleanup removed a backup");
+            pending.Commit();
             pending.Complete();
             Check(File.ReadAllText(forward.Native) == "verified-native", "forward completion discarded the verified save");
             Check(!File.Exists(forward.Journal), "forward completion kept the journal");
@@ -532,6 +538,64 @@ internal static class Contracts
             Reject(() => SlotTransaction.Begin(stacked.Journal, "story", stacked.Paths),
                 "second transaction started on an unresolved slot");
             SlotTransaction.Read(stacked.Journal).Rollback();
+
+            // 14. A failed durable commit cannot change the in-memory decision,
+            // or an error handler's Rollback would discard the only old copy.
+            var commitFail = new Fixture(root, "commit-persist-fail");
+            commitFail.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(commitFail.Journal, "story", commitFail.Paths);
+            commitFail.Write("new-native", "new-side", true);
+            transaction.RecordReplacement(SlotTransaction.HashFile(commitFail.Native));
+            SlotTransaction.Fault = step => { if (step == "persist:committed") throw new IOException("commit unavailable"); };
+            Reject(() => transaction.Commit(), "failed commit was not reported");
+            SlotTransaction.Fault = null;
+            Check(transaction.State == SlotTransactionState.Prepared, "failed commit changed the in-memory decision");
+            Check(SlotTransaction.Read(commitFail.Journal).State == SlotTransactionState.Prepared,
+                "failed commit changed the durable decision");
+            Reject(() => transaction.Complete(), "failed commit permitted backup cleanup");
+            Check(File.Exists(commitFail.Journal + ".b0"), "failed commit lost the original backup");
+            report = transaction.Rollback();
+            Check(report.Complete && File.ReadAllText(commitFail.Native) == "old-native",
+                "failed commit could not restore the old save");
+
+            // 15. Restored bytes alone do not authorize deleting the journal:
+            // persist failure must retain every backup for the next attempt.
+            var rollbackPersistFail = new Fixture(root, "rollback-persist-fail");
+            rollbackPersistFail.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(rollbackPersistFail.Journal, "story", rollbackPersistFail.Paths);
+            rollbackPersistFail.Write("new-native", "new-side", true);
+            SlotTransaction.Fault = step => { if (step == "persist:rolledback") throw new IOException("rollback decision unavailable"); };
+            report = transaction.Rollback();
+            SlotTransaction.Fault = null;
+            Check(!report.Complete && report.Restored, "failed rollback decision reported a completed transaction");
+            Check(File.ReadAllText(rollbackPersistFail.Native) == "old-native", "rollback failed to restore bytes");
+            Check(File.Exists(rollbackPersistFail.Journal) && File.Exists(rollbackPersistFail.Journal + ".b0") &&
+                File.Exists(rollbackPersistFail.Journal + ".b1"), "failed rollback decision discarded recovery files");
+            Check(transaction.State == SlotTransactionState.Prepared, "failed rollback decision escaped into memory");
+            report = SlotTransaction.Read(rollbackPersistFail.Journal).Rollback();
+            Check(report.Complete, "durable rollback retry failed");
+
+            // 16. A crash part way through cleanup leaves a committed journal,
+            // which remains cleanable even after some backups are already gone.
+            var cleanupCrash = new Fixture(root, "cleanup-crash");
+            cleanupCrash.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(cleanupCrash.Journal, "supersede", cleanupCrash.Paths);
+            cleanupCrash.Write("new-native", "new-side", true);
+            transaction.RecordReplacement(SlotTransaction.HashFile(cleanupCrash.Native));
+            transaction.Commit();
+            report = transaction.Rollback();
+            Check(!report.Complete && File.Exists(cleanupCrash.Journal + ".b0"),
+                "rollback erased an already committed operation awaiting companion retirement");
+            SlotTransaction.Fault = step => { if (step == "cleanup-backup:1") throw new IOException("crash during cleanup"); };
+            Reject(() => transaction.Complete(), "cleanup fault was not reached");
+            SlotTransaction.Fault = null;
+            Check(!File.Exists(cleanupCrash.Journal + ".b0") && File.Exists(cleanupCrash.Journal + ".b1"),
+                "cleanup crash did not simulate partial cleanup");
+            var cleanupRestart = SlotTransaction.Read(cleanupCrash.Journal);
+            Check(cleanupRestart.State == SlotTransactionState.Committed, "partial cleanup left an undecided journal");
+            cleanupRestart.Complete();
+            Check(!File.Exists(cleanupCrash.Journal) && File.ReadAllText(cleanupCrash.Native) == "new-native",
+                "cleanup retry damaged the committed save");
         }
         finally
         {

@@ -31,7 +31,7 @@ USAGE = """活侠·万象录 {version} —— 使用说明
   请先把它们移出 plugins 目录。
 - 不要在游戏运行时替换文件。
 - 「存档设置→随时存档」为默认关闭的实验功能；目前只支持稳定剧情对话、
-  对话选项与单挑行动点，游戏内保存→重启→读取的完整往返尚待验证。
+  对话选项与单挑行动点；实机验收范围见包内「随时存档验收.md」。
 - 中途档依赖同槽 .dat 旁的 .mha（剧情）或 .mhduel（单挑）。复制存档时
   请连同附加文件复制；卸载插件前先改用普通原生存档。
 """
@@ -95,6 +95,7 @@ def main() -> int:
     shutil.copy2(ROOT / "LICENSE", plugin_root / "LICENSE")
     shutil.copy2(ROOT / "THIRD_PARTY.md", plugin_root / "THIRD_PARTY.md")
     shutil.copy2(ROOT / "PROVENANCE.md", plugin_root / "PROVENANCE.md")
+    shutil.copy2(ROOT / "docs" / "ANYTIME-SAVE-ACCEPTANCE.md", plugin_root / "随时存档验收.md")
     shutil.copy2(manifest_path, plugin_root / "build-manifest.json")
     make_sums(plugin_root)
     write_zip(plugin_root, out / ("%s-%s-plugin.zip" % (NAME, args.version)))

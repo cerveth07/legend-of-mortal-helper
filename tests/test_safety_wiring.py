@@ -201,7 +201,11 @@ class SafetyWiringTests(unittest.TestCase):
         story = read("src/Game/AnytimeStory.cs")
         self.assertIn("CaptureLuaRandom(lua)", story)
         self.assertIn("RestoreLuaRandom(lua, playback.LuaRandomState)", story)
-        self.assertIn("!StandardLuaTables.Contains(pair.Key.String)", story)
+        self.assertIn("!IsLuaLibrary(interpreter, pair.Key.String, value.Table)", story)
+        self.assertIn("typeof(Script).Assembly.GetTypes()", story)
+        self.assertIn("ReferenceEquals(table, original)", story)
+        self.assertIn("Lua 表值类型不支持", story)
+        self.assertIn("Lua 表存在共享引用", story)
 
 
 if __name__ == "__main__":
