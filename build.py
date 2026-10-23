@@ -66,7 +66,7 @@ def run_suite(dotnet, compiler, base, framework, exe_name, response_name, source
 def run_tests(dotnet, compiler=None, base=None, framework=None):
     pure = sorted((ROOT / 'src' / 'Core').glob('*.cs')) + sorted((ROOT / 'src' / 'Recovery').glob('*.cs')) + [
         ROOT / 'src' / 'Game' / name for name in
-        ['UiLanguage.cs', 'AnytimeStoryCodec.cs', 'AnytimeDuelJournal.cs', 'DuelSaveMenuState.cs']]
+        ['UiLanguage.cs', 'AnytimeStoryCodec.cs', 'AnytimeDuelJournal.cs', 'DuelSaveMenuState.cs', 'AnytimeDuelStart.cs', 'UiText.cs']]
     suites = [ROOT / 'tests' / name for name in
               ['Contracts.cs', 'TitleContracts.cs', 'NumericEditContracts.cs', 'StoryContracts.cs',
                'DuelJournalTests.cs', 'DuelSaveMenuStateTests.cs']]

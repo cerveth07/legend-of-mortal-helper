@@ -55,8 +55,20 @@ internal static class Contracts
         string prefix = "--index:O_test\n";
         var hints = ScriptHints.Read(prefix + "statmodifymanager.Player(\"Money\", 5)\nend");
         Check(hints["O_test"].Effects.Count==1,"simple effect not parsed");
+        Check(hints["O_test"].Effects[0].Kind==EffectKind.Stat,"stat effect misclassified");
         hints = ScriptHints.Read(prefix + "if a then\nstatmodifymanager.Player(\"Money\", 999)\nend");
         Check(hints["O_test"].Effects.Count==0 && hints["O_test"].Incomplete,"conditional claimed definite");
+        // Real scripts open an option with presentation calls and change stats afterwards;
+        // the scan must survive them instead of stopping at the first unfamiliar word.
+        hints = ScriptHints.Read(prefix + "runblock(flowcharts.view, \"out\")\n" +
+            "stage.hide{character=characters.Get(\"player\"), fadeDuration=0}\n" +
+            "statmodifymanager.Player(\"training\", 1, \"\", 1)\nend");
+        Check(hints["O_test"].Effects.Count==1 && hints["O_test"].Effects[0].Arguments[0]=="training",
+            "presentation call hid the later effect");
+        hints = ScriptHints.Read(prefix + "statmodifymanager.Player(\"training\",-1,\"\",1)\n" +
+            "wait(statmodifymanager.GetDisplayTime(\"training\"))\n" +
+            "statmodifymanager.Player(\"disposition\",1,\"\",1)\nend");
+        Check(hints["O_test"].Effects.Count==2,"display-time call ended the scan");
         hints = ScriptHints.Read("--[=[\n--index:FAKE\nstatmodifymanager.Player(\"Money\", 999)\n]=]\n" + prefix + "statmodifymanager.AddMisc('a',-1)");
         Check(hints.Count==1 && hints["O_test"].Effects[0].Arguments[1]=="-1","long comment parsed as code");
         hints = ScriptHints.Read(prefix + "statmodifymanager.AddMisc([=[text --index:FAKE]=],1)");
@@ -64,7 +76,7 @@ internal static class Contracts
         Check(ScriptHints.Read(prefix+"x()\n"+prefix+"x()").Count==0,"duplicate marker retained");
         Check(ScriptHints.Read(prefix+"statmodifymanager.AddMisc('broken,1)").Count==0,"unterminated quote accepted");
         hints=ScriptHints.Read(prefix+"unknown()\nstatmodifymanager.Player('Money',5)");
-        Check(hints["O_test"].Effects.Count==0,"unknown call did not stop analysis");
+        Check(hints["O_test"].Effects.Count==1,"unfamiliar call ended the scan");
         hints=ScriptHints.Read(prefix+"statmodifymanager.Player('Money',calculate())");
         Check(hints["O_test"].Effects.Count==0,"nonliteral effect accepted");
         Check(ScriptHints.Read(new string(' ',2000001)).Count==0,"oversized input parsed");
@@ -76,7 +88,104 @@ internal static class Contracts
         Check(ScriptHints.Read("--[=[\ncheckpointmanager.Switch(\"FAKE\")\n]=]\n"+prefix+"x()")["O_test"].Consequences.Count==0,"comment produced a consequence");
         Check(ScriptHints.Read(prefix+"-- checkpointmanager.Switch(\"FAKE\")\nx()")["O_test"].Consequences.Count==0,"line comment produced a consequence");
         Check(ScriptHints.Read(prefix+"checkpointmanager.Switch(\"A\")\ncheckpointmanager.Switch(\"A\")")["O_test"].Consequences.Count==1,"duplicate consequence kept");
+        Check(ScriptHints.Read(prefix+"luamanager.ChangeScene(\"GameOver\",\"10061\",\"\")")["O_test"].Consequences[0]=="场景 GameOver","scene consequence mislabelled");
+        // A branch consequence inside a condition is not definite either.
+        Check(ScriptHints.Read(prefix+"if a then\ncheckpointmanager.Switch(\"S9\")\nend")["O_test"].Consequences.Count==0,"conditional consequence claimed definite");
 
+        string table = "local A = checkpointmanager.Condition(\"Talk_Option_01\")\n" +
+            "option_001[2] = A and \"O_unlocked\" or \"~O_locked\"\n" +
+            "option_001[3] = \"O_plain\"\n";
+        var locked = ScriptOptions.Read(table);
+        Check(locked.Count==2,"condition rows not indexed by both texts");
+        Check(locked["O_locked"].Name=="Talk_Option_01" && locked["O_locked"].HasLocked,"locked row lost its requirement");
+        Check(locked["O_locked"].TextKey=="O_unlocked" && locked["O_locked"].LockedKey=="O_locked","locked row key pair wrong");
+        Check(locked["O_unlocked"].HasLocked,"unlocked row lost the locked variant");
+        Check(!locked.ContainsKey("O_plain"),"plain row treated as conditional");
+        Check(ScriptOptions.Read("option_001[2] = Unknown and \"O_a\" or \"~O_b\"").Count==0,"unknown variable became a requirement");
+        Check(ScriptOptions.Read("-- local A = checkpointmanager.Condition(\"X\")\n-- option_001[2] = A and \"O_a\" or \"~O_b\"\n").Count==0,"commented row became a requirement");
+        Check(ScriptOptions.Read("--[[\nlocal A = checkpointmanager.Condition(\"X\")\noption_001[2] = A and \"O_a\" or \"~O_b\"\n]]\n").Count==0,"long comment became a requirement");
+        var switched = ScriptOptions.Read("local S = checkpointmanager.Switch(\"S_Kar_GE_40\")\noption_001[1] = S == 1 and \"O_a\" or \"~O_b\"\n");
+        Check(switched["O_b"].Kind==RequirementKind.Switch && switched["O_b"].Name=="S_Kar_GE_40","switch requirement misread");
+
+        // A battle-start save is a native file plus a label; the codec must round-trip and
+        // refuse anything it cannot name exactly.
+        var start = new DuelStartRecord { Client = "release_1.0.6000.5", SceneKey = "1512_01",
+            NativeHash = "abc+/=", SavedAt = "2026-10-24 01:00:00" };
+        string encoded = DuelStartCodec.Encode(start);
+        var decoded = DuelStartCodec.Decode(encoded);
+        Check(decoded.SceneKey=="1512_01" && decoded.NativeHash=="abc+/=" && decoded.Client=="release_1.0.6000.5",
+            "battle-start marker round trip failed");
+        Reject(()=>DuelStartCodec.Decode(encoded.Replace("scene=1512_01\n","")), "marker without scene accepted");
+        Reject(()=>DuelStartCodec.Decode(encoded + "extra=1\n"), "marker with unknown field accepted");
+        Reject(()=>DuelStartCodec.Decode(encoded + "scene=1512_02\n"), "duplicate marker field accepted");
+        Reject(()=>DuelStartCodec.Decode(encoded.Replace("version=1","version=9")), "unsupported marker version accepted");
+        Reject(()=>DuelStartCodec.Decode(""), "empty marker accepted");
+        Reject(()=>DuelStartCodec.Encode(new DuelStartRecord { Client="x", SceneKey="a\nb", NativeHash="h" }),
+            "marker field with newline accepted");
+        // Failure-exit policy: a failed recovery keeps the mutation gate closed, but it may
+        // never keep the input lock, and it only asks for the title once the scene is stable.
+        Check(!FailureExit.ShouldRequestTitle(true, false, 99f), "title requested while a scene was loading");
+        Check(!FailureExit.ShouldRequestTitle(false, false, FailureExit.TitleDelay - 0.1f),
+            "title requested before the failure settled");
+        Check(FailureExit.ShouldRequestTitle(false, false, FailureExit.TitleDelay),
+            "stable scene did not request the title");
+        Check(!FailureExit.ShouldRequestTitle(false, true, 99f), "title request repeated");
+        Check(!FailureExit.ShouldReleaseInput(FailureExit.InputReleaseLimit - 0.1f) &&
+            FailureExit.ShouldReleaseInput(FailureExit.InputReleaseLimit), "input release limit wrong");
+        Check(FailureExit.FailReason("")=="恢复失败" && FailureExit.FailReason("x")=="x", "failure reason fallback wrong");
+        // The recovery must not stay locked behind a scene that is not coming, and a load that
+        // claims to be loading forever is not a load that will finish.
+        Check(FailureExit.ShouldAbortForMissingScene(false, FailureExit.SceneReadyLimit - 1f) == false &&
+            FailureExit.ShouldAbortForMissingScene(false, FailureExit.SceneReadyLimit) == true,
+            "missing-scene deadline wrong");
+        Check(!FailureExit.ShouldAbortForMissingScene(true, 999f), "ready scene reported as missing");
+        Check(!FailureExit.LoadStalled(true, FailureExit.LoadStallHardLimit - 1f) &&
+            FailureExit.LoadStalled(true, FailureExit.LoadStallHardLimit), "loading stall window wrong");
+        Check(!FailureExit.LoadStalled(false, FailureExit.NativeLoadIdleLimit - 1f) &&
+            FailureExit.LoadStalled(false, FailureExit.NativeLoadIdleLimit), "idle stall window wrong");
+        Check(FailureExit.LoadStallHardLimit > FailureExit.InputReleaseLimit,
+            "hard load limit must outlast the input release window");
+        // The pre-write budget must cover every field, not just Expected.
+        var measured = new AnytimeStoryRecord { Client="c", NativeHash="h", Baseline=new string('x', 1000),
+            Expected=new string('y', 1000), Script="s", Scene="Story", WaitKind="Say", WaitKey="k",
+            BaselineRandomState="{}", RandomState="{}", BaselineLuaRandomState="{}", LuaRandomState="{}",
+            BaselineGlobals=new AnytimeLuaValue[0], ExpectedGlobals=new AnytimeLuaValue[0],
+            Events=new AnytimeStoryEvent[0] };
+        Check(AnytimeStoryCodec.Measure(measured) >= 2000, "measure under-counts the variable fields");
+        measured.Baseline = new string('x', AnytimeStoryCodec.Limit / 2 + 100);
+        measured.Expected = new string('y', AnytimeStoryCodec.Limit / 2 + 100);
+        Check(AnytimeStoryCodec.Measure(measured) > AnytimeStoryCodec.Limit,
+            "measure does not reach the encoder limit");
+
+        // The budget must be an upper bound on what the encoder actually writes, otherwise a
+        // save passes the pre-check and fails only after the native file was replaced.
+        var budgeted = new AnytimeStoryRecord { Client="c", NativeHash="h", Baseline="{\"a\":\"b\"}",
+            Expected="{\"a\":\"b\"}", Script="ch_1_1", Scene="Story", WaitKind="Say", WaitKey="wk",
+            BaselineRandomState="{}", RandomState="{}", BaselineLuaRandomState="{}", LuaRandomState="{}",
+            BaselineGlobals=new[] { new AnytimeLuaValue { Key="a", Kind="number", Text="1",
+                Entries=new[] { new AnytimeLuaEntry { KeyKind="string", Key="k", Kind="bool", Text=null } } } },
+            ExpectedGlobals=new AnytimeLuaValue[0],
+            Events=new[] { new AnytimeStoryEvent { Kind="Say", Key="abcdef" },
+                new AnytimeStoryEvent { Kind="Numeric", Key=null, Choice=2, Number=7 } } };
+        string encodedSample = AnytimeStoryCodec.Write(budgeted);
+        long payload = Convert.FromBase64String(encodedSample.Substring("MHA3\n".Length)).Length;
+        Check(AnytimeStoryCodec.Measure(budgeted) >= payload,
+            "measure under-counts the encoded payload (" + AnytimeStoryCodec.Measure(budgeted) + " < " + payload + ")");
+        // The translation tables are dictionary initialisers: a duplicate key throws during
+        // static initialisation, which would break every Japanese/Korean lookup at runtime.
+        // Touching them here makes that a build failure instead of an in-game one.
+        Check(UiText.Lookup("剧情", UiLang.Ja) == "ストーリー", "ja table did not resolve 剧情");
+        Check(UiText.Lookup("存档", UiLang.Ko) == "저장", "ko table did not resolve 存档");
+        Check(UiText.Lookup("剧情", UiLang.Hant) == null, "ja/ko table answered a chinese-only lookup");
+        Check(UiLanguage.Translate("剧情", UiLang.Ja) == "ストーリー" &&
+            UiLanguage.Translate("剧情", UiLang.Hans) == "剧情" &&
+            UiLanguage.Translate("剧情", UiLang.Hant) == UiLanguage.Convert("剧情", true),
+            "language dispatch wrong");
+        Check(UiLanguage.Parse("ja") == UiLang.Ja && UiLanguage.Parse("zh-Hant") == UiLang.Hant &&
+            UiLanguage.Parse("ko") == UiLang.Ko && UiLanguage.Parse("nonsense") == UiLang.Hans &&
+            UiLanguage.Code(UiLang.Ko) == "ko" && UiLanguage.Code(UiLang.Hant) == "zh-Hant",
+            "language code mapping wrong");
+        Check(UiText.Lookup("未翻译的键", UiLang.Ja) == null, "unknown key was invented");
         byte[] data = Archive.Encode(Document());
         using(var input=new MemoryStream(data)) Check(Archive.Decode(input).Events[0].Integer==2,"round trip failed");
         for(int length=0;length<data.Length;length++)
@@ -369,6 +478,21 @@ internal static class Contracts
         System.IO.Directory.CreateDirectory(root);
         try
         {
+            // 0. A battle-start save journals its marker too; the journal reader must accept
+            //    that name or the slot can never be settled again.
+            var started = new Fixture(root, "start");
+            started.Write("old-native", "old-side", false);
+            string startMarker = started.Native + ".mhstart";
+            File.WriteAllText(startMarker, "version=1`nclient=x`nscene=1`nhash=h`nsavedAt=t`n");
+            var startedTx = SlotTransaction.Begin(started.Journal, "duel",
+                new[] { started.Native, started.Sidecar, startMarker });
+            started.Write("new-native", "new-side", true);
+            var reread = SlotTransaction.Read(started.Journal);
+            Check(reread != null && reread.Entries.Count == 3, "journal with .mhstart could not be read back");
+            var startedReport = reread.Rollback();
+            Check(startedReport.Complete && File.ReadAllText(started.Native) == "old-native" &&
+                File.Exists(startMarker), "journal with .mhstart did not roll back");
+
             // 1. First creation: a rollback must remove exactly what it created.
             var created = new Fixture(root, "create");
             var transaction = SlotTransaction.Begin(created.Journal, "story", created.Paths);
