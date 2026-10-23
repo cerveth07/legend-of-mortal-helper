@@ -1,0 +1,31 @@
+# Offline contract workflow TEMPLATE.
+#
+# It is kept here rather than in .github/workflows/ because the account token in
+# use has no 'workflow' scope, and GitHub refuses pushes that create or modify
+# workflow files without it. Once a token with that scope is available, copy this
+# file to .github/workflows/contracts.yml unchanged and it will run on push/PR.
+#
+# Runs every suite: source inventory, the .NET contract suite, the group-battle
+# ally-health suite (both via build.py --test-only) and all Python tests.
+name: Offline contracts
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python tools/check_source.py
+      # Contract suite + group-battle ally-health suite.
+      - run: python build.py --test-only
+      # All Python suites, not just the packaging one.
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
