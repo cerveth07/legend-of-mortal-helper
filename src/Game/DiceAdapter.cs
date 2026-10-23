@@ -62,6 +62,7 @@ namespace MortalHelper.Game
                 // Keep the existing world placement, but put controls above the
                 // native result panel's transparent raycast surface.
                 root.transform.SetParent(Dialog.transform, true);
+                widget.RestorePosition();
             }
             widget.transform.SetAsLastSibling();
             widget.gameObject.SetActive(true);
