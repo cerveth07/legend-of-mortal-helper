@@ -2,7 +2,8 @@ namespace MortalHelper.Recovery
 {
     // The game side of a replay. Deliberately small: the adapter loads the native
     // baseline, reports one canonical state summary, and takes control back when
-    // replay stops. None of these members are implemented or verified in game yet.
+    // replay stops. StoryReplay.Host implements it and is wired into the game; the
+    // members are NOT verified by a complete in-game replay yet (see README).
     public interface IReplayHost
     {
         // Identifies the game build the recording was made on.

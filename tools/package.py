@@ -108,11 +108,7 @@ def main() -> int:
     shutil.copy2(ROOT / "THIRD_PARTY.md", plugin_root / "THIRD_PARTY.md")
     shutil.copy2(ROOT / "PROVENANCE.md", plugin_root / "PROVENANCE.md")
     shutil.copy2(ROOT / "docs" / "ANYTIME-SAVE-ACCEPTANCE.md", plugin_root / "随时存档验收.md")
-    # The build record names the developer's local game/loader assemblies; that is
-    # useful on the build machine and meaningless (and slightly revealing) to users.
-    shipped = {key: value for key, value in manifest.items() if key != "references"}
-    (plugin_root / "build-manifest.json").write_text(
-        json.dumps(shipped, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    shutil.copy2(manifest_path, plugin_root / "build-manifest.json")
     make_sums(plugin_root)
     write_zip(plugin_root, out / ("%s-%s-plugin.zip" % (NAME, args.version)))
     made.append(plugin_root)

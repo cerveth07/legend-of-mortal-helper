@@ -8,7 +8,9 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-BADGE = 'GUI.Label(new Rect(badge.x + 2f * s, titleY, badge.width - 4f * s, titleH), "萬\\n象\\n錄", badgeTitleStyle);'
+# The literal the badge must draw. Asserting this substring (rather than pinning the
+# whole GUI.Label call) keeps the guarantee while surviving layout-only edits.
+BADGE_TEXT = '"萬\\n象\\n錄"'
 
 
 def read(path):
@@ -18,7 +20,10 @@ def read(path):
 class BadgeLanguageTests(unittest.TestCase):
     def test_badge_scroll_is_drawn_with_traditional_characters(self):
         panel = read("src/Game/MainPanel.cs")
-        self.assertIn(BADGE, panel)
+        start = panel.index("private void DrawBadge()")
+        body = panel[start:panel.index("private void", start + 20)]
+        self.assertIn(BADGE_TEXT, body)
+        self.assertIn("GUI.Label(", body)
 
     def test_badge_scroll_is_not_passed_through_the_language_toggle(self):
         panel = read("src/Game/MainPanel.cs")
