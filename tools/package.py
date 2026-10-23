@@ -38,11 +38,14 @@ USAGE = """活侠·万象录 {version} —— 使用说明
   可在「存档设置」调整上限；新增故事栏位待用户实机验收。
 - 「地图」页可查看崆峒派原图，滚轮缩放、按住拖动，点击「复位」恢复全图。
 - 控骰条可按住「基础点数」或空白处拖动，松手自动记住位置。
-- 「存档设置→随时存档」为默认关闭的实验功能；目前只支持稳定剧情对话、
-  对话选项、骰子掷骰前/结果页与单挑行动点；骰子页点击轮盘旁「存档」。
-  掷骰动画期间不开放保存；实机验收范围见包内「随时存档验收.md」。
-- 中途档依赖同槽 .dat 旁的 .mha（剧情）或 .mhduel（单挑）。复制存档时
-  请连同附加文件复制；卸载插件前先改用普通原生存档。
+- 「存档设置→随时存档」为默认关闭的实验功能；剧情可在任意台词、对话选项、
+  骰子掷骰前/结果页存档；单挑存的是该场战斗的开头，读档后从这场战斗重来；
+  骰子页点击轮盘旁「存档」。掷骰动画、群战与恢复期间不开放保存；
+  实机验收范围见包内「随时存档验收.md」。
+- 随时存档的槽位旁边会有附加文件：.mha（剧情）、.mhstart（单挑开场）；
+  旧版本留下的 .mhduel 仍可读取。复制、备份或移动存档时请连同附加文件一起复制；
+  卸载插件前先改用普通原生存档。
+- 界面语言在「语言」页切换（简体/繁體/日本語/한국어），未翻译的长消息回退简体。
 """
 
 
@@ -107,6 +110,7 @@ def main() -> int:
     shutil.copy2(ROOT / "LICENSE", plugin_root / "LICENSE")
     shutil.copy2(ROOT / "THIRD_PARTY.md", plugin_root / "THIRD_PARTY.md")
     shutil.copy2(ROOT / "PROVENANCE.md", plugin_root / "PROVENANCE.md")
+    shutil.copy2(ROOT / "README.md", plugin_root / "README.md")
     shutil.copy2(ROOT / "docs" / "ANYTIME-SAVE-ACCEPTANCE.md", plugin_root / "随时存档验收.md")
     shutil.copy2(manifest_path, plugin_root / "build-manifest.json")
     make_sums(plugin_root)
