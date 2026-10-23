@@ -1,14 +1,18 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace MortalHelper.Core
 {
+    // What an option does, in the categories a player can read. The parser only
+    // classifies; turning a key into a Chinese name is the game layer's job.
+    public enum EffectKind { Stat, Relation, ItemGain, ItemLoss, Flag, Quest, Talent }
+
     public sealed class EffectCall
     {
         public string Method;
         public string[] Arguments;
+        public EffectKind Kind;
     }
 
     public sealed class BranchHint
@@ -16,15 +20,22 @@ namespace MortalHelper.Core
         public string Id;
         public readonly List<EffectCall> Effects = new List<EffectCall>();
         // Branch points and story jumps the option leads to. These calls are not
-        // stat changes, so they get their own scan of the option block.
+        // stat changes, so they are collected separately.
         public readonly List<string> Consequences = new List<string>();
+        // True when a call was skipped because it sits behind a condition or its
+        // arguments are computed: the list is then a lower bound, never a guess.
         public bool Incomplete;
     }
 
-    // Deliberately a restricted reader, never a Lua evaluator. Unknown code closes
-    // the current straight-line preview. Comments and quoted data cannot become code.
+    // Deliberately a restricted reader, never a Lua evaluator. Unknown or computed
+    // code is skipped instead of ending the scan: real scripts open an option with
+    // presentation calls and only then change stats. Calls inside conditions are
+    // never claimed as definite.
     public static class ScriptHints
     {
+        private const int MaximumEffects = 16;
+        private const int MaximumConsequences = 6;
+
         private enum Kind { Word, Number, Text, Symbol, Marker, End }
         private struct Token
         {
@@ -33,6 +44,16 @@ namespace MortalHelper.Core
             public Token(Kind kind, string text) { Kind = kind; Text = text; }
         }
 
+        private static readonly Dictionary<string, EffectKind> Effects = new Dictionary<string, EffectKind>(StringComparer.Ordinal) {
+            { "Player", EffectKind.Stat }, { "SetPlayer", EffectKind.Stat },
+            { "Character", EffectKind.Relation }, { "SetCharacter", EffectKind.Relation },
+            { "AddBook", EffectKind.ItemGain }, { "AddMisc", EffectKind.ItemGain }, { "AddSpecial", EffectKind.ItemGain },
+            { "RemoveBook", EffectKind.ItemLoss }, { "RemoveMisc", EffectKind.ItemLoss },
+            { "RemoveSpecial", EffectKind.ItemLoss },
+            { "SetFlag", EffectKind.Flag }, { "AddFlag", EffectKind.Flag },
+            { "Mission", EffectKind.Quest }, { "AddTalent", EffectKind.Talent }
+        };
+
         public static Dictionary<string, BranchHint> Read(string source)
         {
             var result = new Dictionary<string, BranchHint>(StringComparer.Ordinal);
@@ -40,98 +61,130 @@ namespace MortalHelper.Core
             List<Token> tokens;
             try { tokens = Scan(source); }
             catch (FormatException) { return result; }
+
             var duplicates = new HashSet<string>(StringComparer.Ordinal);
             BranchHint current = null;
             bool active = false;
+            int depth = 0;
             for (int i = 0; i < tokens.Count;)
             {
                 Token t = tokens[i++];
                 if (t.Kind == Kind.Marker)
                 {
+                    // A marker starts the option's own branch: depth belongs to the
+                    // enclosing menu, not to whatever came before.
                     current = new BranchHint { Id = t.Text };
                     if (result.ContainsKey(t.Text)) duplicates.Add(t.Text);
                     else result.Add(t.Text, current);
                     active = true;
+                    depth = 0;
                     continue;
                 }
                 if (!active || t.Kind == Kind.End) continue;
                 if (t.Text == ";") continue;
-                if (t.Kind == Kind.Word && (t.Text == "end" || t.Text == "else" || t.Text == "elseif"))
-                { active = false; continue; }
-                if (t.Kind != Kind.Word || t.Text != "statmodifymanager")
-                { current.Incomplete = true; active = false; continue; }
-                if (!Take(tokens, ref i, ".") || i >= tokens.Count || tokens[i].Kind != Kind.Word)
-                { current.Incomplete = true; active = false; continue; }
-                string method = tokens[i++].Text;
-                var args = new List<string>();
-                bool ok = Take(tokens, ref i, "(");
-                if (ok && !Take(tokens, ref i, ")"))
+                if (t.Kind == Kind.Word)
                 {
-                    while (ok)
+                    switch (t.Text)
                     {
-                        bool negative = Take(tokens, ref i, "-");
-                        if (i >= tokens.Count) { ok = false; break; }
-                        Token arg = tokens[i++];
-                        bool literal = arg.Kind == Kind.Number || (!negative && (arg.Kind == Kind.Text ||
-                            arg.Text == "true" || arg.Text == "false" || arg.Text == "nil"));
-                        if (!literal || args.Count >= 16) { ok = false; break; }
-                        args.Add((negative ? "-" : "") + arg.Text);
-                        if (Take(tokens, ref i, ")")) break;
-                        if (!Take(tokens, ref i, ",")) { ok = false; break; }
+                        case "if":
+                        case "for":
+                        case "while":
+                        case "function":
+                        case "repeat":
+                            depth++;
+                            continue;
+                        case "elseif":
+                        case "else":
+                            // At depth zero this closes the option's branch.
+                            if (depth == 0) active = false;
+                            continue;
+                        case "end":
+                        case "until":
+                            if (depth > 0) depth--;
+                            else active = false;
+                            continue;
                     }
+                    if (i + 1 >= tokens.Count || tokens[i].Kind != Kind.Symbol || tokens[i].Text != ".") continue;
+                    string owner = t.Text;
+                    string method = tokens[i + 1].Text;
+                    i += 2;
+                    // Not a call: a field assignment such as "sayoptions.waitforinput = true".
+                    if (i >= tokens.Count || tokens[i].Kind != Kind.Symbol || tokens[i].Text != "(") continue;
+                    i++;
+                    List<string> arguments;
+                    bool literal = ReadArguments(tokens, ref i, out arguments);
+                    if (current == null) continue;
+                    EffectKind kind;
+                    if (owner == "statmodifymanager" && Effects.TryGetValue(method, out kind))
+                    {
+                        if (depth > 0) { current.Incomplete = true; continue; }
+                        if (!literal) { current.Incomplete = true; continue; }
+                        if (current.Effects.Count >= MaximumEffects) { current.Incomplete = true; continue; }
+                        current.Effects.Add(new EffectCall { Method = method, Arguments = arguments.ToArray(), Kind = kind });
+                        continue;
+                    }
+                    // story jumps (AddStory included) are destinations, not stat changes
+                    if (depth > 0 || !literal) continue;
+                    string label = Consequence(owner, method, arguments);
+                    if (label == null) continue;
+                    if (current.Consequences.Count >= MaximumConsequences) { current.Incomplete = true; continue; }
+                    if (!current.Consequences.Contains(label)) current.Consequences.Add(label);
                 }
-                if (!ok || method == "GetDisplayTime") { current.Incomplete = true; active = false; }
-                else current.Effects.Add(new EffectCall { Method = method, Arguments = args.ToArray() });
             }
             foreach (string id in duplicates) result.Remove(id);
-            CollectConsequences(source, result);
             return result;
         }
 
-        // Scans each option block for the three calls the game uses to move the story
-        // sideways. Unknown call shapes are ignored rather than guessed at.
-        private static void CollectConsequences(string source, Dictionary<string, BranchHint> result)
+        // The three calls the game uses to move the story sideways.
+        private static string Consequence(string owner, string method, List<string> arguments)
         {
-            var marker = new Regex(@"(?m)^[ \t]*--[ \t]*index:([A-Za-z0-9_]{1,200})[ \t]*\r?$");
-            var branch = new Regex("checkpointmanager\\.Switch\\(\\s*[\"']([^\"']*)", RegexOptions.IgnoreCase);
-            var next = new Regex("luamanager\\.SetNextScript\\(\\s*[\"']([^\"']*)", RegexOptions.IgnoreCase);
-            var story = new Regex("statmodifymanager\\.AddStory\\(\\s*[\"']([^\"']*)", RegexOptions.IgnoreCase);
-            var matches = marker.Matches(source);
-            for (int i = 0; i < matches.Count; i++)
+            if (arguments.Count == 0) return null;
+            string first = arguments[0];
+            if (owner == "checkpointmanager" && method == "Switch") return "分支点 " + first;
+            if (owner == "luamanager" && method == "SetNextScript") return "剧情 " + first;
+            if (owner == "luamanager" && method == "ChangeScene") return "场景 " + first;
+            if (owner == "statmodifymanager" && method == "AddStory") return "剧情 " + first;
+            return null;
+        }
+
+        // Literal arguments only. A computed argument makes the whole call unreadable,
+        // so the caller flags the option as a lower bound instead of showing a guess.
+        private static bool ReadArguments(List<Token> tokens, ref int index, out List<string> arguments)
+        {
+            arguments = new List<string>();
+            while (index < tokens.Count)
             {
-                BranchHint hint;
-                if (!result.TryGetValue(matches[i].Groups[1].Value, out hint)) continue;
-                int start = matches[i].Index + matches[i].Length;
-                int end = i + 1 < matches.Count ? matches[i + 1].Index : source.Length;
-                string block = StripComments(source.Substring(start, Math.Max(0, end - start)));
-                Collect(hint, branch, block, "分支点 ");
-                Collect(hint, next, block, "剧情 ");
-                Collect(hint, story, block, "剧情 ");
+                if (tokens[index].Kind == Kind.Symbol && tokens[index].Text == ")") { index++; return true; }
+                bool negative = tokens[index].Kind == Kind.Symbol && tokens[index].Text == "-";
+                if (negative) index++;
+                if (index >= tokens.Count) return false;
+                Token argument = tokens[index];
+                bool literal = argument.Kind == Kind.Number ||
+                    (!negative && (argument.Kind == Kind.Text || argument.Text == "true" ||
+                        argument.Text == "false" || argument.Text == "nil"));
+                if (!literal || arguments.Count >= 16) { SkipToClose(tokens, ref index); return false; }
+                arguments.Add((negative ? "-" : "") + argument.Text);
+                index++;
+                if (index >= tokens.Count) return false;
+                if (tokens[index].Kind == Kind.Symbol && tokens[index].Text == ",") { index++; continue; }
+                if (tokens[index].Kind == Kind.Symbol && tokens[index].Text == ")") { index++; return true; }
+                SkipToClose(tokens, ref index);
+                return false;
             }
+            return false;
         }
 
-        // Commented-out calls must never show up as real consequences.
-        private static string StripComments(string block)
+        private static void SkipToClose(List<Token> tokens, ref int index)
         {
-            block = Regex.Replace(block, "--\\[(=*)\\[.*?\\]\\1\\]", " ", RegexOptions.Singleline);
-            return Regex.Replace(block, "--[^\n]*", " ");
-        }
-
-        private static void Collect(BranchHint hint, Regex pattern, string block, string prefix)
-        {
-            foreach (Match match in pattern.Matches(block))
+            int open = 1;
+            while (index < tokens.Count)
             {
-                if (hint.Consequences.Count >= 6) return;
-                string text = prefix + match.Groups[1].Value;
-                if (!hint.Consequences.Contains(text)) hint.Consequences.Add(text);
+                Token t = tokens[index++];
+                if (t.Kind == Kind.End) return;
+                if (t.Kind != Kind.Symbol) continue;
+                if (t.Text == "(") open++;
+                else if (t.Text == ")" && --open <= 0) return;
             }
-        }
-
-        private static bool Take(List<Token> items, ref int index, string value)
-        {
-            if (index >= items.Count || items[index].Kind == Kind.Text || items[index].Text != value) return false;
-            index++;
-            return true;
         }
 
         private static List<Token> Scan(string source)

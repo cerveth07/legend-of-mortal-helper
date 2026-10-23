@@ -112,10 +112,27 @@ namespace MortalHelper.Game
         private static bool sceneReady, targetReached;
         private static bool returningTitle;
         private static float targetAt, lastProgress;
+        // Replay executes the real script. Letting the engine run its own waits fast is the
+        // only way to keep that from reading as "fast-forwarding the story"; the player's
+        // configured speed is put back as soon as the target is reached.
+        private const float ReplayScale = 15f;
+        private static bool speedBoosted;
+        private static float replayStartAt;
+        // A failed recovery keeps the mutation gate closed, but the input lock it takes must
+        // be released on its own: holding it forever leaves the player unable to quit.
+        private static float failedAt;
+        private static bool inputReleased;
+        internal static float ReplayElapsed => Replaying && replayStartAt > 0f ? Time.unscaledTime - replayStartAt : 0f;
+        internal static int ReplayDone => cursor;
+        internal static int ReplayTotal => playback == null ? 0 : playback.Events.Length;
 
         internal static bool Replaying => playback != null && !Failed && !Verified;
         internal static bool Verified { get; private set; }
         internal static bool Failed { get; private set; }
+        // True once the failure exit gave the input back; until then the failure still owns
+        // the screen and the cover explains why the game is not responding.
+        internal static bool InputReleased => inputReleased;
+        internal static float FailureElapsed => Failed && failedAt > 0f ? Time.unscaledTime - failedAt : 0f;
         internal static string Failure { get; private set; }
         private static bool SameScript(string left, string right) =>
             string.Equals(left ?? "", right ?? "", StringComparison.Ordinal);
@@ -177,16 +194,26 @@ namespace MortalHelper.Game
         }
         private static void ReplayNumericEdits(string kind, string key)
         {
-            int next = StoryNumericEdits.Apply(playback.Events, cursor, kind, key, NumericEdits.ApplyRecorded);
+            int next;
+            try { next = StoryNumericEdits.Apply(playback.Events, cursor, kind, key, NumericEdits.ApplyRecorded); }
+            catch (Exception error)
+            {
+                Fail("附带的数值修改无法重放：" + error.GetBaseException().Message);
+                return;
+            }
             if (next != cursor) { cursor = next; lastProgress = Time.unscaledTime; }
         }
         internal static void ReplayDiceNumericEdits()
         {
             if (!Replaying || cursor >= playback.Events.Length) return;
-            string recorded = StoryNumericEdits.WaitKey(playback.Events[cursor], "Dice");
-            if (recorded == null) return;
-            AnytimeDice.RestoreTargetRange(recorded);
-            ReplayNumericEdits("Dice", AnytimeDice.SaveKey);
+            try
+            {
+                string recorded = StoryNumericEdits.WaitKey(playback.Events[cursor], "Dice");
+                if (recorded == null) return;
+                AnytimeDice.RestoreTargetRange(recorded);
+                ReplayNumericEdits("Dice", AnytimeDice.SaveKey);
+            }
+            catch (Exception error) { Fail("轮盘数值修改无法重放：" + error.GetBaseException().Message); }
         }
 
         internal static bool BeforeNativeSave(string slot)
@@ -237,10 +264,10 @@ namespace MortalHelper.Game
                     string.IsNullOrEmpty(record.BaselineRandomState) || record.BaselineRandomState == "{}" ||
                     string.IsNullOrEmpty(record.RandomState) || record.RandomState == "{}")
                     throw new InvalidDataException("无法序列化游戏随机状态。");
-                // The pre-write budget must use the same unit as the encoder (UTF-8
-                // bytes), or an accepted save is rolled back after the native write.
+                // The pre-write budget must use the same unit and the same fields as the
+                // encoder, or an accepted save is rolled back after the native write.
                 if (string.IsNullOrEmpty(record.Expected) ||
-                    Encoding.UTF8.GetByteCount(record.Expected) > AnytimeStoryCodec.Limit)
+                    AnytimeStoryCodec.Measure(record) > AnytimeStoryCodec.Limit)
                     throw new InvalidDataException("当前进度超出附加记录容量。");
                 // Snapshot the slot before the game writes anything into it.
                 pendingTransaction = SlotTransaction.Begin(JournalFor(path), "story", new[] {
@@ -329,8 +356,13 @@ namespace MortalHelper.Game
         internal static void BeforeNativeLoad()
         {
             AnytimeDice.Reset();
+            // A new load owns the segment: a stale invalidation from the previous one must not
+            // leak into it, or the fresh segment refuses to save for no visible reason.
+            invalid = null;
             playback = null; Failed = Verified = false; Failure = null;
             sceneReady = targetReached = returningTitle = false; replayDice = null; UnlockInput();
+            RestoreReplaySpeed();
+            replayStartAt = 0f;
         }
 
         internal static void PrepareLoad(string slot, ref GameSave save)
@@ -362,7 +394,18 @@ namespace MortalHelper.Game
                 Report("该槽位的剧情附档属于更早的存档，已保留为 .mha.stale 并按原生存档载入。");
                 return;
             }
-            var record = ReadRecord(path, save);
+            AnytimeStoryRecord record;
+            try { record = ReadRecord(path, save); }
+            catch (Exception error) when (error is InvalidDataException || error is FormatException)
+            {
+                // A sidecar written by an older build cannot be replayed by this one, but the
+                // native file beside it is a valid save. Keep that save usable instead of
+                // refusing the load: the extra point is lost, the progress is not.
+                Quarantine(path + ".mha");
+                Report("该槽位的剧情附档来自旧版本或与存档不匹配（" + error.Message +
+                    "），已保留为 .mha.stale 并按原生存档载入。");
+                return;
+            }
             var opening = JsonUtility.FromJson<GameSave>(record.Baseline);
             if (opening == null || opening.CurrentScene != record.Scene ||
                 string.IsNullOrEmpty(record.Script) || record.Events == null ||
@@ -380,10 +423,18 @@ namespace MortalHelper.Game
             // execution entry, then restore the original metadata at ScriptEntering.
             opening.StartStoryScript = record.Script;
             opening.TimeTick = save.TimeTick;
+            // The read state only lives in memory until the game writes the universe file,
+            // and a native load replaces it from disk: persist what this session read first,
+            // or the lines just read come back unread.
+            try { SaveSystem.Instance?.SaveUniverseData(); }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
             playback = record; save = opening; cursor = 0;
             sceneReady = false; targetReached = false; targetAt = 0f;
             replayDice = null;
+            replayStartAt = Time.unscaledTime;
             lastProgress = Time.unscaledTime; Verified = Failed = false; Failure = null;
+            Plugin.Instance?.Log("[Anytime] replay start slot=" + slot + " script=" + record.Script +
+                " events=" + record.Events.Length + " scale=" + ReplayScale);
             Events.Clear(); WaitTokens.Clear(); WaitKinds.Clear(); WaitKeys.Clear();
             LockInput();
         }
@@ -394,20 +445,38 @@ namespace MortalHelper.Game
         {
             if (Failed)
             {
-                LockInput();
+                RestoreReplaySpeed();
+                float waited = Time.unscaledTime - failedAt;
+                if (!inputReleased) LockInput();
                 var controller = SceneController.Instance;
-                if (!returningTitle && controller != null && !controller.IsLoading && !controller.IsPrepare)
+                // A missing or still-loading scene must not be forced into another transition.
+                bool loading = controller == null || controller.IsLoading || controller.IsPrepare;
+                if (FailureExit.ShouldRequestTitle(loading, returningTitle, waited))
                 {
-                    returningTitle = true;
-                    controller.LoadTitle();
+                    // Latched only after the call returns: a throwing request must be
+                    // retried next frame, not silently cancelled forever.
+                    try { controller.LoadTitle(); returningTitle = true; }
+                    catch (Exception error) { ReleaseFailureInput("恢复失败且无法回到标题：" + error.Message); return; }
                 }
+                if (FailureExit.ShouldReleaseInput(waited))
+                    ReleaseFailureInput("恢复失败");
                 return;
             }
-            if (!Replaying) return;
+            if (!Replaying)
+            {
+                RestoreReplaySpeed();
+                return;
+            }
             LockInput();
+            BoostReplaySpeed();
             // Measure a stall, not the total elapsed time: a long script that keeps
             // consuming events is making progress even when the whole replay takes
             // several minutes.
+            if (FailureExit.ShouldAbortForMissingScene(sceneReady, Time.unscaledTime - replayStartAt))
+            {
+                Fail("原生加载在 " + (int)FailureExit.SceneReadyLimit + " 秒内没有就绪。");
+                return;
+            }
             if (Time.unscaledTime - lastProgress > 120f)
             { Fail("剧情回放超过两分钟没有匹配到记录的下一个事件（已重放 " + cursor + " 个）。"); return; }
             if (!sceneReady || !targetReached || Time.unscaledTime - targetAt < .25f) return;
@@ -433,13 +502,17 @@ namespace MortalHelper.Game
                 baselineLuaRandomState = playback.BaselineLuaRandomState;
                 script = playback.Script; scene = playback.Scene;
                 Events.Clear(); Events.AddRange(playback.Events);
-                playback = null; Verified = true; UnlockInput();
+                playback = null; Verified = true; invalid = null; UnlockInput();
+                RestoreReplaySpeed();
                 StoryReplay.OnNativeLoadCompleted();
                 if (Plugin.Instance != null)
                 {
                     Plugin.Instance.Status = "剧情已恢复到存档位置，状态核对通过。";
                     Plugin.Instance.Log("[Anytime] " + Plugin.Instance.Status);
+                    Plugin.Instance.Log("[Anytime] replay done " + ReplaySeconds() + "s events=" + cursor +
+                        " script=" + script + " scale=" + ReplayScale);
                 }
+                replayStartAt = 0f;
             }
             catch (Exception error) { Fail(error.Message); }
         }
@@ -453,6 +526,37 @@ namespace MortalHelper.Game
             Events.Clear(); WaitTokens.Clear(); WaitKinds.Clear(); WaitKeys.Clear();
             replayDice = null; sceneReady = targetReached = false; UnlockInput();
             returningTitle = false;
+            RestoreReplaySpeed();
+            replayStartAt = 0f;
+            failedAt = 0f; inputReleased = false;
+        }
+
+        // The save cannot be replayed from the entry the game actually started. Stop the
+        // replay before it consumes anything, let the script run normally from its own entry,
+        // and refuse new saves in this segment (the state is no longer a known checkpoint).
+        private static void DegradeFromEntry(string reason)
+        {
+            string detail = Describe(reason);
+            playback = null;
+            Failed = false;
+            Verified = false;
+            Failure = null;
+            invalid = reason;
+            inputReleased = true;
+            UnlockInput();
+            StoryReplay.OnNativeLoadCompleted();
+            if (Plugin.Instance != null)
+            {
+                Plugin.Instance.Status = "该中途档无法精确恢复（" + reason + "），已按本段脚本入口继续；本段不再提供中途存档。";
+                try { Plugin.Instance.Log("[Anytime] degraded: " + detail); }
+                catch (Exception) { }
+            }
+        }
+
+        // The native load watchdog gave up: stop waiting for a scene that is not coming.
+        internal static void NativeLoadAborted(string reason)
+        {
+            if (Replaying) Fail(reason);
         }
 
         internal static void EnvironmentFailed(Exception error)
@@ -483,7 +587,13 @@ namespace MortalHelper.Game
                 AnytimeStoryDiagnostics.TraceFlag("ScriptEntering", MissionManagerData.Instance?.GetFlag("S9200"));
 #endif
                 if (!SameScript(playback.Script, PlayerStatManagerData.Instance?.CurrentStoryScript))
-                { Fail("剧情脚本与存档起点不一致。"); return; }
+                {
+                    // Nothing has been restored yet: the game is about to run its own entry
+                    // script. Keep it playable and refuse to certify this save.
+                    DegradeFromEntry("剧情脚本与存档起点不一致（存档 " + playback.Script + "，当前 " +
+                        (PlayerStatManagerData.Instance?.CurrentStoryScript ?? "<none>") + "）");
+                    return;
+                }
                 try
                 {
                     var original = JsonUtility.FromJson<GameSave>(playback.Baseline);
@@ -511,6 +621,19 @@ namespace MortalHelper.Game
                 try { Plugin.Instance?.Log("[Anytime] baseline captured scene=" + scene + " script=" + script +
                     " globals=" + baselineGlobals.Length); }
                 catch (Exception) { }
+                // Whether the name we record is the script the game will re-enter is exactly
+                // what broke the ch2_2_3_* restores; record both names when diagnosing.
+                try
+                {
+                    if (Plugin.Instance != null && Plugin.Instance.Options.DiagnoseScript.Value)
+                    {
+                        var entry = JsonUtility.FromJson<GameSave>(baseline);
+                        Plugin.Instance.Log("[Anytime] baseline script=" + script + " entry=" +
+                            (entry == null ? "<none>" : entry.StartStoryScript) +
+                            " current=" + (entry == null ? "<none>" : entry.CurrentStoryScript));
+                    }
+                }
+                catch (Exception) { }
             }
             catch (Exception error)
             {
@@ -521,39 +644,43 @@ namespace MortalHelper.Game
             }
         }
 
+        // A failed replay must not throw inside native or Lua code: the exception escapes into
+        // the game script coroutine and leaves it dead, which is exactly the "restore failed and
+        // now the game is stuck" state. Every wrapper answers neutrally instead, so the script
+        // keeps running from where the game put it.
         internal static bool BeforeSay(string text)
         {
-            if (Failed) throw new InvalidDataException(Failure);
+            if (Failed) return false;
             string key = Digest(text);
             if (!Replaying) return false;
             ReplayNumericEdits("Say", key);
             if (cursor == playback.Events.Length) { Reach("Say", key); return false; }
             var next = playback.Events[cursor];
-            if (next.Kind != "Say" || next.Key != key) AbortReplay("剧情对话顺序与存档不同。");
+            if (next.Kind != "Say" || next.Key != key) { AbortReplay("剧情对话顺序与存档不同。"); return false; }
             cursor++; lastProgress = Time.unscaledTime; return true;
         }
         internal static void SayDone(string text) { Record(new AnytimeStoryEvent { Kind = "Say", Key = Digest(text) }); }
         internal static int BeforeChoose(string key, int count)
         {
-            if (Failed) throw new InvalidDataException(Failure);
+            if (Failed) return 0;
             if (!Replaying) return 0;
             string digest = Digest(key);
             ReplayNumericEdits("Choose", digest);
             if (cursor == playback.Events.Length) { if (playback.WaitKind != "Dice") Reach("Choose", digest); return 0; }
             var next = playback.Events[cursor];
             if (next.Kind != "Choose" || next.Key != digest || next.Choice < 1 || next.Choice > count)
-                AbortReplay("剧情选项与存档不同。");
+            { AbortReplay("剧情选项与存档不同。"); return 0; }
             cursor++; lastProgress = Time.unscaledTime; return next.Choice;
         }
         internal static void ChooseDone(string key, int choice)
         { Record(new AnytimeStoryEvent { Kind = "Choose", Key = Digest(key), Choice = choice }); }
         internal static double RandomDraw(double drawn)
         {
-            if (Failed) throw new InvalidDataException(Failure);
+            if (Failed) return drawn;
             if (Replaying)
             {
                 if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Random")
-                    AbortReplay("剧情随机事件与存档不同。");
+                { AbortReplay("剧情随机事件与存档不同。"); return drawn; }
                 lastProgress = Time.unscaledTime;
                 return playback.Events[cursor++].Number;
             }
@@ -562,10 +689,10 @@ namespace MortalHelper.Game
         }
         internal static void BeforeDice(ref int random)
         {
-            if (Failed) throw new InvalidDataException(Failure);
+            if (Failed) return;
             if (!Replaying) { AnytimeDice.InjectRollRaw(random); return; }
             if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Dice")
-                AbortReplay("轮盘判定次数与存档不同。");
+            { AbortReplay("轮盘判定次数与存档不同。"); return; }
             replayDiceSelection = (int)playback.Events[cursor].Number;
             replayDice = playback.Events[cursor++].Choice;
             lastProgress = Time.unscaledTime;
@@ -574,11 +701,11 @@ namespace MortalHelper.Game
         }
         internal static void AfterDice(DiceCheckResult result)
         {
-            if (Failed) throw new InvalidDataException(Failure);
+            if (Failed) return;
             if (Replaying)
             {
                 if (!replayDice.HasValue || result == null || result.Random != replayDice.Value)
-                    AbortReplay("轮盘判定结果与存档不同。");
+                { AbortReplay("轮盘判定结果与存档不同。"); return; }
                 if (replayDiceSelection > 0) result.Result = replayDiceSelection;
                 replayDice = null; replayDiceSelection = 0;
             }
@@ -593,30 +720,30 @@ namespace MortalHelper.Game
         }
         internal static void RecordDiceRoll(string key, int paid)
         {
-            if (Failed) throw new InvalidDataException(Failure);
+            if (Failed) return;
             if (!Replaying) { Record(new AnytimeStoryEvent { Kind = "DiceRoll", Key = key, Choice = paid }); return; }
             string expected; int expectedPaid;
             if (!TryPeekDiceRoll(out expected, out expectedPaid) || expected != key || paid != expectedPaid)
-                AbortReplay("骰子范围或命运消耗与记录不同。");
+            { AbortReplay("骰子范围或命运消耗与记录不同。"); return; }
             cursor++; lastProgress = Time.unscaledTime;
         }
         internal static bool ReachDice(string key)
         {
             if (!Replaying || cursor != playback.Events.Length || playback.WaitKind != "Dice") return false;
             AnytimeDice.RestoreTargetRange(playback.WaitKey);
-            if (AnytimeDice.SaveKey != playback.WaitKey) AbortReplay("骰子等待状态与存档不同。");
+            if (AnytimeDice.SaveKey != playback.WaitKey) { AbortReplay("骰子等待状态与存档不同。"); return false; }
             if (!targetReached) { targetReached = true; targetAt = Time.unscaledTime; } return true;
         }
         internal static void FailDice(string reason)
         { if (Replaying) Fail(reason); else invalid = "骰子存档不可用：" + reason; }
         internal static bool SkipWait()
         {
-            if (Failed) throw new InvalidDataException(Failure);
+            if (Failed) return false;
             return Replaying && !targetReached;
         }
         internal static int EnterWait(string kind, string key)
         {
-            if (Failed) throw new InvalidDataException(Failure);
+            if (Failed) return 0;
             int token = ++tokenSerial;
             WaitTokens.Add(token); WaitKinds.Add(kind); WaitKeys.Add(Digest(key));
             return token;
@@ -631,7 +758,7 @@ namespace MortalHelper.Game
         private static void Reach(string kind, string key)
         {
             if (kind != playback.WaitKind || key != playback.WaitKey)
-                AbortReplay("剧情等待位置与存档不同。");
+            { AbortReplay("剧情等待位置与存档不同。"); return; }
             targetReached = true; targetAt = Time.unscaledTime;
         }
         private static void Record(AnytimeStoryEvent item)
@@ -640,12 +767,60 @@ namespace MortalHelper.Game
             if (Events.Count == MaximumEvents) { invalid = "剧情事件记录超限。"; return; }
             Events.Add(item);
         }
+        // True while the failure still owns the game (input held, title pending).
+        internal static bool Frozen => Failed && !inputReleased;
+
+        // Last resort of the failure path: the recovery is over (the gate stays failed so no
+        // edits or saves are certified), but the player keeps control of the game.
+        private static void ReleaseFailureInput(string reason)
+        {
+            if (inputReleased) return;
+            inputReleased = true;
+            UnlockInput();
+            string message = FailureExit.FailReason(reason) + "：已解除输入锁，请自行回到标题后重新读取原生存档。";
+            if (Plugin.Instance != null)
+            {
+                Plugin.Instance.Status = message;
+                try { Plugin.Instance.Log("[Anytime] failure exit released input; reason=" + reason); }
+                catch (Exception) { }
+            }
+        }
+
+        // The engine's own waits scale with time, so the replay can run fast without
+        // changing its order or its side effects.
+        private static void BoostReplaySpeed()
+        {
+            if (Plugin.Instance == null || !sceneReady) return;   // loading is not what we compress
+            if (Time.timeScale <= 0f) return;   // the game paused itself; do not resume it
+            speedBoosted = true;
+            if (!Mathf.Approximately(Time.timeScale, ReplayScale)) Time.timeScale = ReplayScale;
+        }
+
+        internal static void RestoreReplaySpeed()
+        {
+            if (!speedBoosted) return;
+            speedBoosted = false;
+            if (Plugin.Instance == null) return;
+            // Only undo our own value: the game may have set its own in the meantime.
+            if (Mathf.Approximately(Time.timeScale, ReplayScale))
+                Time.timeScale = Plugin.Instance.Options.ValidSpeed;
+        }
+
+        private static string ReplaySeconds()
+        {
+            float seconds = replayStartAt > 0f ? Time.unscaledTime - replayStartAt : 0f;
+            return (Mathf.Round(seconds * 10f) / 10f).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         private static void Fail(string reason)
         {
             // Describe before clearing playback, so the report names the exact
             // position instead of only the symptom.
             string detail = Describe(reason);
             Failed = true; Failure = reason; playback = null; LockInput();
+            failedAt = Time.unscaledTime; inputReleased = false;
+            RestoreReplaySpeed();
+            replayStartAt = 0f;
             Plugin.Instance?.Gate.Fail("剧情存档恢复失败：" + reason);
             if (Plugin.Instance != null) Plugin.Instance.Status = "剧情恢复失败：" + reason + "；请重新读取原生存档。";
             try { Plugin.Instance?.Log("[Anytime] " + detail); } catch (Exception) { }
@@ -679,10 +854,12 @@ namespace MortalHelper.Game
             entry == null ? "<null>" : entry.Kind + ":" + Short(entry.Key);
         private static string Short(string digest) =>
             string.IsNullOrEmpty(digest) ? "<empty>" : digest.Substring(0, Math.Min(8, digest.Length));
+        // A mismatch ends the replay but must never throw into the game: these helpers run
+        // inside Lua coroutines and Harmony patches on native code, where an exception unwinds
+        // the caller and can skip its own cleanup. Every caller answers with a neutral value.
         private static void AbortReplay(string reason)
         {
             Fail(reason);
-            throw new InvalidDataException(reason);
         }
         private static string SnapshotMismatch(string expected, string actual)
         {
@@ -1178,9 +1355,10 @@ end";
         private static bool Prefix(LuaEnvironment ____luaEnvironment)
         {
             AnytimeStory.ScriptEntering(____luaEnvironment?.Interpreter);
-            // A failed restore must not run script side effects or autosaves
-            // while the next update is taking the player back to the title.
-            return !AnytimeStory.Failed;
+            // A failed restore must not run script side effects or autosaves while the
+            // failure still owns the game; once the exit released input, the script has to
+            // run again or the player is left in a scene that can never advance.
+            return !AnytimeStory.Frozen;
         }
     }
 

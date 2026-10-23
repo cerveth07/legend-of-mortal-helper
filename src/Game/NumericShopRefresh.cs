@@ -11,13 +11,23 @@ namespace MortalHelper.Game
         // Resolved by name once; a rename must skip this cosmetic refresh, not throw.
         private static bool missingTotalReported;
 
+        // FindObjectsOfTypeAll is a full object scan. The numeric-edit gate asks this several
+        // times per frame on the stat and item pages, so the answer is cached per frame.
+        private static int scannedFrame = -1;
+        private static bool scannedOpen;
+
         internal static bool Open
         {
             get
             {
+                int frame = Time.frameCount;
+                if (frame == scannedFrame) return scannedOpen;
+                scannedFrame = frame;
+                scannedOpen = false;
                 foreach (var shop in Resources.FindObjectsOfTypeAll<ShopPanel>())
-                    if (shop.isActiveAndEnabled && shop.gameObject.scene.IsValid() && GameAccess.Field<bool>(shop, "_enableUI")) return true;
-                return false;
+                    if (shop.isActiveAndEnabled && shop.gameObject.scene.IsValid() && GameAccess.Field<bool>(shop, "_enableUI"))
+                    { scannedOpen = true; break; }
+                return scannedOpen;
             }
         }
         internal static void Refresh(bool items)

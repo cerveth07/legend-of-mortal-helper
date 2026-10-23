@@ -1,17 +1,24 @@
+using System;
 using BepInEx.Configuration;
 using UnityEngine;
 
 namespace MortalHelper.Game
 {
+    // One switch per feature: what the option hints show, and how much of it.
+    internal enum OptionHintMode { Off, Hover, Always }
+    internal enum OptionHintDetail { Simple, Full }
+
     internal sealed class Settings
     {
         public readonly ConfigEntry<bool> ExperimentalRecovery;
-        public readonly ConfigEntry<bool> Enabled, Hints, ShowEffects, ShowConditions, ShowBranches, DiagnoseScript;
+        public readonly ConfigEntry<bool> Enabled, DiagnoseScript;
+        public readonly ConfigEntry<OptionHintMode> HintMode;
+        public readonly ConfigEntry<OptionHintDetail> HintDetail;
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
         public readonly ConfigEntry<float> DiceX, DiceY;
         public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage, DuelZeroDamage, DuelAlwaysHit, DuelFirstStrike;
         public readonly ConfigEntry<bool> GroupHealth, GroupAllyHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
-        public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge, PracticeLimit, CheckpointLog;
+        public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge, PracticeLimit;
         public readonly ConfigEntry<string> Point;
         public readonly ConfigEntry<KeyCode> Toggle;
         public readonly ConfigEntry<float> X, Y, Width, Height;
@@ -19,7 +26,9 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<int> SlotCount;
         public readonly ConfigEntry<int> LegendSlotCount;
         public readonly ConfigEntry<bool> SortRecent, AnytimeSave;
-        public readonly ConfigEntry<bool> TraditionalChinese;
+        public readonly ConfigEntry<string> Language;
+        internal UiLang LanguageKind => UiLanguage.Parse(Language.Value);
+        internal string Local(string text) => UiLanguage.Translate(text, LanguageKind);
 #if !NO_PROBE
         public readonly ConfigEntry<bool> SelfTest;
 #endif
@@ -30,14 +39,19 @@ namespace MortalHelper.Game
         public Settings(ConfigFile config)
         {
             Config = config;
+            ConfigEntry<bool> traditionalChinese;
             Enabled = config.Bind("General", "Enabled", true, "启用本插件辅助；不会撤销已应用的修改。");
             ExperimentalRecovery = config.Bind("Recovery", "ExperimentalEnabled", false, "高级测试：显示并启用精确恢复入口，默认隐藏。实验恢复尚未通过完整游戏重放验收，仅限备份后的测试进度；随机状态仍可能导致严格校验失败。");
             Toggle = config.Bind("General", "PanelKey", KeyCode.Tab, "展开或收起面板。");
-            Hints = config.Bind("Story", "EffectHints", false, "选项悬停提示总开关；关闭时保留两个子项偏好。");
-            ShowEffects = config.Bind("Story", "ShowEffects", false, "悬停选项时显示可靠的选择效果，包含剧透。");
-            ShowConditions = config.Bind("Story", "ShowConditions", false, "悬停选项时显示选项解锁条件与已识别的后续剧情，包含剧透。");
+            // The hint used to be three booleans; migrate the old choice once, then the
+            // single mode switch owns it.
+            bool migrate = !config.ContainsKey(new ConfigDefinition("Story", "HintMode"));
+            HintMode = config.Bind("Story", "HintMode", OptionHintMode.Hover,
+                "选项后果提示：Off 关闭 / Hover 悬停显示 / Always 总是显示（后果直接写在选项后面）。");
+            HintDetail = config.Bind("Story", "HintDetail", OptionHintDetail.Simple,
+                "显示范围：Simple 只写数值、好感与物品 / Full 另加剧情标记与分支去向（含剧透）。");
+            if (migrate) MigrateHints(config);
             DiagnoseScript = config.Bind("Diagnostics", "DiagnoseScript", false, "诊断：切换剧本时在状态行显示脚本名与可解析分支数（无面板入口）。");
-            ShowBranches = config.Bind("Story", "ShowBranches", false, "在选项上标记〔已走〕〔未记录〕，记录保存在配置目录的 cerveth.mortal.helper.choices.txt。");
             Point = config.Bind("Story", "BasePoint", "", "指定点数模式下的基础点数；按每次判定范围校验。");
             DuelHealth = config.Bind("Duel", "KeepHealth", false, "单挑主角生命不因普通扣减降低。");
             DuelStamina = config.Bind("Duel", "KeepStamina", false, "单挑主角气力不因普通扣减降低。");
@@ -59,7 +73,6 @@ namespace MortalHelper.Game
             FastSkill = config.Bind("Progression", "FastSkill", false, "每次练功完成当前一级的剩余进度。");
             FastForge = config.Bind("Progression", "FastForge", false, "每次锻造炼丹完成当前一级的剩余进度。");
             PracticeLimit = config.Bind("Edits", "PracticeLimit", false, "解除修炼点数消耗上限；仍按现有武学点数扣减。");
-            CheckpointLog = config.Bind("Story", "CheckpointLog", false, "在提示区显示变化的剧情标记及其数值。");
             X = config.Bind("Window", "X", 36f, "窗口左边距。");
             Y = config.Bind("Window", "Y", 64f, "窗口上边距。");
             Width = config.Bind("Window", "Width", 640f, "窗口宽度。");
@@ -75,8 +88,13 @@ namespace MortalHelper.Game
             LegendSlotCount = config.Bind("Save", "LegendSlotCount", 30,
                 new ConfigDescription("通关故事栏位上限；先显示原生12格，存满后每次追加6格。已有更高编号的故事仍保留可见。", new AcceptableValueRange<int>(12, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
-            AnytimeSave = config.Bind("Save", "AnytimeSave", false, "允许在剧情对话、选项、骰子稳定等待页或单挑行动点使用原生编号槽存档；实验功能，默认关闭。");
-            TraditionalChinese = config.Bind("Window", "TraditionalChinese", false, "面板使用繁體中文；关闭时使用简体中文。");
+            AnytimeSave = config.Bind("Save", "AnytimeSave", false, "允许在剧情对话、选项、骰子稳定等待页或单挑开场使用原生编号槽存档；单挑存档读档后从该场战斗开头重来；实验功能，默认关闭。");
+            // Panel language: zh-Hans / zh-Hant / ja / ko. The old boolean is migrated once.
+            Language = config.Bind("Window", "Language", "zh-Hans",
+                "面板语言：zh-Hans 简体中文 / zh-Hant 繁體中文 / ja 日本語 / ko 한국어。");
+            if (config.TryGetEntry("Window", "TraditionalChinese", out traditionalChinese) && traditionalChinese.Value &&
+                string.Equals(Language.Value, "zh-Hans", StringComparison.Ordinal))
+                Language.Value = "zh-Hant";
 #if !NO_PROBE
             SelfTest = config.Bind("Diagnostics", "SelfTest", false, "只读检测：记录当前场景与 API 状态，不读档、不改进度或配置。");
 #endif
@@ -89,6 +107,28 @@ namespace MortalHelper.Game
             Speed = config.Bind("Edits", "GameSpeed", 1f,
                 new ConfigDescription("游戏速度倍率，1 为默认。原生暂停与慢动作由游戏自己管理。",
                     new AcceptableValueRange<float>(0.25f, 5f)));
+        }
+
+        // A hand-edited config must not be able to freeze the game (timeScale 0) or run it at
+        // absurd speed: the restore paths use these bounds instead of the raw value.
+        internal float ValidSpeed
+        {
+            get
+            {
+                float value = Speed.Value;
+                if (float.IsNaN(value) || float.IsInfinity(value)) return 1f;
+                return Mathf.Clamp(value, 0.25f, 5f);
+            }
+        }
+        // The retired keys stay readable in the existing file: whatever the player had
+        // chosen carries over once, and the old keys are no longer bound or read.
+        private void MigrateHints(ConfigFile config)
+        {
+            ConfigEntry<bool> legacy;
+            if (config.TryGetEntry("Story", "EffectHints", out legacy))
+                HintMode.Value = legacy.Value ? OptionHintMode.Hover : OptionHintMode.Off;
+            if (config.TryGetEntry("Story", "ShowConditions", out legacy) && legacy.Value)
+                HintDetail.Value = OptionHintDetail.Full;
         }
     }
 }

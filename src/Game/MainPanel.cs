@@ -34,14 +34,6 @@ namespace MortalHelper.Game
             { "學問", 4 }, { "嘴力", 4 }, { "性情", 4 }, { "處世", 4 }, { "道德", 4 }, { "修養", 4 },
             { "抗毒", 5 }, { "抗麻", 5 }
         };
-        private static readonly Dictionary<string, string> StatNames = new Dictionary<string, string> {
-            { "銀兩", "金钱" }, { "個人貢獻度", "个人贡献" }, { "門派資產", "门派资产" }, { "門派名聲", "门派名声" },
-            { "門派人數", "门派人数" }, { "向心力", "向心力" }, { "心理衛生", "心情" }, { "武學點數", "武学点数" },
-            { "鍛造", "锻造点数" }, { "毒藥", "炼丹点数" }, { "體力", "体力" }, { "內力", "内力" },
-            { "武功拳掌", "拳掌" }, { "武功暗器", "暗器" }, { "武功刀劍", "刀剑" }, { "輕功", "轻功" },
-            { "學問", "学问" }, { "嘴力", "嘴力" }, { "抗毒", "抗毒" }, { "抗麻", "抗麻" },
-            { "性情", "性情" }, { "處世", "处世" }, { "道德", "道德" }, { "修養", "修养" },
-            { "命運", "命运" }, { "陰陽內功", "阴阳内功" } };
 
         private readonly Plugin plugin;
         private readonly PanelStyle style = new PanelStyle();
@@ -84,6 +76,8 @@ namespace MortalHelper.Game
         private int recoverySlot = 1;
         private GameObject blocker;
         private RectTransform blockerRect;
+        private int tabColumns;
+        private float tabSlotWidth;
         private bool draggingBadge, badgeMoved, draggingWindow;
         private int resizeEdges, hoverEdges;
         private Vector2 dragStartMouse;
@@ -246,7 +240,7 @@ namespace MortalHelper.Game
 
         private void Defer(Action action) { if (action != null) deferred.Enqueue(action); }
 
-        private string Localize(string text) { return UiLanguage.Convert(text, plugin.Options.TraditionalChinese.Value); }
+        private string Localize(string text) { return UiLanguage.Translate(text, plugin.Options.LanguageKind); }
         private void UiLabel(string text, GUIStyle design, params GUILayoutOption[] options)
         { GUILayout.Label(Localize(text), design, options); }
         private void UiLabel(Rect rect, string text, GUIStyle design)
@@ -320,15 +314,39 @@ namespace MortalHelper.Game
         {
             try
             {
-                var font = Font.CreateDynamicFontFromOSFont(new[]
-                {
-                    "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑", "SimHei", "黑体",
-                    "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Meiryo", "Yu Gothic UI"
-                }, 18);
+                var font = Font.CreateDynamicFontFromOSFont(BodyFontNames(plugin.Options.LanguageKind), 18);
                 if (font != null) { ownedBodyFont = font; return font; }
             }
             catch (Exception) { }
             return FindGameFont();
+        }
+
+        // YaHei carries no Hangul, so a Korean panel built from the Chinese list renders tofu.
+        // Ask for the language own face first; the Chinese list stays as the fallback for
+        // machines where that face is missing.
+        private static string[] BodyFontNames(UiLang language)
+        {
+            if (language == UiLang.Ko)
+                return new[] { "Malgun Gothic", "맑은 고딕", "Gulim", "Noto Sans CJK KR", "NanumGothic",
+                    "Microsoft YaHei UI", "Microsoft YaHei", "SimHei" };
+            if (language == UiLang.Ja)
+                return new[] { "Yu Gothic UI", "Meiryo", "MS Gothic", "Noto Sans CJK JP",
+                    "Microsoft YaHei UI", "Microsoft YaHei", "SimHei" };
+            return new[] { "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑", "SimHei", "黑体",
+                "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Meiryo", "Yu Gothic UI" };
+        }
+
+        // Switching language must rebuild the face: the font is chosen once per language.
+        internal void LanguageChanged()
+        {
+            if (ownedBodyFont != null) { UnityEngine.Object.Destroy(ownedBodyFont); ownedBodyFont = null; }
+            style.UiFont = CreateBodyFont();
+            // Cloned styles keep a reference to the old face; the cover style already heals
+            // itself on font change, the active tab style did not.
+            tabActiveStyle = null;
+            style.Refresh(scale, style.UiFont);
+            tabColumns = 0;
+            plugin.Log("Body font: " + (style.UiFont == null ? "game default" : style.UiFont.name));
         }
 
         private static Font FindGameFont()
@@ -650,14 +668,22 @@ namespace MortalHelper.Game
             float rowHeight = 34f * s;
             if (tabTransition < 1f) tabTransition = Mathf.MoveTowards(tabTransition, 1f, Time.unscaledDeltaTime / .22f);
             float available = ViewportWidth();
-            float widest = 0f;
-            foreach (string caption in Pages)
-                widest = Mathf.Max(widest, style.Tab.CalcSize(new GUIContent(Localize(caption))).x + 20f * s);
-            int columns = Pages.Length;
-            while (columns > 1 && widest * columns > available) columns--;
-            float slotWidth = available / Mathf.Max(1, columns);
-            // Opening from the badge briefly yields a narrow animated window.
-            // Never shrink the shared font here: it would stay small after expansion.
+            // Opening from the badge briefly yields a narrow animated window. Never shrink the
+            // shared font here: it would stay small after expansion. The grid is measured
+            // during Layout only and reused for the rest of the frame: measuring again on
+            // Repaint yields a different column count while the window is animating, and two
+            // different row counts in one frame desynchronise IMGUI.
+            if (Event.current.type == EventType.Layout || tabColumns < 1)
+            {
+                float widest = 0f;
+                foreach (string caption in Pages)
+                    widest = Mathf.Max(widest, style.Tab.CalcSize(new GUIContent(Localize(caption))).x + 20f * s);
+                tabColumns = Pages.Length;
+                while (tabColumns > 1 && widest * tabColumns > available) tabColumns--;
+                tabSlotWidth = available / Mathf.Max(1, tabColumns);
+            }
+            int columns = Mathf.Max(1, tabColumns);
+            float slotWidth = tabSlotWidth > 0f ? tabSlotWidth : available;
             int rows = (Pages.Length + columns - 1) / columns;
             for (int row = 0; row < rows; row++)
             {
@@ -711,86 +737,56 @@ namespace MortalHelper.Game
             if (storyView == 1) { Recall(); return; }
 
             Section("选项提示");
-            plugin.Options.Hints.Value = DrawSwitchRow("选项提示（含剧透）", plugin.Options.Hints.Value,
-                "收起面板后悬停选项生效；关闭总开关不会清掉下面两项的选择。");
-            plugin.Options.ShowEffects.Value = DrawSwitchRow("显示已识别效果", plugin.Options.ShowEffects.Value,
-                "列出脚本里能确定的数值/旗标变化。");
-            plugin.Options.ShowConditions.Value = DrawSwitchRow("显示条件与后续走向", plugin.Options.ShowConditions.Value,
-                "列出选项解锁条件与已识别的后续剧情。");
-            plugin.Options.CheckpointLog.Value = DrawSwitchRow("剧情标记变化提醒", plugin.Options.CheckpointLog.Value,
-                "在提示区显示变化的剧情标记及其数值。");
+            int mode = (int)plugin.Options.HintMode.Value;
+            int nextMode = SegmentSetting("选项后果提示", mode,
+                new[] { Localize("关"), Localize("悬停"), Localize("总是") },
+                "把「选完会怎样」写在选项后面。「悬停」要把面板收起（Tab）才生效；「总是」不用悬停，但会一直剧透。");
+            if (nextMode != mode && nextMode >= 0 && nextMode <= 2)
+            {
+                plugin.Options.HintMode.Value = (OptionHintMode)nextMode;
+                plugin.Options.Config.Save();
+            }
+            int detail = (int)plugin.Options.HintDetail.Value;
+            int nextDetail = SegmentSetting("显示范围", detail,
+                new[] { Localize("简洁"), Localize("完整") },
+                "简洁只写数值与好感；完整另外写解锁条件、剧情标记与分支去向（含剧透）。");
+            if (nextDetail != detail && nextDetail >= 0 && nextDetail <= 1)
+            {
+                plugin.Options.HintDetail.Value = (OptionHintDetail)nextDetail;
+                plugin.Options.Config.Save();
+            }
+            Note(HintStatus());
+            Note("提示内容默认只读；「一键设为」会写入当前进度，不修改已保存的存档文件。面板打开时提示暂停显示。");
+        }
 
-            Section("分支记录");
-            plugin.Options.ShowBranches.Value = DrawSwitchRow("显示已走分支标记", plugin.Options.ShowBranches.Value,
-                "选项显示〔已走〕或〔未记录〕；只保存在配置目录，不写入存档。");
-            var recent = BranchHistory.Recent(12);
-            GUILayout.BeginHorizontal();
-            UiLabel(recent.Count == 0 ? "最近记录：还没有记录" : "最近记录", style.Description,
-                GUILayout.ExpandWidth(true));
-            if (UiButton("清空", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
-            { BranchHistory.Clear(); plugin.Status = "分支记录已清空。"; }
-            GUILayout.EndHorizontal();
-            foreach (string line in recent) UiLabel("· " + line, style.Description);
+        // What the current script exposes, so an empty tooltip is never read as a
+        // broken plugin.
+        private static string HintStatus()
+        {
+            if (string.IsNullOrEmpty(HintAdapter.ScriptName))
+                return "尚未进入剧情：切换到剧本后，这里显示可解析的选项数。";
+            if (HintAdapter.Count == 0)
+                return "当前剧本 " + HintAdapter.ScriptName + "：没有可解析的选项。";
+            string text = "当前剧本 " + HintAdapter.ScriptName + " · 可解析 " + HintAdapter.Count
+                + " 个选项 · 有内容 " + HintAdapter.WithContent + " 个";
+            if (HintAdapter.WithContent == 0) text += "\n这些选项都是纯演出，没有可显示的数值变化。";
+            return text;
+        }
 
-            // Advanced testing only; ordinary players use anytime saves instead.
-            if (!plugin.Options.ExperimentalRecovery.Value && !plugin.Options.AutoTour.Value)
-                return;
-            recoveryOpen = Fold("精确恢复（实验）", recoveryOpen, () => recoveryOpen = !recoveryOpen);
-            if (!recoveryOpen) return;
-            Note("记录中：" + (StoryRecovery.Recording ? "是" : "否") + " · 事件 " + StoryRecovery.Count
-                + " 个 · 槽位 " + recoverySlot);
-            GUILayout.BeginHorizontal();
-            if (UiButton(StoryRecovery.Recording ? "停止记录" : "开始记录", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+        // Label above a segmented choice; the grid owns the full width so long labels
+        // never squeeze the control.
+        private int SegmentSetting(string label, int current, string[] options, string hint)
+        {
+            UiLabel(label, style.Entry);
+            int next = GUILayout.SelectionGrid(current, options, options.Length, style.Segment,
+                GUILayout.Height(RowH * 2f + 4f * scale));
+            if (!string.IsNullOrEmpty(hint))
             {
-                if (StoryRecovery.Recording) Defer(() => StoryRecovery.Stop());
-                else Defer(() => StoryRecovery.Begin());
+                GUILayout.Space(2f * scale);
+                Wrapped(hint, style.Description);
             }
-            if (UiButton("保存检查点", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
-            { int slot = recoverySlot; Defer(() => StoryRecovery.Save(slot)); }
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            recoverySlot = Mathf.Clamp(recoverySlot, 1, 9);
-            if (UiButton("减少", style.SubtleStyle, GUILayout.Width(56f * scale)))
-            {
-                recoverySlot = Mathf.Max(1, recoverySlot - 1);
-                confirmRestoreMain = confirmRestoreBackup = false;
-            }
-            UiLabel("槽位 " + recoverySlot, style.Entry, GUILayout.Width(64f * scale));
-            if (UiButton("增加", style.SubtleStyle, GUILayout.Width(56f * scale)))
-            {
-                recoverySlot = Mathf.Min(9, recoverySlot + 1);
-                confirmRestoreMain = confirmRestoreBackup = false;
-            }
-            GUILayout.EndHorizontal();
-            string blocker = StoryReplay.Blocker(recoverySlot);
-            string backupBlocker = StoryReplay.Blocker(recoverySlot, true);
-            bool canRestore = GUI.enabled;
-            GUILayout.BeginHorizontal();
-            GUI.enabled = canRestore && blocker.Length == 0;
-            if (UiButton(confirmRestoreMain ? "确认恢复主检查点？" : "恢复检查点",
-                style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
-            {
-                bool armed = confirmRestoreMain;
-                confirmRestoreMain = false; confirmRestoreBackup = false;
-                if (armed) { int slot = recoverySlot; Defer(() => StoryReplay.Start(slot)); }
-                else confirmRestoreMain = true;
-            }
-            GUI.enabled = canRestore && backupBlocker.Length == 0;
-            if (UiButton(confirmRestoreBackup ? "确认恢复历史备份？" : "恢复历史备份",
-                style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
-            {
-                bool armed = confirmRestoreBackup;
-                confirmRestoreMain = false; confirmRestoreBackup = false;
-                if (armed) { int slot = recoverySlot; Defer(() => StoryReplay.Start(slot, true)); }
-                else confirmRestoreBackup = true;
-            }
-            GUI.enabled = canRestore;
-            GUILayout.EndHorizontal();
-            if (blocker.Length > 0) Note("现在不能恢复：" + blocker);
-            if (!string.IsNullOrEmpty(StoryRecovery.Status)) Note(StoryRecovery.Status);
-            if (!string.IsNullOrEmpty(StoryReplay.Status)) Note(StoryReplay.Status);
-            if (StoryReplay.Active) Note("重放中：第 " + StoryReplay.Position + " 个事件");
-            Note("恢复需要二次确认，将覆盖当前未存档进度；历史备份是上一份检查点，不是原生存档。");
+            GUILayout.Space(6f * scale);
+            return next;
         }
 
         private void Recall()
@@ -1100,7 +1096,7 @@ namespace MortalHelper.Game
             foreach (var stat in player.Stats.List)
             {
                 if (stat == null || !Editable.Contains(stat.StatType.ToString())) continue;
-                string name = DisplayName(stat);
+                string name = GameNames.StatName(stat);
                 if (!string.IsNullOrEmpty(search) && name.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 string key = stat.StatType.ToString();
                 string buffer;
@@ -1281,7 +1277,7 @@ namespace MortalHelper.Game
             Section("随时存档（实验）");
             bool anytime = plugin.Options.AnytimeSave.Value;
             bool nextAnytime = DrawSwitchRow("启用随时存档", anytime,
-                "通过游戏「系统→储存游戏」选择编号槽；骰子页也可点「存档」。支持剧情对话、选项、骰子等待页和单挑行动点；动画、群战与恢复期间不可用。");
+                "通过游戏「系统→储存游戏」选择编号槽；骰子页也可点「存档」。剧情可存对话、选项与骰子等待页；单挑存的是开场状态，读档后从这场战斗开头重来；动画、群战与恢复期间不可用。");
             if (nextAnytime != anytime)
             {
                 plugin.Options.AnytimeSave.Value = nextAnytime;
@@ -1375,21 +1371,130 @@ namespace MortalHelper.Game
             SubSection("排序");
             plugin.Options.SortRecent.Value = DrawSwitchRow("按最近存档排序（F3 切换）", plugin.Options.SortRecent.Value,
                 "只重排读档列表顺序；槽位编号与存档文件不变。");
+
+            // Recorded checkpoints belong to saving, not to the story hints; they moved
+            // here unchanged and stay hidden unless the experimental switch is on.
+            if (!plugin.Options.ExperimentalRecovery.Value && !plugin.Options.AutoTour.Value) return;
+            Section("精确恢复（实验）");
+            Note("记录剧本事件并在读档后重放；属于存档功能，不是剧情提示。");
+            recoveryOpen = Fold("精确恢复（实验）", recoveryOpen, () => recoveryOpen = !recoveryOpen);
+            if (!recoveryOpen) return;
+            Note("记录中：" + (StoryRecovery.Recording ? "是" : "否") + " · 事件 " + StoryRecovery.Count
+                + " 个 · 槽位 " + recoverySlot);
+            GUILayout.BeginHorizontal();
+            if (UiButton(StoryRecovery.Recording ? "停止记录" : "开始记录", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                if (StoryRecovery.Recording) Defer(() => StoryRecovery.Stop());
+                else Defer(() => StoryRecovery.Begin());
+            }
+            if (UiButton("保存检查点", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            { int slot = recoverySlot; Defer(() => StoryRecovery.Save(slot)); }
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            recoverySlot = Mathf.Clamp(recoverySlot, 1, 9);
+            if (UiButton("减少", style.SubtleStyle, GUILayout.Width(56f * scale)))
+            {
+                recoverySlot = Mathf.Max(1, recoverySlot - 1);
+                confirmRestoreMain = confirmRestoreBackup = false;
+            }
+            UiLabel("槽位 " + recoverySlot, style.Entry, GUILayout.Width(64f * scale));
+            if (UiButton("增加", style.SubtleStyle, GUILayout.Width(56f * scale)))
+            {
+                recoverySlot = Mathf.Min(9, recoverySlot + 1);
+                confirmRestoreMain = confirmRestoreBackup = false;
+            }
+            GUILayout.EndHorizontal();
+            string blocker = StoryReplay.Blocker(recoverySlot);
+            string backupBlocker = StoryReplay.Blocker(recoverySlot, true);
+            bool canRestore = GUI.enabled;
+            GUILayout.BeginHorizontal();
+            GUI.enabled = canRestore && blocker.Length == 0;
+            if (UiButton(confirmRestoreMain ? "确认恢复主检查点？" : "恢复检查点",
+                style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                bool armed = confirmRestoreMain;
+                confirmRestoreMain = false; confirmRestoreBackup = false;
+                if (armed) { int slot = recoverySlot; Defer(() => StoryReplay.Start(slot)); }
+                else confirmRestoreMain = true;
+            }
+            GUI.enabled = canRestore && backupBlocker.Length == 0;
+            if (UiButton(confirmRestoreBackup ? "确认恢复历史备份？" : "恢复历史备份",
+                style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                bool armed = confirmRestoreBackup;
+                confirmRestoreMain = false; confirmRestoreBackup = false;
+                if (armed) { int slot = recoverySlot; Defer(() => StoryReplay.Start(slot, true)); }
+                else confirmRestoreBackup = true;
+            }
+            GUI.enabled = canRestore;
+            GUILayout.EndHorizontal();
+            if (blocker.Length > 0) Note("现在不能恢复：" + blocker);
+            if (!string.IsNullOrEmpty(StoryRecovery.Status)) Note(StoryRecovery.Status);
+            if (!string.IsNullOrEmpty(StoryReplay.Status)) Note(StoryReplay.Status);
+            // Position counts consumed events, so the one being replayed is Position + 1.
+            if (StoryReplay.Active) Note("重放中：第 " + (StoryReplay.Position + 1) + " 个事件");
+            Note("恢复需要二次确认，将覆盖当前未存档进度；历史备份是上一份检查点，不是原生存档。");
         }
 
         private void LanguagePage()
         {
             Section("语言");
-            int current = plugin.Options.TraditionalChinese.Value ? 1 : 0;
-            int next = GUILayout.SelectionGrid(current,
-                new[] { Localize("简体中文"), Localize("繁体中文") }, 1, style.Segment,
-                GUILayout.Height(RowH * 2f + 4f * scale));
-            if (next != current)
+            UiLang[] kinds = { UiLang.Hans, UiLang.Hant, UiLang.Ja, UiLang.Ko };
+            string[] names = { "简体中文", "繁體中文", "日本語", "한국어" };
+            int current = System.Array.IndexOf(kinds, plugin.Options.LanguageKind);
+            if (current < 0) current = 0;
+            int next = GUILayout.SelectionGrid(current, names, 2, style.Segment,
+                GUILayout.Height(RowH * 4f + 8f * scale));
+            if (next != current && next >= 0 && next < kinds.Length)
             {
-                plugin.Options.TraditionalChinese.Value = next == 1;
+                plugin.Options.Language.Value = UiLanguage.Code(kinds[next]);
                 plugin.Options.Config.Save();
-                plugin.Status = next == 1 ? "面板已切换为繁體中文。" : "面板已切换为简体中文。";
+                LanguageChanged();
+                plugin.Status = "面板语言：" + names[next];
             }
+            Note("尚未翻译的条目会显示原文（简体中文）。");
+        }
+
+        private GUIStyle coverStyle, coverSubStyle;
+        private Font coverFont;
+
+        // A replay executes the real script; cover it so the skipped lines and the engine's
+        // own transitions do not read as the story fast-forwarding. Draw-only: input is
+        // already locked while the replay runs.
+        internal void DrawReplayCover()
+        {
+            bool replaying = AnytimeStory.Replaying;
+            bool failing = AnytimeStory.Failed && !AnytimeStory.InputReleased;
+            if ((!replaying && !failing) || Event.current.type != EventType.Repaint) return;
+            // While a failure still owns the game the input lock is held for up to eight
+            // seconds; without a cover that reads as a freeze with no explanation.
+            float fade = Mathf.Clamp01((replaying ? AnytimeStory.ReplayElapsed : AnytimeStory.FailureElapsed) * 8f);
+            Color before = GUI.color;
+            GUI.color = new Color(0f, 0f, 0f, .94f * fade);
+            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+            GUI.color = before;
+            float s = Mathf.Max(.5f, scale);
+            if (coverStyle == null || coverFont != style.Entry.font)
+            {
+                coverFont = style.Entry.font;
+                coverStyle = new GUIStyle(style.Entry)
+                {
+                    alignment = TextAnchor.MiddleCenter, wordWrap = false, richText = false,
+                    fontSize = Mathf.RoundToInt(22f * s)
+                };
+                coverSubStyle = new GUIStyle(coverStyle) { fontSize = Mathf.RoundToInt(16f * s) };
+            }
+            float width = Mathf.Max(120f, Screen.width - 80f);
+            float center = Screen.height * .5f;
+            GUI.Label(new Rect(40f, center - 34f, width, 30f),
+                Localize(replaying ? "正在恢复到存档点…" : "恢复失败，正在解除输入锁…"), coverStyle);
+            int done = AnytimeStory.ReplayDone, total = AnytimeStory.ReplayTotal;
+            if (replaying && total > 0)
+                GUI.Label(new Rect(40f, center + 2f, width, 24f),
+                    Localize("已重放 ") + done + " / " + total + Localize(" 个事件"), coverSubStyle);
+            else if (failing)
+                GUI.Label(new Rect(40f, center + 2f, width, 24f),
+                    Localize("若输入未恢复，请用游戏菜单自行读取原生存档。"), coverSubStyle);
         }
 
         private void DrawBottomBar()
@@ -1750,11 +1855,6 @@ namespace MortalHelper.Game
 
         private float ContentWidth() { return Mathf.Max(48f, ViewportWidth() - ScrollbarWidth()); }
 
-        private static string DisplayName(GameStat stat)
-        {
-            string name;
-            return stat != null && StatNames.TryGetValue(stat.StatType.ToString(), out name) ? name : (stat == null ? "" : stat.Name);
-        }
 
         private static string ItemName(ItemData item)
         {
@@ -1794,6 +1894,10 @@ namespace MortalHelper.Game
             plugin.Options.BadgeY.Value = badgePosition.y;
             plugin.Options.Config.Save();
         }
+        // The face the panel is currently drawing with; game-facing overlays reuse it so a
+        // Korean/Japanese panel does not fall back to the game's CJK-only option font.
+        internal Font BodyFont => style == null ? null : style.UiFont;
+
         internal void ClearSelection()
         {
             statEdits.Clear(); itemEdits.Clear(); relationshipEdits.Clear();
@@ -1809,3 +1913,5 @@ namespace MortalHelper.Game
         }
     }
 }
+
+

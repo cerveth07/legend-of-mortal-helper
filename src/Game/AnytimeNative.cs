@@ -136,7 +136,8 @@ namespace MortalHelper.Game
                 if (!File.Exists(path)) QuarantineOrphans(path);
                 if (!HasCompanion(path)) return true;
                 supersedeTransaction = SlotTransaction.Begin(SlotTransaction.JournalFor(path), "supersede", new[] {
-                    path, path + ".mha", path + ".mha-required", path + ".mhduel", path + ".mhduel-required"
+                    path, path + ".mha", path + ".mha-required", path + ".mhduel", path + ".mhduel-required",
+                    path + ".mhstart"
                 });
                 supersedePath = path;
                 return true;
@@ -212,8 +213,11 @@ namespace MortalHelper.Game
             bool story = operation == "story", duel = operation == "duel", supersede = operation == "supersede";
             // A story commit supersedes any duel record, and a duel commit
             // supersedes any story record: the slot has exactly one meaning.
-            if (story || supersede) { DeleteIfExists(path + ".mhduel"); DeleteIfExists(path + ".mhduel-required"); }
-            if (duel || supersede) { DeleteIfExists(path + ".mha"); DeleteIfExists(path + ".mha-required"); }
+            // Retirement happens after Commit(): a locked file must be reported as pending
+            // cleanup, never as a save failure, because the new pair is already durable.
+            if (story || supersede)
+            { TryDelete(path + ".mhduel"); TryDelete(path + ".mhduel-required"); TryDelete(path + ".mhstart"); }
+            if (duel || supersede) { TryDelete(path + ".mha"); TryDelete(path + ".mha-required"); }
         }
 
         // Settles any journal left on the slot. Called before the game reads the
@@ -228,8 +232,16 @@ namespace MortalHelper.Game
             { throw new InvalidDataException("存档事务日志无法读取：" + error.GetBaseException().Message); }
             if (transaction == null) return;
             if (transaction.State == SlotTransactionState.Broken)
-                throw new InvalidDataException("此槽位上次存档失败且回退未完成；事务日志与备份仍保留在 " + journal +
-                    "。请从完整备份恢复该槽位后再读取。");
+            {
+                // Rollback is idempotent and re-verifies every backup, so a transient lock or
+                // denied delete must not be the end of the slot: retry it once before giving up.
+                var retry = transaction.Rollback();
+                if (!retry.Complete)
+                    throw new InvalidDataException("此槽位上次存档失败且回退未完成；事务日志与备份仍保留在 " + journal +
+                        "。请从完整备份恢复该槽位后再读取。");
+                Report("上次未回退完成的存档已重试回退成功：" + Path.GetFileName(path));
+                return;
+            }
             if (transaction.State == SlotTransactionState.Committed)
             { FinishOperation(transaction, path); return; }
             if (transaction.State == SlotTransactionState.RolledBack)
@@ -242,6 +254,14 @@ namespace MortalHelper.Game
             {
                 FinishOperation(transaction, path);
                 return;
+            }
+            if (!string.IsNullOrEmpty(transaction.ReplacementHash) && File.Exists(path))
+            {
+                // A replacement hash was recorded, so a verified new file existed at commit
+                // time. Something else wrote this slot since: keep that file (it is the newest
+                // thing the player has) before the pre-save original is restored over it.
+                Quarantine(path);
+                Report("此槽位的存档在恢复前被其他程序改写，已把当前文件保留为 .dat.stale 并恢复保存前版本。");
             }
             var report = transaction.Rollback();
             if (!report.Complete)
@@ -312,7 +332,8 @@ namespace MortalHelper.Game
         }
 
         private static readonly string[] CompanionSuffixes = {
-            ".mha", ".mha-required", ".mhduel", ".mhduel-required", ".mha-pending", ".mhduel-pending"
+            ".mha", ".mha-required", ".mhduel", ".mhduel-required",
+            ".mhstart", ".mha-pending", ".mhduel-pending"
         };
 
         // Moves a coherent set of files into one quarantine folder, keeping their
@@ -407,11 +428,21 @@ namespace MortalHelper.Game
         private static bool HasCompanion(string path)
         {
             return File.Exists(path + ".mha") || File.Exists(path + ".mha-required") ||
-                File.Exists(path + ".mhduel") || File.Exists(path + ".mhduel-required");
+                File.Exists(path + ".mhduel") || File.Exists(path + ".mhduel-required") ||
+                File.Exists(path + ".mhstart");
         }
 
         internal static void DeleteIfExists(string path)
         { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
+
+        // Best effort: a companion that cannot be removed right now is retired by the next
+        // settle instead of turning a successful save into a reported failure.
+        private static void TryDelete(string path)
+        {
+            try { DeleteIfExists(path); }
+            catch (Exception error)
+            { Report("此槽位的配套文件暂时无法删除，下次存档或读档会自动重试：" + error.GetBaseException().Message); }
+        }
 
         // Never delete an earlier quarantine: a second stale companion must not destroy
         // the first one, which may be the only copy left. Shared by the story and duel

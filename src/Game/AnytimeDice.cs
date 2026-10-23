@@ -142,7 +142,12 @@ namespace MortalHelper.Game
         }
         internal static void Tick()
         {
-            if (!AnytimeStory.Replaying || SaveKey == null) return;
+            // Reading the dialog back through reflection can fail on a game update. That must
+            // cost this widget only: an exception here used to abort Plugin.Update, which also
+            // skipped the watchdogs that release the input lock.
+            string probe;
+            try { probe = SaveKey; } catch (Exception) { return; }
+            if (!AnytimeStory.Replaying || probe == null) return;
             try
             {
                 AnytimeStory.ReplayDiceNumericEdits();
