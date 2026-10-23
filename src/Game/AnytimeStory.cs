@@ -11,6 +11,7 @@ using HarmonyLib;
 using MoonSharp.Interpreter;
 using Mortal.Core;
 using Mortal.Story;
+using MortalHelper.Core;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
@@ -18,50 +19,10 @@ using UnityEngine.SceneManagement;
 namespace MortalHelper.Game
 {
     [Serializable]
-    internal sealed class AnytimeStoryEvent
-    {
-        public string Kind;
-        public string Key;
-        public int Choice;
-        public double Number;
-    }
-
-    [Serializable]
-    internal sealed class AnytimeLuaValue
-    {
-        public string Key;
-        public string Kind;
-        public string Text;
-        public double Number;
-        public bool Boolean;
-    }
-
-    [Serializable]
     internal sealed class AnytimeLuaRandomState
     {
         public int Next, NextP;
         public int[] Seeds;
-    }
-
-    [Serializable]
-    internal sealed class AnytimeStoryRecord
-    {
-        public int Version = 2;
-        public string Client;
-        public string NativeHash;
-        public string Baseline;
-        public string Expected;
-        public string Script;
-        public string Scene;
-        public string WaitKind;
-        public string WaitKey;
-        public string BaselineRandomState;
-        public string RandomState;
-        public string BaselineLuaRandomState;
-        public string LuaRandomState;
-        public AnytimeLuaValue[] BaselineGlobals;
-        public AnytimeLuaValue[] ExpectedGlobals;
-        public AnytimeStoryEvent[] Events;
     }
 
     // Numbered slots keep the native file format. A sidecar describes how to
@@ -73,25 +34,83 @@ namespace MortalHelper.Game
         private static readonly MethodInfo CreateSave = AccessTools.Method(typeof(SaveSystem), "CreateSaveData");
         private static readonly MethodInfo GetPath = AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile");
         private static readonly List<AnytimeStoryEvent> Events = new List<AnytimeStoryEvent>();
-        private static readonly HashSet<string> StandardLuaTables = new HashSet<string>(StringComparer.Ordinal) {
-            "_G", "math", "string", "table", "coroutine", "os", "io", "debug", "package", "bit32", "utf8"
-        };
+        private static readonly HashSet<string> StandardLuaTables = DiscoverLuaLibraries();
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Script, Dictionary<string, Table>>
+            LuaLibraries = new System.Runtime.CompilerServices.ConditionalWeakTable<Script, Dictionary<string, Table>>();
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Script, Dictionary<string, LuaApiIdentity>>
+            LuaRootApis = new System.Runtime.CompilerServices.ConditionalWeakTable<Script, Dictionary<string, LuaApiIdentity>>();
+        private sealed class LuaApiIdentity
+        {
+            internal DataType Type;
+            internal object Reference;
+        }
+        internal static void RememberLuaRootApis(Script interpreter)
+        {
+            LuaRootApis.GetValue(interpreter, owner => {
+                var apis = new Dictionary<string, LuaApiIdentity>(StringComparer.Ordinal);
+                foreach (var pair in owner.Globals.Pairs)
+                    if (pair.Key.Type == DataType.String && (pair.Value.Type == DataType.Function ||
+                        pair.Value.Type == DataType.ClrFunction || pair.Value.Type == DataType.UserData))
+                        apis.Add(pair.Key.String, new LuaApiIdentity { Type = pair.Value.Type,
+                            Reference = pair.Value.Type == DataType.Function ? (object)pair.Value.Function :
+                                pair.Value.Type == DataType.ClrFunction ? (object)pair.Value.Callback : pair.Value.UserData });
+                return apis;
+            });
+        }
+        private static bool SameLuaApi(LuaApiIdentity expected, DynValue actual)
+        {
+            if (expected.Type != actual.Type) return false;
+            if (actual.Type == DataType.Function) return ReferenceEquals(expected.Reference, actual.Function);
+            if (actual.Type == DataType.ClrFunction) return ReferenceEquals(expected.Reference, actual.Callback);
+            if (actual.Type == DataType.UserData) return ReferenceEquals(expected.Reference, actual.UserData);
+            return false;
+        }
+        private static HashSet<string> DiscoverLuaLibraries()
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal) {
+                "_G", "math", "string", "table", "coroutine", "os", "io", "debug", "package", "bit32", "utf8"
+            };
+            // Read the actual bundled MoonSharp module declarations. In this game
+            // they include dynamic and json in addition to the usual Lua modules.
+            foreach (var type in typeof(Script).Assembly.GetTypes())
+                foreach (MoonSharpModuleAttribute module in type.GetCustomAttributes(typeof(MoonSharpModuleAttribute), false))
+                    if (!string.IsNullOrEmpty(module.Namespace)) names.Add(module.Namespace);
+            return names;
+        }
+        internal static void RememberLuaLibraries(Script interpreter)
+        {
+            LuaLibraries.GetValue(interpreter, owner => {
+                var libraries = new Dictionary<string, Table>(StringComparer.Ordinal);
+                foreach (var name in StandardLuaTables)
+                {
+                    var value = owner.Globals.Get(name);
+                    if (value.Type == DataType.Table) libraries.Add(name, value.Table);
+                }
+                return libraries;
+            });
+        }
+        private static bool IsLuaLibrary(Script interpreter, string name, Table table)
+        {
+            Dictionary<string, Table> libraries;
+            Table original;
+            return LuaLibraries.TryGetValue(interpreter, out libraries) && libraries.TryGetValue(name, out original) &&
+                ReferenceEquals(table, original);
+        }
         private static readonly List<int> WaitTokens = new List<int>();
         private static readonly List<string> WaitKinds = new List<string>();
         private static readonly List<string> WaitKeys = new List<string>();
         private static Script lua;
         private static string script, scene, baseline, baselineRandomState, baselineLuaRandomState, invalid;
         private static AnytimeLuaValue[] baselineGlobals;
-        private static string pendingSlot, pendingPath, pendingNativeBackup, pendingSideBackup;
-        private static bool pendingRequiredBefore;
-        private static string completedPath, completedHash;
+        private static string pendingSlot, pendingPath;
+        private static SlotTransaction pendingTransaction;
+        private static string blockedReason;
         private static AnytimeStoryRecord pendingRecord, playback;
         private static int cursor, tokenSerial;
         private static int? replayDice;
         private static bool sceneReady, targetReached;
         private static bool returningTitle;
-        private static float targetAt, replayStarted;
-        private static readonly List<BaseInputModule> LockedInputs = new List<BaseInputModule>();
+        private static float targetAt, lastProgress;
 
         internal static bool Replaying => playback != null && !Failed && !Verified;
         internal static bool Verified { get; private set; }
@@ -133,15 +152,26 @@ namespace MortalHelper.Game
                 if (slot == null || slot.Length != 3 || slot == "000" ||
                     slot.Any(c => c < '0' || c > '9'))
                     throw new InvalidDataException("请选择游戏系统菜单中的编号槽位。");
-                completedPath = completedHash = null;
                 AbortNativeSave();
                 string path = PathFor(slot);
                 if (string.IsNullOrEmpty(path)) throw new IOException("无法定位原生存档槽位。");
-                if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
-                    File.Exists(path + ".mha.rollback"))
-                    throw new InvalidDataException("此槽位有上次中断的存档记录，请先恢复备份。");
+                AnytimeNative.SettleSlot(slot, path);
+                if (File.Exists(JournalFor(path)))
+                    throw new InvalidDataException("此槽位有上次未完成的存档事务；请先读取该槽位让插件自动恢复。");
+                // A slot with no native file cannot own any companion. Move them
+                // aside so the "-required without sidecar" check below cannot
+                // block this slot forever, and keep them for manual recovery.
+                if (!File.Exists(path)) AnytimeNative.QuarantineOrphans(path);
+                // Legacy 0.1.x interruption markers carry no journal, so the only
+                // safe answer is to stop. They are only meaningful while a native
+                // file exists: with no .dat there is nothing that could be torn.
+                bool nativeExists = File.Exists(path);
+                if (nativeExists && (File.Exists(path + ".mha-pending") || File.Exists(path + ".mhduel-pending")))
+                    throw new InvalidDataException("此槽位有上一版本中断的存档记录，请先恢复备份。");
                 if (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha"))
                     throw new InvalidDataException("此槽位缺少必需的剧情附档，请先恢复完整备份。");
+                if (File.Exists(path + ".mhduel-required") && !File.Exists(path + ".mhduel"))
+                    throw new InvalidDataException("此槽位缺少必需的单挑附档，请先恢复完整备份。");
                 var record = new AnytimeStoryRecord {
                     Client = Application.version, Baseline = baseline, Script = script, Scene = scene,
                     WaitKind = WaitKinds[0], WaitKey = WaitKeys[0],
@@ -158,30 +188,31 @@ namespace MortalHelper.Game
                     throw new InvalidDataException("无法序列化游戏随机状态。");
                 if (string.IsNullOrEmpty(record.Expected) || record.Expected.Length > MaximumSidecarBytes)
                     throw new InvalidDataException("当前进度超出附加记录容量。 ");
-                string side = path + ".mha";
-                pendingNativeBackup = path + ".mha-rollback";
-                pendingSideBackup = side + ".rollback";
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-                if (File.Exists(path)) File.Copy(path, pendingNativeBackup, true);
-                if (File.Exists(side)) File.Copy(side, pendingSideBackup, true);
-                pendingRequiredBefore = File.Exists(path + ".mha-required");
+                // Snapshot the slot before the game writes anything into it.
+                pendingTransaction = SlotTransaction.Begin(JournalFor(path), "story", new[] {
+                    path, path + ".mha", path + ".mha-required", path + ".mhduel", path + ".mhduel-required"
+                });
                 pendingSlot = slot; pendingPath = path; pendingRecord = record;
-                File.WriteAllText(path + ".mha-pending", "1", new UTF8Encoding(false));
-                File.WriteAllText(path + ".mha-required", "2", new UTF8Encoding(false));
+                File.WriteAllText(path + ".mha-required", "3", new UTF8Encoding(false));
                 return true;
             }
             catch (Exception error)
             {
-                bool hadPending = pendingRecord != null;
-                bool restored = !hadPending || RollBack();
-                if (!hadPending)
+                string message = "剧情存档准备失败：" + error.Message;
+                if (pendingTransaction != null)
                 {
-                    try { DeleteIfExists(pendingNativeBackup); DeleteIfExists(pendingSideBackup); }
-                    catch (Exception cleanup) { Plugin.Instance?.Report(cleanup); }
-                    pendingNativeBackup = pendingSideBackup = null;
+                    var report = pendingTransaction.Rollback();
+                    pendingTransaction = null;
+                    if (report.Complete) message = "剧情存档准备失败，槽位已回退：" + error.Message;
+                    else
+                    {
+                        blockedReason = report.Detail;
+                        message = "剧情存档准备失败且回退未完成；请保留 .mhtx 事务日志及其备份：" +
+                            error.Message + "；" + report.Detail;
+                    }
                 }
-                AnytimeNative.SaveFailed(restored ? "剧情存档准备失败：" + error.Message
-                    : "剧情存档准备失败且回退未完成；请保留 .mha-rollback/.mha.rollback 备份：" + error.Message);
+                ClearPending();
+                AnytimeNative.SaveFailed(message);
                 return false;
             }
         }
@@ -198,7 +229,7 @@ namespace MortalHelper.Game
                 if (nativeHash != HashObject(attempted)) throw new IOException("原生存档未完整写入。");
                 pendingRecord.NativeHash = nativeHash;
                 string side = saveFile + ".mha", temp = side + ".tmp";
-                string json = JsonUtility.ToJson(pendingRecord);
+                string json = AnytimeStoryCodec.Write(pendingRecord);
                 if (Encoding.UTF8.GetByteCount(json) > MaximumSidecarBytes) throw new InvalidDataException("剧情附加记录过大。");
                 using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
@@ -206,43 +237,38 @@ namespace MortalHelper.Game
                     file.Write(bytes, 0, bytes.Length); file.Flush(true);
                 }
                 if (File.Exists(side)) File.Replace(temp, side, null); else File.Move(temp, side);
-                // Read the committed pair before releasing its rollback copies.
+                // Read the committed pair before claiming the transaction.
                 ReadRecord(saveFile, attempted);
-                DeleteIfExists(saveFile + ".mha-pending");
-                completedPath = saveFile; completedHash = nativeHash;
-                ClearPending(true);
+                if (pendingTransaction != null)
+                {
+                    pendingTransaction.RecordReplacement(nativeHash);
+                    pendingTransaction.Commit();
+                }
+                AnytimeNative.FinishOperation(pendingTransaction, saveFile);
+                ClearPending();
             }
             catch (Exception error)
             {
-                completedPath = completedHash = null;
                 bool restored = RollBack();
                 AnytimeNative.SaveFailed(restored
                     ? "剧情存档未完成，槽位已回退：" + error.Message
-                    : "剧情存档未完成，自动回退失败；请保留原生档和 .mha-rollback/.mha.rollback 备份：" + error.Message);
+                    : "剧情存档未完成，自动回退失败；已保留 .mhtx 事务日志与备份：" + error.Message +
+                        (blockedReason == null ? "" : "；" + blockedReason));
             }
         }
 
         internal static void AbortNativeSave() { if (pendingRecord != null) RollBack(); }
 
-        internal static bool NativeSaveSucceeded(string saveFile, object gameSave)
-        {
-            if (completedPath != saveFile || completedHash == null || !(gameSave is GameSave)) return false;
-            try { return completedHash == HashObject(gameSave) && completedHash == HashFile(saveFile); }
-            catch (Exception) { return false; }
-        }
+        internal static string JournalFor(string path) => SlotTransaction.JournalFor(path);
 
-        internal static bool ForgetAfterOrdinarySave(string saveFile, object gameSave)
+        // Replaces ForgetAfterOrdinarySave. A verified ordinary native save owns
+        // the slot, so the story companions are retired through the same journal
+        // that protects the write; an interrupted retirement is finished later by
+        // AnytimeNative.SettleSlot instead of leaving the slot unreadable.
+        internal static bool OrdinalSaveVerified(string saveFile, object gameSave)
         {
             if (pendingRecord != null || !(gameSave is GameSave)) return false;
-            try
-            {
-                if (HashFile(saveFile) != HashObject(gameSave)) return false;
-                if (File.Exists(saveFile + ".mha-pending") || File.Exists(saveFile + ".mha-rollback") ||
-                    File.Exists(saveFile + ".mha.rollback")) return false;
-                DeleteIfExists(saveFile + ".mha");
-                DeleteIfExists(saveFile + ".mha-required");
-                return true;
-            }
+            try { return HashFile(saveFile) == HashObject(gameSave); }
             catch (Exception error) { Plugin.Instance?.Report(error); return false; }
         }
 
@@ -257,18 +283,34 @@ namespace MortalHelper.Game
             if (save == null) return;
             string path = PathFor(slot);
             if (string.IsNullOrEmpty(path)) return;
-            if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
-                File.Exists(path + ".mha.rollback"))
+            if (File.Exists(path + ".mha-pending"))
                 throw new InvalidDataException("此槽位的剧情存档中断；请从备份恢复后再读档。");
+            if (File.Exists(path + ".mha-rollback") || File.Exists(path + ".mha.rollback"))
+                Report("此槽位仍保留上一版本的 .mha-rollback 备份；读取不依赖它，请勿手动删除。");
             if (!File.Exists(path + ".mha"))
             {
                 if (!File.Exists(path + ".mha-required")) return;
                 throw new InvalidDataException("此剧情编号档缺少配套的 .mha 剧情记录，不能安全恢复。请恢复完整备份。");
             }
+            // The sidecar must describe this exact native file. When it does not,
+            // the native file was replaced by something newer, so the companion is
+            // stale rather than missing: keep it out of the way and let the player
+            // load the complete native save they actually have.
+            string nativeHash = HashFile(path);
+            string recorded = ReadSidecarHeader(path);
+            if (recorded != null && recorded != nativeHash)
+            {
+                if (File.Exists(path + ".mha-required"))
+                    throw new InvalidDataException("此槽位的剧情附档与原生档不匹配（附档必需标记仍在），" +
+                        "不能确认哪一个才是完整存档。请从完整备份恢复后再读取。");
+                Quarantine(path + ".mha");
+                Report("该槽位的剧情附档属于更早的存档，已保留为 .mha.stale 并按原生存档载入。");
+                return;
+            }
             var record = ReadRecord(path, save);
             var opening = JsonUtility.FromJson<GameSave>(record.Baseline);
             if (opening == null || opening.CurrentScene != record.Scene ||
-                !SameScript(opening.CurrentStoryScript, record.Script) || record.Events == null ||
+                string.IsNullOrEmpty(record.Script) || record.Events == null ||
                 record.BaselineGlobals == null || record.ExpectedGlobals == null ||
                 string.IsNullOrEmpty(record.BaselineRandomState) || string.IsNullOrEmpty(record.RandomState) ||
                 string.IsNullOrEmpty(record.BaselineLuaRandomState) || string.IsNullOrEmpty(record.LuaRandomState) ||
@@ -278,11 +320,15 @@ namespace MortalHelper.Game
             foreach (var entry in record.Events)
                 if (entry == null || (entry.Kind != "Say" && entry.Kind != "Choose" && entry.Kind != "Random" && entry.Kind != "Dice"))
                     throw new InvalidDataException("剧情事件类型无效。");
+            // Native PlayerStatManagerData.Load resumes StartStoryScript, not
+            // CurrentStoryScript (which its Save never writes). Use the recorded
+            // execution entry, then restore the original metadata at ScriptEntering.
+            opening.StartStoryScript = record.Script;
             opening.TimeTick = save.TimeTick;
             playback = record; save = opening; cursor = 0;
             sceneReady = false; targetReached = false; targetAt = 0f;
             replayDice = null;
-            replayStarted = Time.unscaledTime; Verified = Failed = false; Failure = null;
+            lastProgress = Time.unscaledTime; Verified = Failed = false; Failure = null;
             Events.Clear(); WaitTokens.Clear(); WaitKinds.Clear(); WaitKeys.Clear();
             LockInput();
         }
@@ -304,15 +350,20 @@ namespace MortalHelper.Game
             }
             if (!Replaying) return;
             LockInput();
-            if (Time.unscaledTime - replayStarted > 120f) { Fail("剧情回放超过两分钟仍未到达存档位置。"); return; }
+            // Measure a stall, not the total elapsed time: a long script that keeps
+            // consuming events is making progress even when the whole replay takes
+            // several minutes.
+            if (Time.unscaledTime - lastProgress > 120f)
+            { Fail("剧情回放超过两分钟没有匹配到记录的下一个事件（已重放 " + cursor + " 个）。"); return; }
             if (!sceneReady || !targetReached || Time.unscaledTime - targetAt < .25f) return;
             try
             {
                 if (cursor != playback.Events.Length || WaitTokens.Count != 1 ||
                     WaitKinds[0] != playback.WaitKind || WaitKeys[0] != playback.WaitKey)
                     throw new InvalidDataException("对话等待点与记录不同。");
-                if (!SameSnapshot(Snapshot(), playback.Expected))
-                    throw new InvalidDataException("剧情状态与存档内容不同。");
+                string actual = Snapshot();
+                if (!SameSnapshot(actual, playback.Expected))
+                    throw new InvalidDataException("剧情状态与存档内容不同。" + SnapshotMismatch(playback.Expected, actual));
                 if (!SameGlobals(CaptureGlobals(lua), playback.ExpectedGlobals))
                     throw new InvalidDataException("Lua 剧情变量与存档内容不同。");
                 UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.RandomState);
@@ -332,7 +383,7 @@ namespace MortalHelper.Game
         internal static void Reset()
         {
             AbortNativeSave(); playback = null; Verified = Failed = false; Failure = null;
-            completedPath = completedHash = null;
+            blockedReason = null;
             lua = null; script = scene = baseline = baselineRandomState = baselineLuaRandomState = invalid = null; baselineGlobals = null;
             Events.Clear(); WaitTokens.Clear(); WaitKinds.Clear(); WaitKeys.Clear();
             replayDice = null; sceneReady = targetReached = false; UnlockInput();
@@ -363,10 +414,16 @@ namespace MortalHelper.Game
             }
             if (Replaying)
             {
+#if !NO_PROBE
+                AnytimeStoryDiagnostics.TraceFlag("ScriptEntering", MissionManagerData.Instance?.GetFlag("S9200"));
+#endif
                 if (!SameScript(playback.Script, PlayerStatManagerData.Instance?.CurrentStoryScript))
                 { Fail("剧情脚本与存档起点不一致。"); return; }
                 try
                 {
+                    var original = JsonUtility.FromJson<GameSave>(playback.Baseline);
+                    PlayerStatManagerData.Instance.SetStartScript(original.StartStoryScript);
+                    RestoreBaselineFlags(original);
                     RestoreGlobals(lua, playback.BaselineGlobals);
                     UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.BaselineRandomState);
                     RestoreLuaRandom(lua, playback.BaselineLuaRandomState);
@@ -407,7 +464,7 @@ namespace MortalHelper.Game
             if (cursor == playback.Events.Length) { Reach("Say", key); return false; }
             var next = playback.Events[cursor];
             if (next.Kind != "Say" || next.Key != key) AbortReplay("剧情对话顺序与存档不同。");
-            cursor++; return true;
+            cursor++; lastProgress = Time.unscaledTime; return true;
         }
         internal static void SayDone(string text) { Record(new AnytimeStoryEvent { Kind = "Say", Key = Digest(text) }); }
         internal static int BeforeChoose(string key, int count)
@@ -419,7 +476,7 @@ namespace MortalHelper.Game
             var next = playback.Events[cursor];
             if (next.Kind != "Choose" || next.Key != digest || next.Choice < 1 || next.Choice > count)
                 AbortReplay("剧情选项与存档不同。");
-            cursor++; return next.Choice;
+            cursor++; lastProgress = Time.unscaledTime; return next.Choice;
         }
         internal static void ChooseDone(string key, int choice)
         { Record(new AnytimeStoryEvent { Kind = "Choose", Key = Digest(key), Choice = choice }); }
@@ -430,6 +487,7 @@ namespace MortalHelper.Game
             {
                 if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Random")
                     AbortReplay("剧情随机事件与存档不同。");
+                lastProgress = Time.unscaledTime;
                 return playback.Events[cursor++].Number;
             }
             Record(new AnytimeStoryEvent { Kind = "Random", Number = drawn });
@@ -442,6 +500,7 @@ namespace MortalHelper.Game
             if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Dice")
                 AbortReplay("轮盘判定次数与存档不同。");
             replayDice = playback.Events[cursor++].Choice;
+            lastProgress = Time.unscaledTime;
             random = replayDice.Value;
         }
         internal static void AfterDice(DiceCheckResult result)
@@ -489,14 +548,68 @@ namespace MortalHelper.Game
         }
         private static void Fail(string reason)
         {
+            // Describe before clearing playback, so the report names the exact
+            // position instead of only the symptom.
+            string detail = Describe(reason);
             Failed = true; Failure = reason; playback = null; LockInput();
             Plugin.Instance?.Gate.Fail("剧情存档恢复失败：" + reason);
             if (Plugin.Instance != null) Plugin.Instance.Status = "剧情恢复失败：" + reason + "；请重新读取原生存档。";
+            try { Plugin.Instance?.Log("[Anytime] " + detail); } catch (Exception) { }
         }
+        // Diagnostics deliberately spell out "none" for an unavailable value and
+        // never substitute a default that could be mistaken for a match.
+        private static string Describe(string reason)
+        {
+            var text = new StringBuilder("story recovery failed: reason=").Append(reason);
+            text.Append("; scene=").Append(scene ?? "<none>");
+            text.Append("; script=").Append(script ?? "<none>");
+            text.Append("; live-script=").Append(PlayerStatManagerData.Instance?.CurrentStoryScript ?? "<none>");
+            if (playback != null)
+            {
+                text.Append("; target=").Append(playback.WaitKind).Append(':').Append(Short(playback.WaitKey));
+                text.Append("; progress=").Append(cursor).Append('/').Append(playback.Events.Length);
+                text.Append("; last-replayed=").Append(cursor > 0 ? Event(playback.Events[cursor - 1]) : "<none>");
+                text.Append("; failing=").Append(cursor < playback.Events.Length ? Event(playback.Events[cursor]) : "<recorded end>");
+                text.Append("; expected-bytes=").Append(playback.Expected == null ? "<none>" : playback.Expected.Length.ToString());
+            }
+            else text.Append("; progress=<no active replay>");
+            text.Append("; waits=").Append(WaitTokens.Count);
+            if (WaitTokens.Count == 1) text.Append('(').Append(WaitKinds[0]).Append(':').Append(Short(WaitKeys[0])).Append(')');
+            text.Append("; pending-slot=").Append(pendingSlot ?? "<none>");
+            text.Append("; transaction=").Append(pendingTransaction == null ? "<none>" : pendingTransaction.State.ToString());
+            if (blockedReason != null) text.Append("; rollback-blocked=").Append(blockedReason);
+            text.Append("; locked-inputs=").Append(InteractionLock.Held ? "held" : "free");
+            return text.ToString();
+        }
+        private static string Event(AnytimeStoryEvent entry) =>
+            entry == null ? "<null>" : entry.Kind + ":" + Short(entry.Key);
+        private static string Short(string digest) =>
+            string.IsNullOrEmpty(digest) ? "<empty>" : digest.Substring(0, Math.Min(8, digest.Length));
         private static void AbortReplay(string reason)
         {
             Fail(reason);
             throw new InvalidDataException(reason);
+        }
+        private static string SnapshotMismatch(string expected, string actual)
+        {
+            string detail;
+            try { detail = AnytimeStoryDiagnostics.Difference(expected, actual); }
+            catch (Exception error) { detail = "差异解析失败：" + error.Message; }
+            try
+            {
+                string folder = Path.Combine(BepInEx.Paths.BepInExRootPath, "MortalHelperDiagnostics");
+                Directory.CreateDirectory(folder);
+                string stem = Path.Combine(folder, "story-" + DateTime.UtcNow.ToString("yyyyMMddTHHmmssfff") + "-" + Guid.NewGuid().ToString("N"));
+                File.WriteAllText(stem + ".expected.json", expected, new UTF8Encoding(false));
+                File.WriteAllText(stem + ".actual.json", actual, new UTF8Encoding(false));
+                Plugin.Instance?.Log("[Anytime] snapshot diagnostics=" + stem + "; " + detail);
+            }
+            catch (Exception error)
+            {
+                try { Plugin.Instance?.Log("[Anytime] snapshot diagnostics unavailable: " + error.Message + "; " + detail); }
+                catch (Exception) { }
+            }
+            return detail;
         }
         private static string Snapshot()
         {
@@ -520,18 +633,37 @@ namespace MortalHelper.Game
         private static AnytimeLuaValue[] CaptureGlobals(Script interpreter)
         {
             if (interpreter == null) throw new InvalidDataException("Lua 解释器不可用。");
+            Dictionary<string, LuaApiIdentity> apis;
+            if (!LuaRootApis.TryGetValue(interpreter, out apis)) throw new InvalidDataException("Lua API 身份尚未记录。");
+            foreach (var api in apis)
+                if (!SameLuaApi(api.Value, interpreter.Globals.Get(api.Key)))
+                    throw new InvalidDataException("Lua 原始 API 已被移除或重绑定：" + api.Key);
             var values = new List<AnytimeLuaValue>();
+            var tables = new HashSet<Table>();
+            int capturedEntries = 0;
             foreach (TablePair pair in interpreter.Globals.Pairs)
             {
                 // MoonSharp owns this registry table; it is not story state.
-                if (pair.Key.Type != DataType.String || pair.Key.String == "__mortal_anytime" ||
-                    pair.Key.String == "_MOONSHARP") continue;
+                if (pair.Key.Type != DataType.String || pair.Key.String == "_MOONSHARP") continue;
                 DynValue value = pair.Value;
-                if (value.Type == DataType.Table && !StandardLuaTables.Contains(pair.Key.String))
-                    throw new InvalidDataException("剧情包含暂不支持的 Lua 表变量：" + pair.Key.String);
+                if (value.Type == DataType.Table)
+                {
+                    if (!IsLuaLibrary(interpreter, pair.Key.String, value.Table))
+                    {
+                        if (!tables.Add(value.Table)) throw new InvalidDataException("Lua 表存在共享引用，暂不能安全保存：" + pair.Key.String);
+                        values.Add(CaptureTable(pair.Key.String, value.Table, tables, ref capturedEntries));
+                    }
+                    continue;
+                }
                 if (value.Type == DataType.String) values.Add(new AnytimeLuaValue { Key = pair.Key.String, Kind = "s", Text = value.String });
                 else if (value.Type == DataType.Number) values.Add(new AnytimeLuaValue { Key = pair.Key.String, Kind = "n", Number = value.Number });
                 else if (value.Type == DataType.Boolean) values.Add(new AnytimeLuaValue { Key = pair.Key.String, Kind = "b", Boolean = value.Boolean });
+                else if (value.Type != DataType.Nil && value.Type != DataType.Void)
+                {
+                    LuaApiIdentity original;
+                    if (!apis.TryGetValue(pair.Key.String, out original) || !SameLuaApi(original, value))
+                        throw new InvalidDataException("剧情含不支持的 Lua 全局对象：" + pair.Key.String + ":" + value.Type);
+                }
             }
             values.Sort((x, y) => string.CompareOrdinal(x.Key, y.Key));
             return values.ToArray();
@@ -539,20 +671,81 @@ namespace MortalHelper.Game
 #if !NO_PROBE
         internal static string ReadOnlySelfTest()
         {
-            var probe = new Script(CoreModules.None);
-            probe.Globals.Set("_MOONSHARP", DynValue.NewTable(probe));
-            probe.Globals.Set("number", DynValue.NewNumber(42));
-            probe.Globals.Set("text", DynValue.NewString("ok"));
-            probe.Globals.Set("flag", DynValue.NewBoolean(true));
+            var probe = new Script(CoreModules.Preset_Complete);
+            RememberLuaLibraries(probe);
+            RememberLuaRootApis(probe);
+            probe.DoString("number = 42; text = '中文'; flag = true; sayoptions = {'甲', '乙'}; sayoptions.enabled = true; sayoptions.nested = {inner={n=7}}");
             var values = CaptureGlobals(probe);
-            bool globalsOk = !values.Any(v => v.Key == "_MOONSHARP") &&
+            bool globalsOk = !values.Any(v => v.Key == "_MOONSHARP" || v.Key == "dynamic" || v.Key == "json") &&
                 values.Any(v => v.Key == "number") && values.Any(v => v.Key == "text") &&
-                values.Any(v => v.Key == "flag");
-            return "globals=" + (globalsOk ? "ok" : "failed") + "; baseline=" +
+                values.Any(v => v.Key == "flag") && values.Any(v => v.Key == "sayoptions" && v.Entries.Length == 4);
+            probe.DoString("number = 1; sayoptions[1] = '改'; sayoptions.extra = '删'; sayoptions.nested.inner.n=1; sayoptions.nested.extra='删'");
+            RestoreGlobals(probe, values);
+            bool restoreOk = SameGlobals(values, CaptureGlobals(probe)) &&
+                probe.DoString("return sayoptions[1] == '甲' and sayoptions.extra == nil and number == 42 and sayoptions.nested.inner.n==7 and sayoptions.nested.extra==nil").Boolean;
+            bool complexRejected = false;
+            probe.DoString("sayoptions.child = function() return 1 end");
+            try { CaptureGlobals(probe); }
+            catch (InvalidDataException) { complexRejected = true; }
+            probe.DoString("sayoptions.child = nil; alias = sayoptions");
+            bool aliasRejected = false;
+            try { CaptureGlobals(probe); }
+            catch (InvalidDataException) { aliasRejected = true; }
+            var record = new AnytimeStoryRecord { BaselineGlobals = values, ExpectedGlobals = values,
+                Events = new[] { new AnytimeStoryEvent { Kind = "Random", Number = Math.PI } } };
+            var reread = AnytimeStoryCodec.Read(AnytimeStoryCodec.Write(record));
+            bool codecOk = SameGlobals(values, reread.BaselineGlobals) &&
+                SameGlobals(values, reread.ExpectedGlobals) && reread.Events[0].Number == Math.PI;
+            bool ok = globalsOk && restoreOk && complexRejected && aliasRejected && codecOk;
+            return "globals=" + (ok ? "ok" : "failed") + "; table-restore=" + restoreOk +
+                "; unsupported-rejected=" + complexRejected + "; alias-rejected=" + aliasRejected +
+                "; sidecar-roundtrip=" + codecOk + "; baseline=" +
                 (string.IsNullOrEmpty(baseline) ? "none" : "captured") + "; availability=" +
                 (AnytimeNative.Availability ?? "available");
         }
 #endif
+        private static void RestoreBaselineFlags(GameSave opening)
+        {
+            // Loading a Unity scene can deserialize asset-backed flags after the
+            // native save has applied them. Restore the recorded script-entry
+            // state here, before Lua runs, just as we restore its globals and RNG.
+            // This uses the baseline, never the desired replay target.
+            var manager = MissionManagerData.Instance;
+            if (manager == null || opening == null || opening.EventFlags == null || opening.EventFlags.Count > 10000)
+                throw new InvalidDataException("剧情起点事件旗标缺失或超限。");
+            // Native Save emits every collection entry in order. Collections may
+            // share the same FlagData, and distinct assets may also share names.
+            // Match the exact native sequence rather than assuming names unique.
+            var live = new List<FlagData>();
+            if (manager.FlagsCollection == null) throw new InvalidDataException("当前游戏旗标集合缺失。");
+            foreach (var collection in manager.FlagsCollection)
+            {
+                if (collection == null || collection.List == null) throw new InvalidDataException("当前游戏含空旗标集合。");
+                live.AddRange(collection.List);
+            }
+            if (live.Count != opening.EventFlags.Count)
+                throw new InvalidDataException("剧情起点旗标数量不同：记录=" + opening.EventFlags.Count + "，当前=" + live.Count);
+            var resolved = new Dictionary<FlagData, int>();
+            for (int i = 0; i < live.Count; i++)
+            {
+                var value = opening.EventFlags[i]; var flag = live[i];
+                if (value == null || string.IsNullOrEmpty(value.Name) || flag == null || flag.name != value.Name)
+                    throw new InvalidDataException("剧情起点旗标不匹配：index=" + i + "，记录=" + (value?.Name ?? "<null>") +
+                        "，当前=" + (flag == null ? "<null>" : flag.name));
+                int previous;
+                if (resolved.TryGetValue(flag, out previous) && previous != value.State)
+                    throw new InvalidDataException("剧情起点同一旗标实例含冲突值：" + value.Name + "，index=" + i);
+                resolved[flag] = value.State;
+            }
+            // Validate the complete asset mapping before applying any values.
+            foreach (var value in resolved)
+            {
+                value.Key.State = value.Value;
+#if !NO_PROBE
+                AnytimeStoryDiagnostics.TraceFlag("BaselineFlagRestore", value.Key, value.Value);
+#endif
+            }
+        }
         private static void RestoreGlobals(Script interpreter, AnytimeLuaValue[] values)
         {
             foreach (var item in values)
@@ -561,6 +754,7 @@ namespace MortalHelper.Game
                 if (item.Kind == "s") interpreter.Globals.Set(item.Key, DynValue.NewString(item.Text));
                 else if (item.Kind == "n") interpreter.Globals.Set(item.Key, DynValue.NewNumber(item.Number));
                 else if (item.Kind == "b") interpreter.Globals.Set(item.Key, DynValue.NewBoolean(item.Boolean));
+                else if (item.Kind == "t") RestoreTable(interpreter, item);
                 else throw new InvalidDataException("Lua 变量类型无效。");
             }
         }
@@ -569,7 +763,87 @@ namespace MortalHelper.Game
             if (a.Length != b.Length) return false;
             for (int i = 0; i < a.Length; i++)
                 if (a[i].Key != b[i].Key || a[i].Kind != b[i].Kind || a[i].Text != b[i].Text ||
-                    a[i].Number != b[i].Number || a[i].Boolean != b[i].Boolean) return false;
+                    a[i].Number != b[i].Number || a[i].Boolean != b[i].Boolean ||
+                    !SameEntries(a[i].Entries, b[i].Entries)) return false;
+            return true;
+        }
+        private static AnytimeLuaValue CaptureTable(string name, Table table, HashSet<Table> visited, ref int budget)
+        {
+            return new AnytimeLuaValue { Key = name, Kind = "t", Entries = CaptureEntries(name, table, visited, 0, ref budget) };
+        }
+        private static AnytimeLuaEntry[] CaptureEntries(string name, Table table, HashSet<Table> visited, int depth, ref int budget)
+        {
+            if (depth > 32 || visited.Count > 10000) throw new InvalidDataException("Lua 表嵌套或数量超限：" + name);
+            if (table.MetaTable != null) throw new InvalidDataException("Lua 表含元表，无法安全保存：" + name);
+            var entries = new List<AnytimeLuaEntry>();
+            foreach (var pair in table.Pairs)
+            {
+                // MoonSharp retains deleted slots in Pairs as Nil tombstones;
+                // Lua observes them as absent keys, so they carry no state.
+                if (pair.Value.Type == DataType.Nil || pair.Value.Type == DataType.Void) continue;
+                if (++budget > 100000 || entries.Count >= 10000) throw new InvalidDataException("Lua 表过大：" + name);
+                var entry = new AnytimeLuaEntry();
+                if (pair.Key.Type == DataType.String) { entry.KeyKind = "s"; entry.Key = pair.Key.String; }
+                else if (pair.Key.Type == DataType.Number) { entry.KeyKind = "n"; entry.Key = pair.Key.Number.ToString("R", System.Globalization.CultureInfo.InvariantCulture); }
+                else throw new InvalidDataException("Lua 表键类型不支持：" + name + ":" + pair.Key.Type);
+                var value = pair.Value;
+                if (value.Type == DataType.String) { entry.Kind = "s"; entry.Text = value.String; }
+                else if (value.Type == DataType.Number) { entry.Kind = "n"; entry.Number = value.Number; }
+                else if (value.Type == DataType.Boolean) { entry.Kind = "b"; entry.Boolean = value.Boolean; }
+                else if (value.Type == DataType.Table)
+                {
+                    if (!visited.Add(value.Table)) throw new InvalidDataException("Lua 表存在循环或共享引用：" + name + "." + entry.Key);
+                    entry.Kind = "t"; entry.Entries = CaptureEntries(name + "." + entry.Key, value.Table, visited, depth + 1, ref budget);
+                }
+                else throw new InvalidDataException("Lua 表值类型不支持：" + name + "." + entry.Key + ":" + value.Type);
+                entries.Add(entry);
+            }
+            entries.Sort((a, b) => { int kind = string.CompareOrdinal(a.KeyKind, b.KeyKind); return kind != 0 ? kind : string.CompareOrdinal(a.Key, b.Key); });
+            return entries.ToArray();
+        }
+        private static void RestoreTable(Script interpreter, AnytimeLuaValue value)
+        {
+            // Preserve the table object so any API closure holding it sees the
+            // restored entries too; do not silently discard unsupported values.
+            var existing = interpreter.Globals.Get(value.Key);
+            var table = existing.Type == DataType.Table ? existing.Table : new Table(interpreter);
+            RestoreEntries(interpreter, table, value.Entries, 0);
+            interpreter.Globals.Set(value.Key, DynValue.NewTable(table));
+        }
+        private static void RestoreEntries(Script interpreter, Table table, AnytimeLuaEntry[] entries, int depth)
+        {
+            if (entries == null || depth > 32) throw new InvalidDataException("Lua 表内容缺失或嵌套超限。");
+            var previous = new Table(interpreter);
+            foreach (var pair in table.Pairs.ToArray()) { previous.Set(pair.Key, pair.Value); table.Set(pair.Key, DynValue.Nil); }
+            foreach (var entry in entries)
+            {
+                DynValue key;
+                if (entry.KeyKind == "s") key = DynValue.NewString(entry.Key);
+                else if (entry.KeyKind == "n") key = DynValue.NewNumber(double.Parse(entry.Key, System.Globalization.CultureInfo.InvariantCulture));
+                else throw new InvalidDataException("Lua 表键类型无效。");
+                DynValue item;
+                if (entry.Kind == "s") item = DynValue.NewString(entry.Text);
+                else if (entry.Kind == "n") item = DynValue.NewNumber(entry.Number);
+                else if (entry.Kind == "b") item = DynValue.NewBoolean(entry.Boolean);
+                else if (entry.Kind == "t")
+                {
+                    var old = previous.Get(key);
+                    var child = old.Type == DataType.Table ? old.Table : new Table(interpreter);
+                    RestoreEntries(interpreter, child, entry.Entries, depth + 1);
+                    item = DynValue.NewTable(child);
+                }
+                else throw new InvalidDataException("Lua 表值类型无效。");
+                table.Set(key, item);
+            }
+        }
+        private static bool SameEntries(AnytimeLuaEntry[] a, AnytimeLuaEntry[] b)
+        {
+            if (a == null || b == null) return a == b;
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+                if (a[i].KeyKind != b[i].KeyKind || a[i].Key != b[i].Key || a[i].Kind != b[i].Kind ||
+                    a[i].Text != b[i].Text || a[i].Number != b[i].Number || a[i].Boolean != b[i].Boolean ||
+                    !SameEntries(a[i].Entries, b[i].Entries)) return false;
             return true;
         }
         private static string Digest(string value)
@@ -620,64 +894,77 @@ namespace MortalHelper.Game
             SetLuaRandom.Invoke(null, new object[] { interpreter, random });
         }
         private static string PathFor(string slot) => (string)GetPath.Invoke(SaveSystem.Instance, new object[] { slot });
+        // Cheap probe used only to decide whether a sidecar belongs to the native
+        // file on disk. A malformed sidecar returns null so ReadRecord still
+        // produces the precise structural error for the player.
+        private static string ReadSidecarHeader(string nativePath)
+        {
+            try
+            {
+                var info = new FileInfo(nativePath + ".mha");
+                if (!info.Exists || info.Length <= 0 || info.Length > MaximumSidecarBytes) return null;
+                var record = AnytimeStoryCodec.Read(File.ReadAllText(nativePath + ".mha", Encoding.UTF8));
+                return record == null ? null : record.NativeHash;
+            }
+            catch (Exception) { return null; }
+        }
+        // Never delete a sidecar the player might still need. Renaming keeps it
+        // out of the load path while leaving it recoverable by hand.
+        private static void Quarantine(string path)
+        {
+            try
+            {
+                string target = path + ".stale";
+                if (File.Exists(target)) File.Delete(target);
+                File.Move(path, target);
+            }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
+        }
+        private static void Report(string message)
+        {
+            if (Plugin.Instance == null) return;
+            Plugin.Instance.Status = message;
+            try { Plugin.Instance.Log("[Anytime] " + message); } catch (Exception) { }
+        }
         private static AnytimeStoryRecord ReadRecord(string nativePath, GameSave native)
         {
             string side = nativePath + ".mha";
             var bytes = File.ReadAllBytes(side);
             if (bytes.Length == 0 || bytes.Length > MaximumSidecarBytes) throw new InvalidDataException("剧情附加记录大小无效。");
-            var record = JsonUtility.FromJson<AnytimeStoryRecord>(Encoding.UTF8.GetString(bytes));
-            if (record == null || record.Version != 2 || record.Client != Application.version ||
+            var record = AnytimeStoryCodec.Read(Encoding.UTF8.GetString(bytes));
+            if (record == null || record.Version != 3 || record.Client != Application.version ||
                 record.NativeHash != HashFile(nativePath) || native == null ||
                 !SameSnapshot(native, record.Expected) || native.CurrentScene != record.Scene)
                 throw new InvalidDataException("剧情附加记录与原生存档或当前游戏版本不匹配。");
             return record;
         }
+        // Restores the pre-save slot from the journal. It never infers "the slot
+        // was empty" from a missing backup: that inference is what used to delete
+        // a real save. A journal that cannot be restored is left in place, so the
+        // next save or load on the slot keeps refusing instead of guessing.
         private static bool RollBack()
         {
-            bool restored = false;
-            try
+            var transaction = pendingTransaction;
+            pendingTransaction = null;
+            if (transaction == null) { ClearPending(); return true; }
+            SlotRollbackReport report;
+            try { report = transaction.Rollback(); }
+            catch (Exception error)
             {
-                if (pendingPath != null)
-                {
-                    if (File.Exists(pendingNativeBackup)) File.Copy(pendingNativeBackup, pendingPath, true);
-                    else DeleteIfExists(pendingPath);
-                    string side = pendingPath + ".mha";
-                    if (File.Exists(pendingSideBackup)) File.Copy(pendingSideBackup, side, true);
-                    else DeleteIfExists(side);
-                    if (!pendingRequiredBefore) DeleteIfExists(pendingPath + ".mha-required");
-                    DeleteIfExists(pendingPath + ".mha-pending");
-                }
-                restored = true;
+                Plugin.Instance?.Report(error);
+                report = new SlotRollbackReport { Complete = false, Detail = error.Message };
             }
-            catch (Exception error) { Plugin.Instance?.Report(error); }
-            finally { ClearPending(restored); }
-            return restored;
+            if (!report.Complete) blockedReason = report.Detail;
+            ClearPending();
+            return report.Complete;
         }
-        private static void ClearPending(bool clean)
+        private static void ClearPending()
         {
-            if (clean)
-            {
-                try { DeleteIfExists(pendingNativeBackup); }
-                catch (Exception error) { Plugin.Instance?.Report(error); }
-                try { DeleteIfExists(pendingSideBackup); }
-                catch (Exception error) { Plugin.Instance?.Report(error); }
-            }
-            pendingSlot = pendingPath = pendingNativeBackup = pendingSideBackup = null; pendingRecord = null;
-            pendingRequiredBefore = false;
+            pendingTransaction = null;
+            pendingSlot = pendingPath = null; pendingRecord = null;
         }
-        private static void DeleteIfExists(string path) { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
-        private static void LockInput()
-        {
-            var system = EventSystem.current;
-            if (system == null) return;
-            foreach (var input in system.GetComponents<BaseInputModule>())
-                if (input.enabled) { if (!LockedInputs.Contains(input)) LockedInputs.Add(input); input.enabled = false; }
-        }
-        private static void UnlockInput()
-        {
-            foreach (var input in LockedInputs) if (input != null) input.enabled = true;
-            LockedInputs.Clear();
-        }
+        private static void LockInput() { InteractionLock.Set(InteractionHold.Story, true); }
+        private static void UnlockInput() { InteractionLock.Set(InteractionHold.Story, false); }
     }
 
     public static class AnytimeStoryLua
@@ -752,11 +1039,19 @@ end";
         {
             if (interpreter == null) return;
             DynValue flag = interpreter.Globals.Get("__mortal_anytime_wrapped");
-            if (flag.Type == DataType.Boolean && flag.Boolean) return;
+            if (flag.Type == DataType.Boolean && flag.Boolean)
+            {
+                AnytimeStory.RememberLuaLibraries(interpreter);
+                AnytimeStory.RememberLuaRootApis(interpreter);
+                return;
+            }
             if (!registered) { UserData.RegisterType(typeof(AnytimeStoryLua)); registered = true; }
             interpreter.Globals.Set("__mortal_anytime", UserData.CreateStatic(typeof(AnytimeStoryLua)));
             try { interpreter.DoString(Preamble); }
             catch (Exception error) { LogWrapper(interpreter, error.Message); throw; }
+            AnytimeStory.RememberLuaLibraries(interpreter);
+            flag = interpreter.Globals.Get("__mortal_anytime_wrapped");
+            if (flag.Type == DataType.Boolean && flag.Boolean) AnytimeStory.RememberLuaRootApis(interpreter);
             LogWrapper(interpreter, null);
         }
         private static void LogWrapper(Script interpreter, string error)
@@ -785,8 +1080,13 @@ end";
     [HarmonyPatch(typeof(LuaManager), "ExecuteLuaScript")]
     internal static class AnytimeStoryScriptPatch
     {
-        private static void Prefix(LuaEnvironment ____luaEnvironment)
-        { AnytimeStory.ScriptEntering(____luaEnvironment?.Interpreter); }
+        private static bool Prefix(LuaEnvironment ____luaEnvironment)
+        {
+            AnytimeStory.ScriptEntering(____luaEnvironment?.Interpreter);
+            // A failed restore must not run script side effects or autosaves
+            // while the next update is taking the player back to the title.
+            return !AnytimeStory.Failed;
+        }
     }
 
     [HarmonyPatch(typeof(CheckPointManager), "Dice")]

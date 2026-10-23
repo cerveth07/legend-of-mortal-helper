@@ -16,6 +16,16 @@
 
 ## 当前工程边界
 
+- 本轮存档事务实现（`src/Core/SlotTransaction.cs`、`src/Game/InteractionLock.cs`
+  及 `AnytimeNative`/`AnytimeStory`/`AnytimeDuel` 的改写部分）为本项目独立编写：
+  文件布局与状态机由本项目的缺陷分析推导，格式自定，未移植 LOMSave2、
+  LOMAssistant 或其他 Mod 的恢复模块或测试文件。设计记录见
+  [存档槽事务设计](docs/SAVE-TRANSACTION.md)。
+- 本轮改动文件的 8-token shingle 包含率相对旧整合树为 0.8%–8.9%（`InteractionLock.cs`
+  最高，重合集中在 `foreach` + `EventSystem` 输入模块启停这类通用 Unity 写法）。
+  该数字是线索，不是归属结论，也不是独立实现的证明。
+- 本轮未引入新的第三方依赖。新增代码只使用 BCL、BepInEx/Harmony 与本机游戏程序集，
+  没有新增需要审查许可证的库或数据表。
 - 新版不通过编译或运行引用旧 MortalFateHelper.dll / LOMSave2.dll，也不分发这些旧插件二进制。
 - 开发曾接触旧整合项目，不声称洁净室开发。用户确认功能已自行实现；对任何具体非 UI 代码，仍须按实际来源核对，不能用 UI 作者归属替全部功能代码背书。
 - 游戏和加载器程序集仅作为本地构建依赖，不放入源码或仅插件包。固定 .mhr 格式不兼容旧 BinaryFormatter 附加档。

@@ -76,6 +76,13 @@ namespace MortalHelper.Game
         {
             if (loadingBaseline || Plugin.Instance == null) return;
             if (controller != null) Stop("已使用原生存档替代实验恢复。");
+            // The gate may already have been closed by the load-stall watchdog or by
+            // a replay failure. Reopening it here would certify an unfinished load.
+            if (!Plugin.Instance.Gate.AwaitingNativeLoad)
+            {
+                status = "原生存档已载入，但恢复锁已关闭；请重新读取一个有效的原生存档。";
+                return;
+            }
             Plugin.Instance.Gate.NativeLoadCompleted();
             status = "原生存档已载入；实验恢复锁已解除。";
         }
@@ -252,6 +259,7 @@ namespace MortalHelper.Game
         {
             if (controller == null || !controller.Replaying || PendingDice.HasValue) return;
             if (controller.NextEvent == null || controller.NextEvent.Kind != EventKind.Dice) return;
+            if (!StoryRecovery.ScriptKnown) { Stop("无法确定当前剧情脚本名，重放已中止。"); return; }
             string script = StoryRecovery.CurrentScript;
             if (script != diceScript) { diceScript = script; diceOrdinal = 0; }
             string key = StoryRecovery.DiceKey(script, diceOrdinal + 1);
@@ -299,6 +307,7 @@ namespace MortalHelper.Game
                 return;
             }
             var buttons = menu.GetComponentsInChildren<NormalOptionButton>(false);
+            if (!StoryRecovery.ScriptKnown) { Stop("无法确定当前剧情脚本名，重放已中止。"); return; }
             var fingerprint = new StringBuilder(StoryRecovery.CurrentScript).Append(':')
                 .Append(menu.GetInstanceID());
             Button match = null;

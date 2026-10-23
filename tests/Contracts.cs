@@ -14,7 +14,8 @@ internal static class Contracts
     {
         bool rejected = false;
         try { action(); } catch (Exception e) when (e is InvalidDataException || e is EndOfStreamException ||
-            e is ArgumentException || e is InvalidOperationException || e is DecoderFallbackException) { rejected = true; }
+            e is ArgumentException || e is InvalidOperationException || e is DecoderFallbackException ||
+            e is IOException) { rejected = true; }
         Check(rejected, message);
     }
 
@@ -308,7 +309,304 @@ internal static class Contracts
             ArchiveStore.ForceCopyFallback=false;
         }
         finally { if(Directory.Exists(folder))Directory.Delete(folder,true); }
+        TransactionChecks();
+        LoadGateChecks();
+        passed += StoryContracts.Run();
+        passed += DuelJournalTests.Run();
+        passed += DuelSaveMenuStateTests.Run();
         Console.WriteLine("PASS: "+passed+" contract checks; no Unity runtime or player save accessed.");
+    }
+
+    // The recovery gate is the only thing standing between an unfinished native
+    // load and a save written on top of a half-applied state. A timeout must not
+    // become a fake success, and there must still be a real way out.
+    private static void LoadGateChecks()
+    {
+        var gate = new OperationGate();
+        Check(gate.CanInteract, "a fresh gate blocked interaction");
+        gate.NativeLoadStarted();
+        Check(gate.AwaitingNativeLoad && !gate.CanInteract, "native load did not close the gate");
+        gate.NativeLoadAborted("stalled");
+        Check(gate.Phase == RecoveryPhase.Failed, "stalled load did not end in Failed");
+        Check(!gate.CanInteract, "stalled load reopened the gate without finishing");
+        Check(gate.Reason == "stalled", "stalled load lost its reason");
+        Reject(() => gate.NativeLoadAborted("again"), "aborting a load that is not running was allowed");
+        Reject(() => gate.NativeLoadCompleted(), "a load that never started was certified complete");
+        // The only way out of Failed is a load that actually completes.
+        gate.NativeLoadStarted();
+        Check(gate.AwaitingNativeLoad, "a load could not start from Failed");
+        gate.NativeLoadCompleted();
+        Check(gate.CanInteract && gate.Phase == RecoveryPhase.Idle, "a completed load did not reopen the gate");
+        Reject(() => gate.NativeLoadCompleted(), "completing twice was allowed");
+
+        Check(SlotTransaction.CanDiscardBackups(SlotTransactionState.Committed),
+            "committed transaction backups were treated as unrecoverable");
+        Check(SlotTransaction.CanDiscardBackups(SlotTransactionState.RolledBack),
+            "rolled back transaction backups were treated as unrecoverable");
+        Check(!SlotTransaction.CanDiscardBackups(SlotTransactionState.Prepared),
+            "prepared transaction backups were treated as disposable");
+        Check(!SlotTransaction.CanDiscardBackups(SlotTransactionState.Broken),
+            "broken transaction backups were treated as disposable");
+    }
+
+    private sealed class Fixture
+    {
+        internal readonly string Directory, Native, Sidecar, Marker, Journal;
+        internal Fixture(string root, string name)
+        {
+            Directory = Path.Combine(root, name);
+            System.IO.Directory.CreateDirectory(Directory);
+            Native = Path.Combine(Directory, "Save_001.dat");
+            Sidecar = Native + ".mha";
+            Marker = Native + ".mha-required";
+            Journal = SlotTransaction.JournalFor(Native);
+        }
+        internal string[] Paths => new[] { Native, Sidecar, Marker };
+        internal void Write(string native, string sidecar, bool marker)
+        {
+            File.WriteAllText(Native, native);
+            File.WriteAllText(Sidecar, sidecar);
+            if (marker) File.WriteAllText(Marker, "2"); else if (File.Exists(Marker)) File.Delete(Marker);
+        }
+    }
+
+    // File-level fault injection over a private temp directory. Every case
+    // checks the bytes on disk, not just that an exception was thrown.
+    private static void TransactionChecks()    {
+        string root = Path.Combine(Path.GetTempPath(), "mhtx-" + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(root);
+        try
+        {
+            // 1. First creation: a rollback must remove exactly what it created.
+            var created = new Fixture(root, "create");
+            var transaction = SlotTransaction.Begin(created.Journal, "story", created.Paths);
+            created.Write("new-native", "new-side", true);
+            var report = transaction.Rollback();
+            Check(report.Complete, "first-save rollback reported failure");
+            Check(!File.Exists(created.Native) && !File.Exists(created.Sidecar) && !File.Exists(created.Marker),
+                "first-save rollback left files behind");
+            Check(!File.Exists(created.Journal), "successful rollback kept the journal");
+            Check(!File.Exists(created.Journal + ".b0"), "successful rollback kept a backup");
+
+            // 2. Overwrite then rollback restores the original bytes and hashes.
+            var overwrite = new Fixture(root, "overwrite");
+            overwrite.Write("old-native", "old-side", false);
+            string nativeHash = SlotTransaction.HashFile(overwrite.Native);
+            string sideHash = SlotTransaction.HashFile(overwrite.Sidecar);
+            transaction = SlotTransaction.Begin(overwrite.Journal, "story", overwrite.Paths);
+            overwrite.Write("new-native", "new-side", true);
+            report = transaction.Rollback();
+            Check(report.Complete, "overwrite rollback reported failure");
+            Check(File.ReadAllText(overwrite.Native) == "old-native", "overwrite rollback lost the native save");
+            Check(SlotTransaction.HashFile(overwrite.Native) == nativeHash, "native hash changed after rollback");
+            Check(File.ReadAllText(overwrite.Sidecar) == "old-side" && SlotTransaction.HashFile(overwrite.Sidecar) == sideHash,
+                "sidecar not restored");
+            Check(!File.Exists(overwrite.Marker), "marker created by the save survived rollback");
+
+            // 3. A marker that existed before the save must survive a rollback.
+            var kept = new Fixture(root, "marker-kept");
+            kept.Write("old-native", "old-side", true);
+            transaction = SlotTransaction.Begin(kept.Journal, "story", kept.Paths);
+            kept.Write("new-native", "new-side", true);
+            report = transaction.Rollback();
+            Check(report.Complete && File.ReadAllText(kept.Marker) == "2", "pre-existing marker not restored");
+
+            // 4. The regression that motivated the journal: a lost backup must
+            //    never be read as "the slot was empty" and delete the save.
+            var lost = new Fixture(root, "lost-backup");
+            lost.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(lost.Journal, "story", lost.Paths);
+            lost.Write("torn-native", "new-side", true);
+            File.Delete(transaction.Entries[0].BackupPath);
+            report = transaction.Rollback();
+            Check(!report.Complete, "missing backup reported as a clean rollback");
+            Check(File.ReadAllText(lost.Native) == "torn-native", "missing backup deleted the native save");
+            Check(File.Exists(lost.Journal), "journal removed although rollback was impossible");
+            Check(File.ReadAllText(lost.Journal).Contains("state=broken"), "unrecoverable rollback not recorded as broken");
+            Check(report.Blockers.Count == 1, "missing backup did not name the blocked file");
+
+            // 5. A corrupt backup is never written over the live file.
+            var corrupt = new Fixture(root, "corrupt-backup");
+            corrupt.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(corrupt.Journal, "story", corrupt.Paths);
+            corrupt.Write("torn-native", "new-side", true);
+            File.WriteAllText(transaction.Entries[1].BackupPath, "garbage");
+            report = transaction.Rollback();
+            Check(!report.Complete, "corrupt backup accepted as restorable");
+            Check(File.ReadAllText(corrupt.Native) == "torn-native" && File.ReadAllText(corrupt.Sidecar) == "new-side",
+                "corrupt backup overwrote a live file");
+            Check(File.Exists(corrupt.Journal), "journal removed after a corrupt-backup refusal");
+
+            // 6. A backup copy failure aborts before any save file is modified.
+            var copyFail = new Fixture(root, "backup-fail");
+            copyFail.Write("old-native", "old-side", false);
+            SlotTransaction.Fault = step => { if (step == "backup:1") throw new IOException("injected copy failure"); };
+            Reject(() => SlotTransaction.Begin(copyFail.Journal, "story", copyFail.Paths),
+                "backup copy failure was not reported");
+            SlotTransaction.Fault = null;
+            Check(File.ReadAllText(copyFail.Native) == "old-native" && File.ReadAllText(copyFail.Sidecar) == "old-side",
+                "backup copy failure modified a save file");
+            Check(!File.Exists(copyFail.Journal), "backup copy failure left a journal behind");
+            Check(System.IO.Directory.GetFiles(copyFail.Directory, "*.b0").Length == 0,
+                "backup copy failure left a partial backup behind");
+
+            // 7. A journal write failure also leaves the slot untouched.
+            var journalFail = new Fixture(root, "journal-fail");
+            journalFail.Write("old-native", "old-side", false);
+            SlotTransaction.Fault = step => { if (step == "journal-write") throw new IOException("injected journal failure"); };
+            Reject(() => SlotTransaction.Begin(journalFail.Journal, "story", journalFail.Paths),
+                "journal write failure was not reported");
+            SlotTransaction.Fault = null;
+            Check(File.ReadAllText(journalFail.Native) == "old-native", "journal write failure modified the native save");
+            Check(System.IO.Directory.GetFiles(journalFail.Directory, "*.b*").Length == 0,
+                "journal write failure left backups behind");
+
+            // 8. Process killed between the native write and the sidecar write:
+            //    a fresh read of the journal must restore the original pair.
+            var crashed = new Fixture(root, "crash-between");
+            crashed.Write("old-native", "old-side", false);
+            SlotTransaction.Begin(crashed.Journal, "story", crashed.Paths);
+            File.WriteAllText(crashed.Native, "new-native");
+            File.WriteAllText(crashed.Marker, "2");
+            var restarted = SlotTransaction.Read(crashed.Journal);
+            Check(restarted != null && restarted.State == SlotTransactionState.Prepared, "interrupted transaction not readable");
+            report = restarted.Rollback();
+            Check(report.Complete, "restart rollback failed");
+            Check(File.ReadAllText(crashed.Native) == "old-native" && File.ReadAllText(crashed.Sidecar) == "old-side",
+                "restart rollback did not restore the pre-crash pair");
+            Check(!File.Exists(crashed.Marker), "restart rollback kept the interrupted marker");
+
+            // 9. Crash after verification but before commit: the replacement is
+            //    durable, so the next run finishes forward instead of discarding it.
+            var forward = new Fixture(root, "forward");
+            forward.Write("old-native", "old-side", false);
+            SlotTransaction.Begin(forward.Journal, "supersede", forward.Paths);
+            File.WriteAllText(forward.Native, "verified-native");
+            string verified = SlotTransaction.HashFile(forward.Native);
+            SlotTransaction.Read(forward.Journal).RecordReplacement(verified);
+            var pending = SlotTransaction.Read(forward.Journal);
+            Check(pending.ReplacementHash == verified, "verified replacement hash not persisted");
+            Check(pending.ReplacementHash == SlotTransaction.HashFile(forward.Native), "forward decision would not match");
+            Reject(() => pending.Complete(), "undecided transaction discarded its backups");
+            Check(File.Exists(forward.Journal + ".b0"), "undecided cleanup removed a backup");
+            pending.Commit();
+            pending.Complete();
+            Check(File.ReadAllText(forward.Native) == "verified-native", "forward completion discarded the verified save");
+            Check(!File.Exists(forward.Journal), "forward completion kept the journal");
+
+            // 10. Crash after the commit marker: the new files are authoritative.
+            var committed = new Fixture(root, "committed");
+            committed.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(committed.Journal, "story", committed.Paths);
+            committed.Write("new-native", "new-side", true);
+            transaction.RecordReplacement(SlotTransaction.HashFile(committed.Native));
+            transaction.Commit();
+            var afterCommit = SlotTransaction.Read(committed.Journal);
+            Check(afterCommit.State == SlotTransactionState.Committed, "commit marker not persisted");
+            afterCommit.Complete();
+            Check(File.ReadAllText(committed.Native) == "new-native", "committed save was rolled back");
+            Check(!File.Exists(committed.Journal + ".b0"), "committed cleanup kept a backup");
+
+            // 11. A rollback that fails part way keeps every recovery artefact and
+            //     can be retried.
+            var retry = new Fixture(root, "retry");
+            retry.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(retry.Journal, "story", retry.Paths);
+            retry.Write("new-native", "new-side", true);
+            SlotTransaction.Fault = step => { if (step == "restore:1") throw new IOException("injected restore failure"); };
+            report = transaction.Rollback();
+            SlotTransaction.Fault = null;
+            Check(!report.Complete, "failed rollback reported success");
+            Check(File.Exists(retry.Journal), "failed rollback removed the journal");
+            Check(File.Exists(retry.Journal + ".b1"), "failed rollback removed a backup");
+            Check(File.ReadAllText(retry.Journal).Contains("state=broken"), "failed rollback not recorded as broken");
+            report = SlotTransaction.Read(retry.Journal).Rollback();
+            Check(report.Complete, "retry of a failed rollback did not succeed");
+            Check(File.ReadAllText(retry.Native) == "old-native" && File.ReadAllText(retry.Sidecar) == "old-side",
+                "retried rollback did not restore the pair");
+
+            // 12. A damaged journal never silently degrades into "no transaction".
+            var damaged = new Fixture(root, "damaged-journal");
+            damaged.Write("old-native", "old-side", false);
+            TransactionJournal(damaged.Journal);
+            Reject(() => SlotTransaction.Read(damaged.Journal), "damaged journal accepted");
+
+            // 13. Begin refuses to stack a second transaction on a slot.
+            var stacked = new Fixture(root, "stacked");
+            stacked.Write("old-native", "old-side", false);
+            SlotTransaction.Begin(stacked.Journal, "story", stacked.Paths);
+            Reject(() => SlotTransaction.Begin(stacked.Journal, "story", stacked.Paths),
+                "second transaction started on an unresolved slot");
+            SlotTransaction.Read(stacked.Journal).Rollback();
+
+            // 14. A failed durable commit cannot change the in-memory decision,
+            // or an error handler's Rollback would discard the only old copy.
+            var commitFail = new Fixture(root, "commit-persist-fail");
+            commitFail.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(commitFail.Journal, "story", commitFail.Paths);
+            commitFail.Write("new-native", "new-side", true);
+            transaction.RecordReplacement(SlotTransaction.HashFile(commitFail.Native));
+            SlotTransaction.Fault = step => { if (step == "persist:committed") throw new IOException("commit unavailable"); };
+            Reject(() => transaction.Commit(), "failed commit was not reported");
+            SlotTransaction.Fault = null;
+            Check(transaction.State == SlotTransactionState.Prepared, "failed commit changed the in-memory decision");
+            Check(SlotTransaction.Read(commitFail.Journal).State == SlotTransactionState.Prepared,
+                "failed commit changed the durable decision");
+            Reject(() => transaction.Complete(), "failed commit permitted backup cleanup");
+            Check(File.Exists(commitFail.Journal + ".b0"), "failed commit lost the original backup");
+            report = transaction.Rollback();
+            Check(report.Complete && File.ReadAllText(commitFail.Native) == "old-native",
+                "failed commit could not restore the old save");
+
+            // 15. Restored bytes alone do not authorize deleting the journal:
+            // persist failure must retain every backup for the next attempt.
+            var rollbackPersistFail = new Fixture(root, "rollback-persist-fail");
+            rollbackPersistFail.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(rollbackPersistFail.Journal, "story", rollbackPersistFail.Paths);
+            rollbackPersistFail.Write("new-native", "new-side", true);
+            SlotTransaction.Fault = step => { if (step == "persist:rolledback") throw new IOException("rollback decision unavailable"); };
+            report = transaction.Rollback();
+            SlotTransaction.Fault = null;
+            Check(!report.Complete && report.Restored, "failed rollback decision reported a completed transaction");
+            Check(File.ReadAllText(rollbackPersistFail.Native) == "old-native", "rollback failed to restore bytes");
+            Check(File.Exists(rollbackPersistFail.Journal) && File.Exists(rollbackPersistFail.Journal + ".b0") &&
+                File.Exists(rollbackPersistFail.Journal + ".b1"), "failed rollback decision discarded recovery files");
+            Check(transaction.State == SlotTransactionState.Prepared, "failed rollback decision escaped into memory");
+            report = SlotTransaction.Read(rollbackPersistFail.Journal).Rollback();
+            Check(report.Complete, "durable rollback retry failed");
+
+            // 16. A crash part way through cleanup leaves a committed journal,
+            // which remains cleanable even after some backups are already gone.
+            var cleanupCrash = new Fixture(root, "cleanup-crash");
+            cleanupCrash.Write("old-native", "old-side", false);
+            transaction = SlotTransaction.Begin(cleanupCrash.Journal, "supersede", cleanupCrash.Paths);
+            cleanupCrash.Write("new-native", "new-side", true);
+            transaction.RecordReplacement(SlotTransaction.HashFile(cleanupCrash.Native));
+            transaction.Commit();
+            report = transaction.Rollback();
+            Check(!report.Complete && File.Exists(cleanupCrash.Journal + ".b0"),
+                "rollback erased an already committed operation awaiting companion retirement");
+            SlotTransaction.Fault = step => { if (step == "cleanup-backup:1") throw new IOException("crash during cleanup"); };
+            Reject(() => transaction.Complete(), "cleanup fault was not reached");
+            SlotTransaction.Fault = null;
+            Check(!File.Exists(cleanupCrash.Journal + ".b0") && File.Exists(cleanupCrash.Journal + ".b1"),
+                "cleanup crash did not simulate partial cleanup");
+            var cleanupRestart = SlotTransaction.Read(cleanupCrash.Journal);
+            Check(cleanupRestart.State == SlotTransactionState.Committed, "partial cleanup left an undecided journal");
+            cleanupRestart.Complete();
+            Check(!File.Exists(cleanupCrash.Journal) && File.ReadAllText(cleanupCrash.Native) == "new-native",
+                "cleanup retry damaged the committed save");
+        }
+        finally
+        {
+            SlotTransaction.Fault = null;
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    private static void TransactionJournal(string path)
+    {
+        File.WriteAllText(path, "slot-transaction 1\nop=%%%\nstate=prepared\nnew=-\nn=9\n");
     }
 
     private static void Resign(byte[] data)

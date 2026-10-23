@@ -205,7 +205,7 @@ namespace MortalHelper.Game
             {
                 var flag = manager.GetFlag(name);
                 if (flag == null) return;
-                Plugin.Instance.Status = "检查点更新：" + flag.name + "=" + flag.State;
+                Plugin.Instance.Status = "剧情标记变化：" + flag.name + "=" + flag.State;
             }
             catch (System.Exception) { }
         }

@@ -83,6 +83,10 @@ namespace MortalHelper.Game
                     if (StoryReplay.Active) StoryReplay.Stop("实验恢复已停用；请通过原生读档解除保护锁。");
                 }
                 AnytimeStory.Tick(); AnytimeDuel.Tick();
+                // Re-assert the input lock: a scene created during a replay starts
+                // with its input modules enabled.
+                InteractionLock.Refresh();
+                NativeLoadBoundary.CheckStalled();
                 DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick();
 #if !NO_PROBE
                 Probe.Tick();
@@ -111,6 +115,12 @@ namespace MortalHelper.Game
         // fight the game's own pause and slow-motion handling.
         internal void ApplySpeed(float value)
         {
+            // Manual time scaling would perturb replay wait and action ordering.
+            if (!Gate.CanInteract)
+            {
+                Status = "恢复期间不能调整游戏速度。";
+                return;
+            }
             value = Mathf.Clamp(value, 0.25f, 5f);
             Options.Speed.Value = value;
             Time.timeScale = value;

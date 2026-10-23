@@ -29,11 +29,11 @@ namespace MortalHelper.Game
         {
             Config = config;
             Enabled = config.Bind("General", "Enabled", true, "启用本插件辅助；不会撤销已应用的修改。");
-            ExperimentalRecovery = config.Bind("Recovery", "ExperimentalEnabled", false, "实验恢复尚未通过完整游戏重放验收，默认关闭。仅限备份后的测试进度；随机状态仍可能导致严格校验失败。");
+            ExperimentalRecovery = config.Bind("Recovery", "ExperimentalEnabled", false, "高级测试：显示并启用精确恢复入口，默认隐藏。实验恢复尚未通过完整游戏重放验收，仅限备份后的测试进度；随机状态仍可能导致严格校验失败。");
             Toggle = config.Bind("General", "PanelKey", KeyCode.Tab, "展开或收起面板。");
             Hints = config.Bind("Story", "EffectHints", false, "选项悬停提示总开关；关闭时保留两个子项偏好。");
             ShowEffects = config.Bind("Story", "ShowEffects", false, "悬停选项时显示可靠的选择效果，包含剧透。");
-            ShowConditions = config.Bind("Story", "ShowConditions", false, "悬停选项时显示已确认的原生选择条件，包含剧透。");
+            ShowConditions = config.Bind("Story", "ShowConditions", false, "悬停选项时显示选项解锁条件与已识别的后续剧情，包含剧透。");
             DiagnoseScript = config.Bind("Diagnostics", "DiagnoseScript", false, "诊断：切换剧本时在状态行显示脚本名与可解析分支数（无面板入口）。");
             ShowBranches = config.Bind("Story", "ShowBranches", false, "在选项上标记〔已走〕〔未记录〕，记录保存在配置目录的 cerveth.mortal.helper.choices.txt。");
             Point = config.Bind("Story", "BasePoint", "", "指定点数模式下的基础点数；按每次判定范围校验。");
@@ -56,7 +56,7 @@ namespace MortalHelper.Game
             FastSkill = config.Bind("Progression", "FastSkill", false, "每次练功完成当前一级的剩余进度。");
             FastForge = config.Bind("Progression", "FastForge", false, "每次锻造炼丹完成当前一级的剩余进度。");
             PracticeLimit = config.Bind("Edits", "PracticeLimit", false, "解除修炼点数消耗上限；仍按现有武学点数扣减。");
-            CheckpointLog = config.Bind("Story", "CheckpointLog", false, "剧情标记（检查点）更新时在状态行提示；这是剧情标记，不是存档点。");
+            CheckpointLog = config.Bind("Story", "CheckpointLog", false, "在提示区显示变化的剧情标记及其数值。");
             X = config.Bind("Window", "X", 36f, "窗口左边距。");
             Y = config.Bind("Window", "Y", 64f, "窗口上边距。");
             Width = config.Bind("Window", "Width", 640f, "窗口宽度。");

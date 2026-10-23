@@ -7,9 +7,11 @@ namespace MortalHelper.Game
     internal static class DuelTools
     {
         internal static readonly Queue<string> Dialogue = new Queue<string>();
-        internal static bool IsPlayer(CombatStatController controller) => Plugin.CanModifyProgress && CombatManager.Instance != null &&
+        internal static bool CanApply => Plugin.CanModifyProgress || AnytimeDuel.ApplyingRecordedAssists;
+        internal static bool Enabled(DuelAssist option) => CanApply && (AnytimeDuel.EffectiveAssists & option) != 0;
+        internal static bool IsPlayer(CombatStatController controller) => CanApply && CombatManager.Instance != null &&
             CombatManager.Instance.PlayerAction != null && CombatManager.Instance.PlayerAction.Stat == controller;
-        internal static bool IsEnemy(CombatStatController controller) => Plugin.CanModifyProgress && CombatManager.Instance != null &&
+        internal static bool IsEnemy(CombatStatController controller) => CanApply && CombatManager.Instance != null &&
             CombatManager.Instance.EnemyAction != null && CombatManager.Instance.EnemyAction.Stat == controller;
         internal static void AddLine(string speaker, string text)
         {
@@ -24,12 +26,12 @@ namespace MortalHelper.Game
     {
         private static void Prefix(CombatStatController __instance, ref int __0)
         {
-            if (__0 >= 0 || !Plugin.CanModifyProgress) return;
-            if (DuelTools.IsPlayer(__instance) && Plugin.Instance.Options.DuelHealth.Value) __0 = 0;
+            if (__0 >= 0 || !DuelTools.CanApply) return;
+            if (DuelTools.IsPlayer(__instance) && DuelTools.Enabled(DuelAssist.Health)) __0 = 0;
             // Zero damage mirrors the kill switch: the enemy cannot lose health at
             // all (damage over time included), which keeps the fight going.
-            else if (DuelTools.IsEnemy(__instance) && Plugin.Instance.Options.DuelZeroDamage.Value) __0 = 0;
-            else if (DuelTools.IsEnemy(__instance) && Plugin.Instance.Options.DuelDamage.Value && __instance.CurrentHealth > 0)
+            else if (DuelTools.IsEnemy(__instance) && DuelTools.Enabled(DuelAssist.ZeroDamage)) __0 = 0;
+            else if (DuelTools.IsEnemy(__instance) && DuelTools.Enabled(DuelAssist.Damage) && __instance.CurrentHealth > 0)
                 __0 = -__instance.CurrentHealth;
         }
     }
@@ -39,7 +41,7 @@ namespace MortalHelper.Game
     {
         private static void Prefix(CombatStatController __instance, ref int __0)
         {
-            if (__0 < 0 && DuelTools.IsPlayer(__instance) && Plugin.Instance.Options.DuelStamina.Value) __0 = 0;
+            if (__0 < 0 && DuelTools.IsPlayer(__instance) && DuelTools.Enabled(DuelAssist.Stamina)) __0 = 0;
         }
     }
 
@@ -48,7 +50,7 @@ namespace MortalHelper.Game
     {
         private static void Postfix(CombatStatController __instance, ref float __result)
         {
-            if (DuelTools.IsPlayer(__instance) && Plugin.Instance.Options.DuelDodge.Value) __result = 1f;
+            if (DuelTools.IsPlayer(__instance) && DuelTools.Enabled(DuelAssist.Dodge)) __result = 1f;
         }
     }
 
@@ -71,8 +73,7 @@ namespace MortalHelper.Game
     {
         internal static bool Wanted(CombatActionController attacker)
         {
-            var options = Plugin.Instance.Options;
-            if (!Plugin.CanModifyProgress || (!options.DuelDamage.Value && !options.DuelAlwaysHit.Value)) return false;
+            if (!DuelTools.CanApply || (!DuelTools.Enabled(DuelAssist.Damage) && !DuelTools.Enabled(DuelAssist.AlwaysHit))) return false;
             var manager = CombatManager.Instance;
             return manager != null && manager.PlayerAction != null && attacker == manager.PlayerAction;
         }
@@ -113,13 +114,12 @@ namespace MortalHelper.Game
     {
         private static void Postfix(CombatActionController __instance, ref float __result)
         {
-            if (!Plugin.CanModifyProgress || __instance == null || __instance.Stat == null) return;
-            var options = Plugin.Instance.Options;
+            if (!DuelTools.CanApply || __instance == null || __instance.Stat == null) return;
             if (DuelTools.IsPlayer(__instance.Stat))
             {
-                if (options.DuelDodge.Value) __result = 0f;
+                if (DuelTools.Enabled(DuelAssist.Dodge)) __result = 0f;
             }
-            else if (DuelTools.IsEnemy(__instance.Stat) && (options.DuelAlwaysHit.Value || options.DuelDamage.Value))
+            else if (DuelTools.IsEnemy(__instance.Stat) && (DuelTools.Enabled(DuelAssist.AlwaysHit) || DuelTools.Enabled(DuelAssist.Damage)))
             {
                 if (__result < 1f) __result = 1f;
             }
@@ -134,9 +134,8 @@ namespace MortalHelper.Game
         private static void Postfix(CombatActionController __instance, CombatActionResult __0, CombatActionResult __1,
             CombatActionController __2)
         {
-            if (!Plugin.CanModifyProgress || __instance == null || __instance.Stat == null || __2 == null || __2.Stat == null) return;
-            var options = Plugin.Instance.Options;
-            if (!options.DuelFirstStrike.Value && !options.DuelDamage.Value) return;
+            if (!DuelTools.CanApply || __instance == null || __instance.Stat == null || __2 == null || __2.Stat == null) return;
+            if (!DuelTools.Enabled(DuelAssist.FirstStrike) && !DuelTools.Enabled(DuelAssist.Damage)) return;
             if (__0 == null || __1 == null) return;
             if (DuelTools.IsPlayer(__instance.Stat) && DuelTools.IsEnemy(__2.Stat))
             { __0.IsSuccess = true; __1.IsSuccess = false; }
