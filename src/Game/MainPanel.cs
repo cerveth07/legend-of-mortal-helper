@@ -98,9 +98,15 @@ namespace MortalHelper.Game
             {
                 if (value)
                 {
-                    if (open) return;
+                    // `open` only clears when the closing animation finishes, so a press
+                    // during that animation used to hit this early return and do nothing.
+                    // If the animation then stalls (the window is minimised, so OnGUI is
+                    // not called), the panel stayed collapsed and no key press could
+                    // recover it. Reopening now cancels the close instead.
+                    if (open && !closing) return;
+                    bool midClose = closing;
                     loverDraftLoaded = false;
-                    animFrom = BadgeRect();
+                    animFrom = midClose && shownRect.width > 1f ? shownRect : BadgeRect();
                     animTo = ClampWindow();
                     open = true;
                     closing = false;
@@ -618,6 +624,13 @@ namespace MortalHelper.Game
             if (next != features)
             {
                 plugin.Options.Enabled.Value = next;
+                if (next && !plugin.RepairPatches())
+                {
+                    // Enabling must not pretend to work when the earlier initialisation
+                    // failure left no patches installed.
+                    plugin.Options.Enabled.Value = false;
+                    plugin.Status = "上次初始化失败，补丁无法恢复；请先按日志处理原因再重启游戏。";
+                }
                 plugin.Options.Config.Save();
             }
         }
@@ -1000,7 +1013,7 @@ namespace MortalHelper.Game
                     {
                         try
                         {
-                            plugin.Gate.NotifyMutation("修改角色好感");
+                            plugin.Gate.NotifyMutation();
                             item.SetValue(parsed);
                             relationshipEdits[key] = item.Value.ToString();
                             plugin.Status = key + " 好感已改为 " + item.Value + "；正常存档后保留。";

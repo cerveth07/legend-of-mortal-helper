@@ -86,7 +86,9 @@ namespace MortalHelper.Game
     // Old JSON sidecars fail explicitly instead of silently loading empty arrays.
     internal static class AnytimeStoryCodec
     {
-        private const int Limit = 12000000;
+        // Shared with the save path (AnytimeStory.BeforeNativeSave) so the pre-write
+        // budget and the encoder cannot disagree about what "too large" means.
+        internal const int Limit = 12000000;
         internal static string Write(AnytimeStoryRecord record)
         {
             using (var stream = new MemoryStream())
@@ -120,17 +122,23 @@ namespace MortalHelper.Game
             using (var stream = new MemoryStream(bytes, false))
             using (var reader = new BinaryReader(stream, Encoding.UTF8))
             {
-                var record = new AnytimeStoryRecord { Version = reader.ReadInt32(),
-                    Client = Text(reader), NativeHash = Text(reader), Baseline = Text(reader), Expected = Text(reader),
-                    Script = Text(reader), Scene = Text(reader), WaitKind = Text(reader), WaitKey = Text(reader),
-                    BaselineRandomState = Text(reader), RandomState = Text(reader),
-                    BaselineLuaRandomState = Text(reader), LuaRandomState = Text(reader),
-                    BaselineGlobals = Values(reader), ExpectedGlobals = Values(reader) };
-                record.Events = new AnytimeStoryEvent[Count(reader, 20000)];
-                for (int i = 0; i < record.Events.Length; i++)
-                    record.Events[i] = new AnytimeStoryEvent { Kind = Text(reader), Key = Text(reader), Choice = reader.ReadInt32(), Number = reader.ReadDouble() };
-                if (stream.Position != stream.Length) throw new InvalidDataException("剧情附档含多余数据。");
-                return record;
+                try
+                {
+                    var record = new AnytimeStoryRecord { Version = reader.ReadInt32(),
+                        Client = Text(reader), NativeHash = Text(reader), Baseline = Text(reader), Expected = Text(reader),
+                        Script = Text(reader), Scene = Text(reader), WaitKind = Text(reader), WaitKey = Text(reader),
+                        BaselineRandomState = Text(reader), RandomState = Text(reader),
+                        BaselineLuaRandomState = Text(reader), LuaRandomState = Text(reader),
+                        BaselineGlobals = Values(reader), ExpectedGlobals = Values(reader) };
+                    record.Events = new AnytimeStoryEvent[Count(reader, 20000)];
+                    for (int i = 0; i < record.Events.Length; i++)
+                        record.Events[i] = new AnytimeStoryEvent { Kind = Text(reader), Key = Text(reader), Choice = reader.ReadInt32(), Number = reader.ReadDouble() };
+                    if (stream.Position != stream.Length) throw new InvalidDataException("剧情附档含多余数据。");
+                    return record;
+                }
+                // A truncated body must not surface as a raw .NET exception: the whole
+                // entry point promises InvalidDataException for unusable input.
+                catch (EndOfStreamException error) { throw new InvalidDataException("剧情附档被截断。", error); }
             }
         }
         private static void Values(BinaryWriter writer, AnytimeLuaValue[] values)
@@ -202,7 +210,10 @@ namespace MortalHelper.Game
             if (size == -1) return null;
             if (size < 0 || size > Limit || size > reader.BaseStream.Length - reader.BaseStream.Position)
                 throw new InvalidDataException("剧情文本大小无效。");
-            return new UTF8Encoding(false, true).GetString(reader.ReadBytes(size));
+            byte[] bytes = reader.ReadBytes(size);
+            if (bytes.Length != size) throw new InvalidDataException("剧情附档被截断。");
+            try { return new UTF8Encoding(false, true).GetString(bytes); }
+            catch (DecoderFallbackException error) { throw new InvalidDataException("剧情附档编码损坏。", error); }
         }
     }
 }

@@ -71,7 +71,7 @@ namespace MortalHelper.Game
             DiceX = config.Bind("Window", "DiceX", -1f, "控骰条横向位置（屏幕比例）；-1 使用默认位置，拖动后自动保存。");
             DiceY = config.Bind("Window", "DiceY", -1f, "控骰条纵向位置（屏幕比例）；-1 使用默认位置，拖动后自动保存。");
             SlotCount = config.Bind("Save", "SlotCount", 0,
-                new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
+                new ConfigDescription("存档格数 2～999；0 表示使用游戏默认；1 无效，按游戏默认处理。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
             LegendSlotCount = config.Bind("Save", "LegendSlotCount", 30,
                 new ConfigDescription("通关故事栏位上限；先显示原生12格，存满后每次追加6格。已有更高编号的故事仍保留可见。", new AcceptableValueRange<int>(12, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");

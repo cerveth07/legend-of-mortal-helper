@@ -77,9 +77,14 @@ namespace MortalHelper.Game
         internal static IEnumerator Observe(DiceMenuDialog owner, IEnumerator original, bool isTimer,
             string[] options, int destiny, string check, float duration)
         {
-            Reset(); dialog = owner; timer = isTimer;
+            // Build the wrapper before publishing dialog/identity: its constructor
+            // validates the iterator, and a throw must leave the plugin believing no
+            // wheel is registered rather than leaving half-set state plus no observer.
+            Reset();
+            var observed = new Observed(original, generation, isTimer);
+            dialog = owner; timer = isTimer;
             identity = Identity(isTimer ? "Timer" : "Roll", check, options, destiny, duration);
-            return new Observed(original, generation, isTimer);
+            return observed;
         }
         private sealed class Observed : IEnumerator, IDisposable
         {
@@ -200,17 +205,33 @@ namespace MortalHelper.Game
     internal static class AnytimeDiceExecutePatch
     {
         private static void Postfix(DiceMenuDialog __instance, string[] options, int destinyPoint, string checkName, ref IEnumerator __result)
-        { __result = AnytimeDice.Observe(__instance, __result, false, options, destinyPoint, checkName, 0); }
+        {
+            // Harmony never catches patch exceptions: a throw here would escape into the
+            // game's coroutine factory and stop the wheel from being created at all.
+            try { __result = AnytimeDice.Observe(__instance, __result, false, options, destinyPoint, checkName, 0); }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
+        }
     }
     [HarmonyPatch(typeof(DiceMenuDialog), "ShowTimer")]
     internal static class AnytimeDiceTimerPatch
     {
         private static void Postfix(DiceMenuDialog __instance, float duration, ref IEnumerator __result)
-        { __result = AnytimeDice.Observe(__instance, __result, true, null, 0, GameAccess.Field<string>(__instance, "_header"), duration); }
+        {
+            try
+            {
+                __result = AnytimeDice.Observe(__instance, __result, true, null, 0,
+                    GameAccess.Field<string>(__instance, "_header"), duration);
+            }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
+        }
     }
     [HarmonyPatch(typeof(DiceMenuDialog), "Roll")]
     internal static class AnytimeDiceRollPatch
     {
-        private static void Prefix(DiceMenuDialog __instance) { AnytimeDice.RollStarting(__instance); }
+        private static void Prefix(DiceMenuDialog __instance)
+        {
+            try { AnytimeDice.RollStarting(__instance); }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
+        }
     }
 }

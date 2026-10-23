@@ -38,31 +38,51 @@ def run_compiler(dotnet, compiler, arguments, response):
                     '@' + native_path(response, windows)], check=True)
 
 
-def run_tests(dotnet, compiler=None, base=None, framework=None):
+def run_suite(dotnet, compiler, base, framework, exe_name, response_name, sources, project, pattern, label):
+    """Compile (when a compiler is given) and run one offline suite.
+    Returns its positive check count; any non-zero exit or missing PASS line fails."""
     if compiler:
         output = ROOT / 'artifacts'
-        test_exe = output / 'ContractTests.exe'
-        test_exe.unlink(missing_ok=True)
-        pure = sorted((ROOT / 'src' / 'Core').glob('*.cs')) + sorted((ROOT / 'src' / 'Recovery').glob('*.cs')) + [
-            ROOT / 'src' / 'Game' / name for name in
-            ['UiLanguage.cs', 'AnytimeStoryCodec.cs', 'AnytimeDuelJournal.cs', 'DuelSaveMenuState.cs']]
-        suites = [ROOT / 'tests' / name for name in
-                  ['Contracts.cs', 'TitleContracts.cs', 'NumericEditContracts.cs', 'StoryContracts.cs', 'DuelJournalTests.cs', 'DuelSaveMenuStateTests.cs']]
-        run_compiler(dotnet, compiler, base + ['-target:exe', '-out:' + str(test_exe)] +
+        exe = output / exe_name
+        exe.unlink(missing_ok=True)
+        run_compiler(dotnet, compiler, base + ['-target:exe', '-out:' + str(exe)] +
                      ['-r:' + str(framework / n) for n in ['mscorlib.dll', 'System.dll', 'System.Core.dll']] +
-                     pure + suites, output / 'tests.rsp')
+                     sources, output / response_name)
         if os.name != 'nt' and dotnet.lower().endswith('.exe'):
-            test_exe.chmod(test_exe.stat().st_mode | 0o111)
-        command = [str(test_exe)] if os.name == 'nt' or dotnet.lower().endswith('.exe') else ['mono', str(test_exe)]
+            exe.chmod(exe.stat().st_mode | 0o111)
+        command = [str(exe)] if os.name == 'nt' or dotnet.lower().endswith('.exe') else ['mono', str(exe)]
     else:
-        command = [dotnet, 'run', '--project', native_path(ROOT / 'tests' / 'Contracts.csproj', dotnet.lower().endswith('.exe')), '--configuration', 'Release']
+        command = [dotnet, 'run', '--project', native_path(project, dotnet.lower().endswith('.exe')),
+                   '--configuration', 'Release']
     result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             errors='replace')
     print(result.stdout, end='')
-    match = re.search(r'^PASS: ([1-9][0-9]*) contract checks(?:[;.]|\s*$)', result.stdout, re.M)
+    match = re.search(pattern, result.stdout, re.M)
     if result.returncode or not match:
-        raise SystemExit('Contract tests failed or did not report a positive PASS count.')
+        raise SystemExit(label + ' failed or did not report a positive PASS count.')
     return int(match.group(1))
+
+
+def run_tests(dotnet, compiler=None, base=None, framework=None):
+    pure = sorted((ROOT / 'src' / 'Core').glob('*.cs')) + sorted((ROOT / 'src' / 'Recovery').glob('*.cs')) + [
+        ROOT / 'src' / 'Game' / name for name in
+        ['UiLanguage.cs', 'AnytimeStoryCodec.cs', 'AnytimeDuelJournal.cs', 'DuelSaveMenuState.cs']]
+    suites = [ROOT / 'tests' / name for name in
+              ['Contracts.cs', 'TitleContracts.cs', 'NumericEditContracts.cs', 'StoryContracts.cs',
+               'DuelJournalTests.cs', 'DuelSaveMenuStateTests.cs']]
+    return run_suite(dotnet, compiler, base, framework, 'ContractTests.exe', 'tests.rsp', pure + suites,
+                     ROOT / 'tests' / 'Contracts.csproj',
+                     r'^PASS: ([1-9][0-9]*) contract checks(?:[;.]|\s*$)', 'Contract tests')
+
+
+def run_ally_tests(dotnet, compiler=None, base=None, framework=None):
+    """Group-battle ally-health routing suite; a separate binary because it stubs the
+    Harmony and game types that the contract suite compiles for real."""
+    return run_suite(dotnet, compiler, base, framework, 'GroupAllyTests.exe', 'group-ally.rsp',
+                     [ROOT / 'src' / 'Game' / 'GroupBattleTools.cs',
+                      ROOT / 'tests' / 'GroupAllyHealthBehavior.cs'],
+                     ROOT / 'tests' / 'GroupAllyHealth.csproj',
+                     r'^PASS: ([1-9][0-9]*) production ally-health routing checks', 'Group ally-health checks')
 
 
 def main():
@@ -78,6 +98,7 @@ def main():
     args = parser.parse_args()
     if args.test_only:
         run_tests(args.dotnet)
+        run_ally_tests(args.dotnet)
         return
     if not all((args.game, args.loader, args.compiler)):
         parser.error('--game, --loader and --compiler are required for a plugin build')
@@ -105,14 +126,19 @@ def main():
     run_compiler(args.dotnet, compiler, base + defines + ['-target:library', '-out:' + str(plugin)] +
                  ['-r:' + str(p) for p in references.values()] + compiled, output / 'plugin.rsp')
     count = None
+    ally_count = None
     if args.test:
         framework = args.framework or Path('C:/Windows/Microsoft.NET/Framework64/v4.0.30319' if os.name == 'nt' else '/mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319')
         count = run_tests(args.dotnet, compiler, base, framework)
+        ally_count = run_ally_tests(args.dotnet, compiler, base, framework)
+    # No 'references' hash table: nothing ever read it. tools/package.py used to strip
+    # it from the shipped copy, which only hid the fact that the hashes had no consumer.
     manifest = {'plugin_sha256': sha256(plugin), 'diagnostics': args.diagnostics, 'contract_checks': count,
+                'ally_checks': ally_count,
                 'sources': {str(p.relative_to(ROOT)): sha256(p) for p in sources},
                 'build_script_sha256': sha256(Path(__file__)),
                 'tests': {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / 'tests').glob('*.cs'))},
-                'references': {name: sha256(p) for name, p in references.items()}}
+                'python_tests': {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / 'tests').glob('test_*.py'))}}
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     print('Build completed. No files were installed in the game.')
 

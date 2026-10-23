@@ -128,10 +128,8 @@ namespace MortalHelper.Recovery
             }
         }
 
-        public static string Digest(string text)
-        {
-            using (var hash = SHA256.Create()) return Convert.ToBase64String(hash.ComputeHash(Utf8.GetBytes(text)));
-        }
+        // Archive.Digest() used to live here with zero callers; the real hashing helpers
+        // are AnytimeStory.Digest, SlotTransaction.HashFile and ReplayStateDigest.
 
         private static void Write(BinaryWriter writer, string text, int maximum)
         {

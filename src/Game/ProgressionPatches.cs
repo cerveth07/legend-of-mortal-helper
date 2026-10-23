@@ -128,11 +128,23 @@ namespace MortalHelper.Game
     [HarmonyPatch(typeof(RelationshipStat), "SetActive")]
     internal static class AffectionActivatePatch
     {
+        private static bool patchFailureReported;
         private static void Postfix(RelationshipStat __instance)
         {
-            if (!ProgressionState.MaxAffection || __instance == null || !__instance.Active) return;
-            int maximum = GameAccess.Field<int>(__instance, "_max");
-            if (maximum > 0 && __instance.Value < maximum) __instance.SetValue(maximum);
+            // Harmony does not catch postfix exceptions: a renamed field used to leave
+            // SetActive half-executed.
+            try
+            {
+                if (!ProgressionState.MaxAffection || __instance == null || !__instance.Active) return;
+                int maximum = GameAccess.Field<int>(__instance, "_max");
+                if (maximum > 0 && __instance.Value < maximum) __instance.SetValue(maximum);
+            }
+            catch (System.Exception error)
+            {
+                if (patchFailureReported) return;
+                patchFailureReported = true;
+                try { Plugin.Instance?.Report(error); } catch (System.Exception) { }
+            }
         }
     }
 

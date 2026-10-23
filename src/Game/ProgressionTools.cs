@@ -55,7 +55,7 @@ namespace MortalHelper.Game
             {
                 var stat = PlayerStatManagerData.Instance.Stats.Get(GameStatType.愛人);
                 if (stat == null) return "当前周目没有「爱人」数据。";
-                Plugin.Instance.Gate.NotifyMutation("设置心上人");
+                Plugin.Instance.Gate.NotifyMutation();
                 stat.SetValue(LoverIds[index]);
                 return "已设置心上人；不会补齐结缘事件，正常存档后保留。";
             }

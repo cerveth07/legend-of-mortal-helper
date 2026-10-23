@@ -8,9 +8,7 @@ namespace MortalHelper.Core
     {
         public RecoveryPhase Phase { get; private set; }
         public string Reason { get; private set; }
-        public long Revision { get; private set; }
         public bool CanInteract => Phase == RecoveryPhase.Idle;
-        public event Action<string> ProgressChanged;
 
         public void Begin()
         {
@@ -52,11 +50,11 @@ namespace MortalHelper.Core
                 throw new InvalidOperationException("尚未开始原生读档，不能解除恢复锁。");
             Change(RecoveryPhase.Idle, "原生进度与场景已重新加载");
         }
-        public void NotifyMutation(string description)
+        // The revision counter and the ProgressChanged event that used to live here had
+        // no consumer: nothing subscribed and nothing read the counter.
+        public void NotifyMutation()
         {
             if (!CanInteract) throw new InvalidOperationException("恢复期间不能修改进度。");
-            Revision++;
-            ProgressChanged?.Invoke(description);
         }
 
         private void Change(RecoveryPhase phase, string reason) { Phase = phase; Reason = reason; }

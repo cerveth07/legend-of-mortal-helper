@@ -18,22 +18,25 @@ namespace MortalHelper.Game
         internal string Status = "";
         internal MainPanel Panel;
         private Harmony patches;
+        private bool patchFailed;
 
         private void Awake()
         {
             Instance = this;
-            Options = new Settings(Config);
-            // Self test needs Update to keep running while the window is unfocused.
-            // Diagnostics (probe, layout tour, editable preview) need Update and OnGUI
-            // to keep running while the window is unfocused; normal play does not.
-#if !NO_PROBE
-            if (Options.SelfTest.Value) Application.runInBackground = true;
-#endif
-            if (Options.AutoTour.Value || Options.PreviewEditable.Value)
-                Application.runInBackground = true;
-            Panel = new MainPanel(this);
+            // Everything that can throw lives inside the guard: a failure before the
+            // try used to leave Options/Panel null while Instance was already set.
             try
             {
+                Options = new Settings(Config);
+                // Self test needs Update to keep running while the window is unfocused.
+                // Diagnostics (probe, layout tour, editable preview) need Update and OnGUI
+                // to keep running while the window is unfocused; normal play does not.
+#if !NO_PROBE
+                if (Options.SelfTest.Value) Application.runInBackground = true;
+#endif
+                if (Options.AutoTour.Value || Options.PreviewEditable.Value)
+                    Application.runInBackground = true;
+                Panel = new MainPanel(this);
                 foreach (string path in Directory.GetFiles(Paths.PluginPath, "*.dll", SearchOption.AllDirectories))
                 {
                     string file = Path.GetFileName(path);
@@ -52,13 +55,37 @@ namespace MortalHelper.Game
             catch (Exception error)
             {
                 patches?.UnpatchSelf();
-                Options.Enabled.Value = false;
+                patches = null;
+                // Never persist Enabled=false here. It would stay off after the cause is
+                // removed and the game restarted, and turning the switch back on in the
+                // same session would claim success with no patches installed.
+                patchFailed = true;
                 Report(error);
             }
         }
 
+        // A failed Awake installs no patches. Turning the master switch back on must be
+        // able to restore them in the same session instead of silently doing nothing.
+        internal bool RepairPatches()
+        {
+            if (!patchFailed) return true;
+            if (Options == null) return false;
+            try
+            {
+                patches = new Harmony("cerveth.mortal.helper");
+                patches.PatchAll(typeof(Plugin).Assembly);
+                SceneManager.activeSceneChanged -= SceneChanged;
+                SceneManager.activeSceneChanged += SceneChanged;
+                patchFailed = false;
+                Logger.LogInfo("Mortal helper patches restored after an earlier initialisation failure.");
+                return true;
+            }
+            catch (Exception error) { Report(error); return false; }
+        }
+
         private void Update()
         {
+            if (Options == null) return;
             Panel?.Drain();
             Tour();
             if (!GameAccess.Typing && Input.GetKeyDown(KeyCode.F3))
@@ -72,8 +99,11 @@ namespace MortalHelper.Game
                 Panel.OpenSaveSettings();
             if (!GameAccess.Typing && Input.GetKeyDown(Options.Toggle.Value))
             {
-                Panel.Visible = !Panel.Visible;
-                Logger.LogInfo("Panel toggled: " + Panel.Describe());
+                // Log the requested state: Panel.Visible still reports "open" while the
+                // closing animation runs, which made the log contradict the screen.
+                bool show = !Panel.Visible;
+                Panel.Visible = show;
+                Logger.LogInfo("Panel toggled: target=" + (show ? "open" : "closed") + " " + Panel.Describe());
             }
             try
             {
@@ -141,7 +171,7 @@ namespace MortalHelper.Game
             SceneManager.activeSceneChanged -= SceneChanged;
             DiceAdapter.Close(); HintAdapter.Clear();
             AnytimeStory.Reset(); AnytimeDuel.Reset();
-            if (Options.Speed.Value != 1f) Time.timeScale = 1f;
+            if (Options != null && Options.Speed.Value != 1f) Time.timeScale = 1f;
             Panel?.Dispose(); patches?.UnpatchSelf(); Config.Save();
             Instance = null;
         }
@@ -374,7 +404,8 @@ namespace MortalHelper.Game
         internal void Report(Exception error) { Status = error.Message; Logger.LogError(error); }
         // Installed/active is distinct from permission to mutate progress.
         // Dice playback still requires the native adapters while the shared gate is locked.
-        internal static bool Active => Instance != null && Instance.Options.Enabled.Value;
+        internal static bool Active => Instance != null && Instance.Options != null &&
+            !Instance.patchFailed && Instance.Options.Enabled.Value;
         internal static bool CanModifyProgress => Active && Instance.Gate.CanInteract;
     }
 }

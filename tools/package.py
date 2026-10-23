@@ -83,10 +83,13 @@ def main() -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     sources = {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / "src").rglob("*.cs"))}
     tests = {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / "tests").glob("*.cs"))}
+    python_tests = {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / "tests").glob("test_*.py"))}
     if (manifest.get("plugin_sha256") != sha256(plugin) or manifest.get("sources") != sources
-            or manifest.get("tests") != tests or manifest.get("build_script_sha256") != sha256(ROOT / "build.py")
-            or manifest.get("diagnostics") is not False or not isinstance(manifest.get("contract_checks"), int)
-            or manifest["contract_checks"] <= 0):
+            or manifest.get("tests") != tests or manifest.get("python_tests") != python_tests
+            or manifest.get("build_script_sha256") != sha256(ROOT / "build.py")
+            or manifest.get("diagnostics") is not False
+            or not isinstance(manifest.get("contract_checks"), int) or manifest["contract_checks"] <= 0
+            or not isinstance(manifest.get("ally_checks"), int) or manifest["ally_checks"] <= 0):
         parser.error("build is stale, untested or diagnostic; rebuild current sources with build.py --test")
     version_source = (ROOT / "src" / "Game" / "Plugin.cs").read_text(encoding="utf-8")
     if not re.search(r'\[BepInPlugin\("cerveth\.mortal\.helper",\s*"[^"\n]+",\s*"' + re.escape(args.version) + r'"\)\]', version_source):

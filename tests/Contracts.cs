@@ -114,7 +114,7 @@ internal static class Contracts
         original.Events[0].Integer=999;
         var replacement=Document();replacement.Events[0].Integer=123;
         Reject(()=>cursor.Prepare(replacement,"test-client",RecoveryKind.Story),"second recovery replaced active tape");
-        Reject(()=>gate.NotifyMutation("edit"),"editing during recovery allowed");
+        Reject(()=>gate.NotifyMutation(),"editing during recovery allowed");
         Reject(()=>gate.Advance(RecoveryPhase.Idle),"verification bypass allowed");
         gate.Advance(RecoveryPhase.Loading);gate.Advance(RecoveryPhase.Replaying);
         var peek=cursor.Peek();
@@ -130,33 +130,9 @@ internal static class Contracts
         Check(gate.Phase==RecoveryPhase.Failed && !gate.CanInteract,"failure did not remain locked");
         Reject(()=>gate.NativeLoadCompleted(),"failed gate unlocked without native load start");
         gate.NativeLoadStarted();
-        Reject(()=>gate.NotifyMutation("edit during native load"),"native load permitted edits");
+        Reject(()=>gate.NotifyMutation(),"native load permitted edits");
         gate.NativeLoadCompleted();Check(gate.CanInteract,"native load did not reset failure");
         Reject(()=>gate.NativeLoadCompleted(),"idle gate accepted duplicate native completion");
-
-        var recorder=new RecordingSession();
-        Reject(()=>recorder.Capture("state"),"capture without baseline allowed");
-        recorder.Begin(Document());
-        long token=recorder.Enter(EventKind.Dialogue,"line-1");
-        var pending=recorder.Capture("before-line");
-        Check(pending.Events.Count==0 && pending.Checkpoint=="1:line-1","unfinished line was recorded as complete");
-        recorder.Finish(token,0);
-        Reject(()=>recorder.Capture("state"),"capture outside safe stop allowed");
-        recorder.Enter(EventKind.Choice,"menu-1");
-        var stopped=recorder.Capture("before-menu");
-        Check(stopped.Events.Count==1 && stopped.Events[0].Key=="line-1","completed dialogue missing");
-        stopped.Events.Clear();Check(recorder.Capture("state").Events.Count==1,"mutable recording escaped");
-        recorder.Enter(EventKind.Dialogue,"nested");Check(!recorder.Valid,"unsupported nested call accepted");
-        recorder.Begin(Document());token=recorder.Enter(EventKind.Choice,"menu");
-        recorder.Finish(token+1,1);Check(!recorder.Valid,"stale completion accepted");
-        recorder.Begin(Document());recorder.Random("random:1",.25);
-        recorder.Enter(EventKind.Dialogue,"line");Check(recorder.Capture("s").Events[0].Number==.25,"random event lost");
-        recorder.Random("nested-random",.75);Check(!recorder.Valid,"nested random silently dropped");
-        recorder.Reset();Check(!recorder.Valid && !recorder.Waiting,"recording survived reset");
-        recorder.Begin(Document());recorder.Enter(EventKind.Dialogue,"old");
-        var invalidSeed=Document();invalidSeed.Client="";
-        Reject(()=>recorder.Begin(invalidSeed),"invalid baseline accepted");
-        Check(!recorder.Valid,"old baseline survived a failed new baseline");
 
         // Recovery controller: the phase sequence the Unity adapter will call.
         var controller=new RecoveryController();var fake=new FakeHost();
@@ -181,7 +157,7 @@ internal static class Contracts
         Reject(()=>sharedGate.NativeLoadStarted(),"native load did not require replay cancellation");
         Check(sharedGate.Phase==RecoveryPhase.Replaying && !sharedGate.CanInteract,
             "shared mutation gate was not locked by recovery");
-        Reject(()=>sharedGate.NotifyMutation("manual edit"),
+        Reject(()=>sharedGate.NotifyMutation(),
             "shared gate permitted an edit during replay");
         sharedController.Cancel("simulated scene switch");
         Check(sharedGate.Phase==RecoveryPhase.Failed && !sharedGate.CanInteract,

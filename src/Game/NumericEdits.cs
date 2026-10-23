@@ -21,25 +21,42 @@ namespace MortalHelper.Game
             if (stat == null || !Stats.Contains(stat.StatType.ToString()) ||
                 !PlayerStatManagerData.Instance.Stats.List.Contains(stat)) throw new InvalidOperationException("属性列表已变化，请重新打开本页。");
             string key = "stat:" + stat.StatType;
-            Change(key, stat.Value, value, () => stat.SetValue(value), () => stat.Value, false);
+            Change(key, stat.Value, value, v => stat.SetValue(v), () => stat.Value, false, stat.Min, stat.Max);
         }
         internal static void SetItem(GameItemType type, ItemData item, int value)
         {
             string key = "item:" + ((int)type).ToString(CultureInfo.InvariantCulture) + ":" + item.Id;
             if (FindItem(key) != item) throw new InvalidOperationException("物品列表已变化，请重新打开本页。");
-            Change(key, item.CurrentCount, value, () => item.SetCount(value), () => item.CurrentCount, true);
+            Change(key, item.CurrentCount, value, v => item.SetCount(v), () => item.CurrentCount, true, 0, 999999);
         }
-        private static void Change(string key, int before, int value, Action write, Func<int> read, bool item)
+        // The write layer enforces the range itself: the panel is not the only caller
+        // (undo closures call SetStat/SetItem directly) and an out-of-range value would
+        // be persisted by the next native save.
+        private static void Change(string key, int before, int value, Action<int> write, Func<int> read,
+            bool item, int minimum, int maximum)
         {
             string reason = GameAccess.NumericEditBlockReason;
             if (reason != null) throw new InvalidOperationException(reason);
             if (value == before) return;
-            Plugin.Instance.Gate.NotifyMutation("修改数值 " + key);
-            write();
+            if (minimum > maximum || value < minimum || value > maximum)
+                throw new InvalidOperationException("数值超出允许范围（" + minimum + "～" + maximum + "）。");
+            Plugin.Instance.Gate.NotifyMutation();
+            write(value);
             int after = read();
             string scene = SceneManager.GetActiveScene().name;
-            if (scene == "Story" || scene == "Break") AnytimeStory.RecordNumericEdit(key, before, after);
-            else if (scene == "Combat") AnytimeDuel.RecordNumericEdit(key, before, after);
+            try
+            {
+                if (scene == "Story" || scene == "Break") AnytimeStory.RecordNumericEdit(key, before, after);
+                else if (scene == "Combat") AnytimeDuel.RecordNumericEdit(key, before, after);
+            }
+            catch (Exception error)
+            {
+                // A journal that cannot record this edit must not be left behind by live
+                // state that already changed: restore the old value, then fail loudly.
+                try { write(before); } catch (Exception) { }
+                throw new InvalidOperationException("数值修改未能记入中途档记录，已还原："
+                    + error.GetBaseException().Message, error);
+            }
             NumericShopRefresh.Refresh(item);
         }
         internal static void ApplyRecorded(string key, int before, int after)

@@ -251,7 +251,8 @@ namespace MortalHelper.Game
 
         // Status and log only: settlement can happen during a load prefix, where
         // forcing the mod panel open would fight the game's own loading screen.
-        private static void Report(string message)
+        // The single implementation behind AnytimeStory/AnytimeDuel's same-named helpers.
+        internal static void Report(string message)
         {
             if (Plugin.Instance == null) return;
             Plugin.Instance.Status = message;
@@ -373,9 +374,11 @@ namespace MortalHelper.Game
             AnytimeDuel.Reset();
             try
             {
-                if (data.CurrentScene == "Combat")
+                // Only numbered slots own the companion files; a game-owned slot name
+                // must never be probed for (or rename) "<slot>.mha*".
+                if (Numbered(loadingSlot) && data.CurrentScene == "Combat")
                     AnytimeDuel.PrepareLoad(loadingSlot, ref data);
-                else if (data.CurrentScene == "Story" || data.CurrentScene == "Break")
+                else if (Numbered(loadingSlot) && (data.CurrentScene == "Story" || data.CurrentScene == "Break"))
                     AnytimeStory.PrepareLoad(loadingSlot, ref data);
             }
             catch (Exception error)
@@ -407,8 +410,23 @@ namespace MortalHelper.Game
                 File.Exists(path + ".mhduel") || File.Exists(path + ".mhduel-required");
         }
 
-        private static void DeleteIfExists(string path)
+        internal static void DeleteIfExists(string path)
         { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
+
+        // Never delete an earlier quarantine: a second stale companion must not destroy
+        // the first one, which may be the only copy left. Shared by the story and duel
+        // sidecar paths so the two can never drift apart again.
+        internal static void Quarantine(string path)
+        {
+            try
+            {
+                string target = path + ".stale";
+                for (int index = 2; File.Exists(target); index++)
+                    target = path + ".stale-" + index.ToString(CultureInfo.InvariantCulture);
+                File.Move(path, target);
+            }
+            catch (Exception error) { Plugin.Instance?.Report(error); }
+        }
     }
 
     [HarmonyPatch(typeof(SaveSystem), "SaveGameData", new Type[] { typeof(string) })]

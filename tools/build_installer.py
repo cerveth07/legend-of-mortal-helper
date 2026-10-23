@@ -40,10 +40,25 @@ def main():
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     if manifest.get('redistribution_verified') is not True or manifest.get('archive_sha256') != digest(args.loader_zip):
         ap.error('loader archive is unverified or differs from approved distribution manifest')
-    for source in manifest.get('sources', []):
+    # The notices shipped in the payload claim both corresponding-source archives are
+    # inside it, so an empty (or truncated) list must fail here, not be skipped.
+    sources = manifest.get('sources') or []
+    if len(sources) < 2:
+        ap.error('manifest must list both corresponding-source archives (BepInEx and UnityDoorstop)')
+    for source in sources:
         source_path = manifest_path.parent / source['path']
         if not source_path.is_file() or digest(source_path) != source['sha256']:
             ap.error('required corresponding source archive is missing or changed: '+source['path'])
+    loader_files = manifest.get('loader_files') or {}
+    if not loader_files:
+        ap.error('manifest declares no loader file hashes to verify')
+    with zipfile.ZipFile(args.loader_zip) as archive:
+        packed = {item.filename: item for item in archive.infolist() if not item.is_dir()}
+        for name, expected in loader_files.items():
+            if name not in packed:
+                ap.error('loader archive is missing a file the manifest lists: '+name)
+            if hashlib.sha256(archive.read(packed[name])).hexdigest() != expected:
+                ap.error('loader file hash differs from the manifest: '+name)
     with tempfile.TemporaryDirectory(prefix='mortal-installer-') as folder:
         temp = Path(folder)
         # Reuse package.py validation: release plugin must match tested sources and manifest.

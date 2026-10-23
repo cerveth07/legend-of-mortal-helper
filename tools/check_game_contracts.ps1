@@ -52,7 +52,20 @@ try {
     $sourceRoot = Join-Path $PSScriptRoot '../src'
     $targets = @()
     foreach ($file in Get-ChildItem $sourceRoot -Recurse -Filter '*.cs') {
-        foreach ($match in [regex]::Matches((Get-Content $file.FullName -Raw), '\[HarmonyPatch\(typeof\(([A-Za-z0-9_]+)\)\s*,\s*"([A-Za-z0-9_]+)"\)\]')) {
+        $text = Get-Content $file.FullName -Raw
+        # Every HarmonyPatch attribute that names its target method as a string must be
+        # resolvable here. Extra attribute arguments are allowed (a patch may pin the
+        # overload by argument type), but an attribute this extractor cannot read is an
+        # error: silently skipping one is how SaveSystem.SaveGameData went unchecked.
+        $declared = [regex]::Matches($text, '\[HarmonyPatch\(typeof\(').Count
+        $classOnly = [regex]::Matches($text, '\[HarmonyPatch\(typeof\([A-Za-z0-9_]+\)\)\]').Count
+        $named = [regex]::Matches($text, '\[HarmonyPatch\(typeof\(([A-Za-z0-9_]+)\)\s*,\s*"([A-Za-z0-9_]+)"')
+        if ($named.Count + $classOnly -ne $declared) {
+            throw ("Unresolved HarmonyPatch attribute in " + $file.Name + ": the extractor reads " +
+                $named.Count + " named and " + $classOnly + " class-only of " + $declared +
+                " attributes. Extend the extractor instead of letting a target go unchecked.")
+        }
+        foreach ($match in $named) {
             $targets += [pscustomobject]@{ Type = $match.Groups[1].Value; Method = $match.Groups[2].Value }
         }
     }

@@ -8,6 +8,8 @@ namespace MortalHelper.Game
     internal static class NumericShopRefresh
     {
         private static readonly MethodInfo UpdateTotal = AccessTools.Method(typeof(ShopListPanel), "UpdateTotal");
+        // Resolved by name once; a rename must skip this cosmetic refresh, not throw.
+        private static bool missingTotalReported;
 
         internal static bool Open
         {
@@ -28,6 +30,15 @@ namespace MortalHelper.Game
             }
             else if (Open)
             {
+                if (UpdateTotal == null)
+                {
+                    if (!missingTotalReported)
+                    {
+                        missingTotalReported = true;
+                        Plugin.Instance?.Log("[Shop] ShopListPanel.UpdateTotal unavailable; total refresh disabled.");
+                    }
+                    return;
+                }
                 // Purchase affordability is live, but the total's color is cached.
                 foreach (var list in Resources.FindObjectsOfTypeAll<ShopListPanel>())
                     if (list.isActiveAndEnabled && list.gameObject.scene.IsValid()) UpdateTotal.Invoke(list, null);
