@@ -7,7 +7,7 @@
 - **天命控骰（在判定页内，不占面板）**：轮盘下方常驻一个点数输入框 —— 留空即自然掷骰，填数字则按本次判定范围校验后使用；**直接点击选项即选择**（用游戏原生的选中特效：底图/箭头/高亮字/音效）。面板里不再有三态开关。
 - **选项提示与分支记录**：悬停选项查看原生条件与已确认效果；选项上标注〔已走〕〔未记录〕。
 - **单挑对白回看**：记录本场/最近一场单挑的实际对白，最多 500 条，不暂停战斗。
-- **战斗辅助**：单挑七项（生命、气力、闪避、必定命中、必定先手、造成伤害为零、一击必杀）、群战五项，可分别开关。
+- **战斗辅助**：单挑七项（生命、气力、闪避、必定命中、必定先手、造成伤害为零、一击必杀）、群战六项，可分别开关。
 - **养成辅助**：练功与锻造炼丹消耗不减、「快速」一次完成一级、无限日常行动点、最高好感。
 - **存档扩展**：存档格数 2–999、槽位备注（`F2`）、按最近存档排序（`F3`），以及默认关闭的实验性随时存档。
 - **精确恢复（实验）**：记录检查点（基线存档 + 骰子/选项事件）并可回放；播放按「脚本名 + 选项文本 / 判定序号」校验，实机未验证。
@@ -69,6 +69,7 @@ UI 为用户自制，保留原有界面；不能因代码曾位于旧整合项�
 | 开关 | 效果 |
 |---|---|
 | 主角生命不减少 | 仍可能硬直；友军与剧情强制退场沿用原生规则 |
+| 友军生命不减少 | 独立开关，默认关闭；只保护 Friend 阵营的存活友军，保留回血、受击和剧情退场；包含在群战全部开启/关闭中 |
 | 主角气力保持充足 | 作用于群战气力条 |
 | 群战技能无冷却 | 保留原生施放限制与演出 |
 | 冻结群战剩余时间 | 保持开启时的剩余时间；**靠计时归零获胜的关卡请关闭** |
@@ -173,7 +174,7 @@ LegendOfMortal/
 | Story | `EffectHints` / `ShowEffects` / `ShowConditions` | false | 选项提示总开关与两个子项 |
 | Story | `ShowBranches` / `CheckpointLog` | false | 分支标记、检查点提醒 |
 | Duel | `KeepHealth` / `KeepStamina` / `MaximumDodge` / `AlwaysHit` / `FirstStrike` / `ZeroDamage` / `LethalDamage` | false | 单挑辅助（`LethalDamage` 自动含命中与先手；`ZeroDamage` 与它互斥） |
-| GroupBattle | `KeepHealth` / `FullMana` / `InstantCooldown` / `FreezeTime` / `DownOnHit` | false | 群战辅助 |
+| GroupBattle | `KeepHealth` / `KeepAllyHealth` / `FullMana` / `InstantCooldown` / `FreezeTime` / `DownOnHit` | false | 群战辅助 |
 | Progression | `SkillFree` / `FastSkill` / `ForgeFree` / `FastForge` / `UnlimitedActions` / `MaxAffection` | false | 养成辅助 |
 | Edits | `PracticeLimit` / `GameSpeed` | false / 1 | 修炼上限、游戏速度 |
 | Window | `X` `Y` `Width` `Height` `Opacity` `BadgeX` `BadgeY` `TraditionalChinese` | 自动保存 / 0.85 / false | 面板几何、透明度（0.40～1.00）、简繁切换 |

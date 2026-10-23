@@ -798,6 +798,7 @@ namespace MortalHelper.Game
             else
             {
                 plugin.Options.GroupHealth.Value = on;
+                plugin.Options.GroupAllyHealth.Value = on;
                 plugin.Options.GroupMana.Value = on;
                 plugin.Options.GroupCooldown.Value = on;
                 plugin.Options.GroupFreeze.Value = on;
@@ -830,6 +831,8 @@ namespace MortalHelper.Game
         {
             plugin.Options.GroupHealth.Value = DrawSwitchRow("主角生命不减少", plugin.Options.GroupHealth.Value,
                 "仍会硬直；友军与剧情退场按原生规则。");
+            plugin.Options.GroupAllyHealth.Value = DrawSwitchRow("友军生命不减少", plugin.Options.GroupAllyHealth.Value,
+                "仅保护友军；仍会硬直，剧情退场保留。");
             plugin.Options.GroupMana.Value = DrawSwitchRow("气力保持充足", plugin.Options.GroupMana.Value,
                 "只影响群战气力条。");
             plugin.Options.GroupCooldown.Value = DrawSwitchRow("技能无冷却", plugin.Options.GroupCooldown.Value,

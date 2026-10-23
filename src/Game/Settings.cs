@@ -9,7 +9,7 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<bool> Enabled, Hints, ShowEffects, ShowConditions, ShowBranches, DiagnoseScript;
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
         public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage, DuelZeroDamage, DuelAlwaysHit, DuelFirstStrike;
-        public readonly ConfigEntry<bool> GroupHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
+        public readonly ConfigEntry<bool> GroupHealth, GroupAllyHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
         public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge, PracticeLimit, CheckpointLog;
         public readonly ConfigEntry<string> Point;
         public readonly ConfigEntry<KeyCode> Toggle;
@@ -45,6 +45,7 @@ namespace MortalHelper.Game
             DuelAlwaysHit = config.Bind("Duel", "AlwaysHit", false, "敌方基础闪避失效，主角攻击不会落空；一击必杀已自动包含。");
             DuelFirstStrike = config.Bind("Duel", "FirstStrike", false, "行动对比必定主角成功、敌方失败；一击必杀已自动包含。");
             GroupHealth = config.Bind("GroupBattle", "KeepHealth", false, "群战主角生命不因普通伤害降低；仍可能硬直。");
+            GroupAllyHealth = config.Bind("GroupBattle", "KeepAllyHealth", false, "群战友军生命不因扣血降低；不影响主角、敌军与中立单位，剧情退场保留。");
             GroupMana = config.Bind("GroupBattle", "FullMana", false, "群战主角气力维持满值。");
             GroupCooldown = config.Bind("GroupBattle", "InstantCooldown", false, "群战技能栏不受冷却限制；保留原生施放条件。");
             GroupFreeze = config.Bind("GroupBattle", "FreezeTime", false, "冻结群战剩余时间；保留战斗事件进度，靠倒计时归零获胜的关卡需关闭。");
