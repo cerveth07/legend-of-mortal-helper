@@ -105,7 +105,6 @@ namespace MortalHelper.Game
         private static string pendingSlot, pendingPath;
         private static SlotTransaction pendingTransaction;
         private static string blockedReason;
-        private static string completedPath, completedHash;
         private static AnytimeStoryRecord pendingRecord, playback;
         private static int cursor, tokenSerial;
         private static int? replayDice;
@@ -153,7 +152,6 @@ namespace MortalHelper.Game
                 if (slot == null || slot.Length != 3 || slot == "000" ||
                     slot.Any(c => c < '0' || c > '9'))
                     throw new InvalidDataException("请选择游戏系统菜单中的编号槽位。");
-                completedPath = completedHash = null;
                 AbortNativeSave();
                 string path = PathFor(slot);
                 if (string.IsNullOrEmpty(path)) throw new IOException("无法定位原生存档槽位。");
@@ -246,13 +244,11 @@ namespace MortalHelper.Game
                     pendingTransaction.RecordReplacement(nativeHash);
                     pendingTransaction.Commit();
                 }
-                completedPath = saveFile; completedHash = nativeHash;
                 AnytimeNative.FinishOperation(pendingTransaction, saveFile);
                 ClearPending();
             }
             catch (Exception error)
             {
-                completedPath = completedHash = null;
                 bool restored = RollBack();
                 AnytimeNative.SaveFailed(restored
                     ? "剧情存档未完成，槽位已回退：" + error.Message
@@ -264,13 +260,6 @@ namespace MortalHelper.Game
         internal static void AbortNativeSave() { if (pendingRecord != null) RollBack(); }
 
         internal static string JournalFor(string path) => SlotTransaction.JournalFor(path);
-
-        internal static bool NativeSaveSucceeded(string saveFile, object gameSave)
-        {
-            if (completedPath != saveFile || completedHash == null || !(gameSave is GameSave)) return false;
-            try { return completedHash == HashObject(gameSave) && completedHash == HashFile(saveFile); }
-            catch (Exception) { return false; }
-        }
 
         // Replaces ForgetAfterOrdinarySave. A verified ordinary native save owns
         // the slot, so the story companions are retired through the same journal
@@ -394,7 +383,7 @@ namespace MortalHelper.Game
         internal static void Reset()
         {
             AbortNativeSave(); playback = null; Verified = Failed = false; Failure = null;
-            completedPath = completedHash = null; blockedReason = null;
+            blockedReason = null;
             lua = null; script = scene = baseline = baselineRandomState = baselineLuaRandomState = invalid = null; baselineGlobals = null;
             Events.Clear(); WaitTokens.Clear(); WaitKinds.Clear(); WaitKeys.Clear();
             replayDice = null; sceneReady = targetReached = false; UnlockInput();

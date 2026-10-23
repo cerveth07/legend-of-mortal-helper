@@ -62,7 +62,6 @@ namespace MortalHelper.Game
         private readonly Dictionary<string, string> itemEdits = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<EditRecord> editLog = new List<EditRecord>();
         private sealed class EditRecord { internal string Label; internal Action Undo; }
-        private readonly System.Collections.Generic.List<string> marks = new System.Collections.Generic.List<string>();
 
         private Vector2 badgePosition;
         private bool open, initialized;
@@ -125,13 +124,6 @@ namespace MortalHelper.Game
         {
             page = 4;
             commentSlot = null;
-            Visible = true;
-        }
-
-        // Used by the layout probe so a page can be measured without input.
-        internal void OpenProbePage(int index)
-        {
-            page = Mathf.Clamp(index, 0, Pages.Length - 1);
             Visible = true;
         }
 
@@ -582,7 +574,7 @@ namespace MortalHelper.Game
                 GUILayout.BeginVertical(style.Notice);
                 Color before = GUI.color;
                 GUI.color = StatusLooksBad(statusForLayout) ? new Color(1f, .80f, .74f) : new Color(.98f, .90f, .70f);
-                UiLabel("上次操作：" + statusForLayout, style.Description);
+                UiLabel("提示：" + statusForLayout, style.Description);
                 GUI.color = before;
                 GUILayout.EndVertical();
             }
@@ -689,13 +681,12 @@ namespace MortalHelper.Game
             Section("选项提示");
             plugin.Options.Hints.Value = DrawSwitchRow("选项提示（含剧透）", plugin.Options.Hints.Value,
                 "收起面板后悬停选项生效；关闭总开关不会清掉下面两项的选择。");
-            plugin.Options.ShowEffects.Value = DrawSwitchRow("显示效果", plugin.Options.ShowEffects.Value,
+            plugin.Options.ShowEffects.Value = DrawSwitchRow("显示已识别效果", plugin.Options.ShowEffects.Value,
                 "列出脚本里能确定的数值/旗标变化。");
-            plugin.Options.ShowConditions.Value = DrawSwitchRow("显示条件", plugin.Options.ShowConditions.Value,
-                "列出游戏原生的选择条件文本。");
-            plugin.Options.CheckpointLog.Value = DrawSwitchRow("检查点更新提醒", plugin.Options.CheckpointLog.Value,
-                "剧情标记变化时在「上次操作」提示名称与值；这是剧情标记，不是存档点。");
-            if (HintAdapter.Count > 0) Note("本段可对应的分支：" + HintAdapter.Count);
+            plugin.Options.ShowConditions.Value = DrawSwitchRow("显示条件与后续走向", plugin.Options.ShowConditions.Value,
+                "列出选项解锁条件与已识别的后续剧情。");
+            plugin.Options.CheckpointLog.Value = DrawSwitchRow("剧情标记变化提醒", plugin.Options.CheckpointLog.Value,
+                "在提示区显示变化的剧情标记及其数值。");
 
             Section("分支记录");
             plugin.Options.ShowBranches.Value = DrawSwitchRow("显示已走分支标记", plugin.Options.ShowBranches.Value,
@@ -709,13 +700,11 @@ namespace MortalHelper.Game
             GUILayout.EndHorizontal();
             foreach (string line in recent) UiLabel("· " + line, style.Description);
 
+            // Advanced testing only; ordinary players use anytime saves instead.
+            if (!plugin.Options.ExperimentalRecovery.Value && !plugin.Options.AutoTour.Value)
+                return;
             recoveryOpen = Fold("精确恢复（实验）", recoveryOpen, () => recoveryOpen = !recoveryOpen);
             if (!recoveryOpen) return;
-            if (!plugin.Options.ExperimentalRecovery.Value && !plugin.Options.AutoTour.Value)
-            {
-                Note("精确恢复默认停用：随机状态与完整重放尚未完成实机验收。仅供备份后的测试进度显式启用。");
-                return;
-            }
             Note("记录中：" + (StoryRecovery.Recording ? "是" : "否") + " · 事件 " + StoryRecovery.Count
                 + " 个 · 槽位 " + recoverySlot);
             GUILayout.BeginHorizontal();
@@ -784,7 +773,6 @@ namespace MortalHelper.Game
             int view = ViewTabs(battleView, BattleViews);
             if (view != battleView) { battleView = view; scroll[1] = Vector2.zero; }
             bool duel = battleView == 0;
-            Note(duel ? "以下 7 项只影响单挑，群战另有一页。" : "以下 5 项只影响群战，单挑另有一页。");
             // Small right-aligned actions: the view switcher above already owns the
             // full-width bar look, so these must not compete with it.
             GUILayout.BeginHorizontal();
@@ -832,7 +820,7 @@ namespace MortalHelper.Game
                 "攻击/兵器/绝招一律命中，不看命中率。");
             plugin.Options.DuelFirstStrike.Value = DrawSwitchRow("必定先手", plugin.Options.DuelFirstStrike.Value,
                 "行动对比判你赢，敌方本回合行动失效。");
-            plugin.Options.DuelZeroDamage.Value = DrawSwitchRow("造成伤害降为0", plugin.Options.DuelZeroDamage.Value,
+            plugin.Options.DuelZeroDamage.Value = DrawSwitchRow("造成伤害为零", plugin.Options.DuelZeroDamage.Value,
                 "敌方所受伤害归零（含持续伤害），与一击必杀互斥。");
             plugin.Options.DuelDamage.Value = DrawSwitchRow("一击必杀", plugin.Options.DuelDamage.Value,
                 "有效伤害直接清空敌方生命；自带必中与先手。");
@@ -844,10 +832,10 @@ namespace MortalHelper.Game
                 "仍会硬直；友军与剧情退场按原生规则。");
             plugin.Options.GroupMana.Value = DrawSwitchRow("气力保持充足", plugin.Options.GroupMana.Value,
                 "只影响群战气力条。");
-            plugin.Options.GroupCooldown.Value = DrawSwitchRow("技能栏立即冷却", plugin.Options.GroupCooldown.Value,
+            plugin.Options.GroupCooldown.Value = DrawSwitchRow("技能无冷却", plugin.Options.GroupCooldown.Value,
                 "保留原生施放限制与演出。");
-            plugin.Options.GroupFreeze.Value = DrawSwitchRow("冻结剩余时间", plugin.Options.GroupFreeze.Value,
-                "倒计时拉长；按计时归零获胜的关卡请关闭。");
+            plugin.Options.GroupFreeze.Value = DrawSwitchRow("暂停战斗倒计时", plugin.Options.GroupFreeze.Value,
+                "按倒计时归零获胜的关卡请关闭。");
             plugin.Options.GroupDown.Value = DrawSwitchRow("敌方受伤即倒地", plugin.Options.GroupDown.Value,
                 "含友军与持续伤害；敌闪避、剧情无敌保留。");
         }
@@ -858,19 +846,19 @@ namespace MortalHelper.Game
             if (view != growthView) { growthView = view; loverDraftLoaded = false; scroll[2] = Vector2.zero; }
             if (growthView == 1) { Relationships(); return; }
             Note("以下选项只在自由活动场景空闲时生效；练功与锻造炼丹两组按操作前后恢复点数与金钱。");
-            Section("练功 · 3 项");
+            Section("练功");
             plugin.Options.PracticeLimit.Value = DrawSwitchRow("解除修炼点数消耗上限", plugin.Options.PracticeLimit.Value,
                 "练功不再限制单次消耗，按现有武学点数扣减。");
             plugin.Options.SkillFree.Value = DrawSwitchRow("练功消耗不减", plugin.Options.SkillFree.Value,
                 "结束后把武学点数恢复原值；修炼条件仍须满足。");
             plugin.Options.FastSkill.Value = DrawSwitchRow("快速练功", plugin.Options.FastSkill.Value,
                 "一次完成一级；升级奖励与条件照旧。");
-            Section("锻造与炼丹 · 2 项");
+            Section("锻造与炼丹");
             plugin.Options.ForgeFree.Value = DrawSwitchRow("锻造炼丹消耗不减", plugin.Options.ForgeFree.Value,
                 "结束后把点数与金钱恢复原值；不解锁研发条件。");
             plugin.Options.FastForge.Value = DrawSwitchRow("快速锻造炼丹", plugin.Options.FastForge.Value,
                 "一次完成一级；保留等级上限与奖励。");
-            Section("日常行动 · 1 项");
+            Section("日常行动");
             plugin.Options.UnlimitedActions.Value = DrawSwitchRow("无限日常行动点", plugin.Options.UnlimitedActions.Value,
                 "行动点至少为 1 且不减；日期不会因点数用完前进。");
         }
@@ -889,9 +877,9 @@ namespace MortalHelper.Game
                     plugin.Status = ProgressionTools.SetLover(loverIndex);
                     loverDraftLoaded = false;
                 }
-                Note("可选九位候选或「自己」；不补齐结缘事件，正常存档后保留。");
+                Note("仅修改心上人，不补齐结缘剧情。");
             }
-            else Note("当前场景不能修改：等加载完成、关闭游戏内面板，且不在战斗中。");
+            else Note("请在自由活动时，关闭游戏内菜单后修改。");
 
             Section("好感上限");
             plugin.Options.MaxAffection.Value = DrawSwitchRow("已登场角色保持各自好感上限", plugin.Options.MaxAffection.Value,
@@ -900,7 +888,7 @@ namespace MortalHelper.Game
             Section("角色好感");
             if (!GameAccess.CanEditValues && !plugin.Options.PreviewEditable.Value)
             {
-                Note("当前场景不能修改：等加载完成、关闭游戏内面板，且不在战斗中。");
+                Note("请在自由活动时，关闭游戏内菜单后修改。");
                 return;
             }
             var player = PlayerStatManagerData.Instance;
@@ -1032,6 +1020,7 @@ namespace MortalHelper.Game
             bool stacked = width < 520f * scale;
             float applyWidth = Mathf.Max(64f * scale, style.ButtonStyle.CalcSize(new GUIContent("应用")).x);
             float inputWidth = GUI.skin.textField.CalcSize(new GUIContent("888888888")).x + 4f * scale;
+            float editLabelWidth = style.Description.CalcSize(new GUIContent(Localize("修改值"))).x;
             foreach (var stat in player.Stats.List)
             {
                 if (stat == null || !Editable.Contains(stat.StatType.ToString())) continue;
@@ -1042,14 +1031,15 @@ namespace MortalHelper.Game
                 int family;
                 if (statFamily != 0 && (!StatFamilyOf.TryGetValue(key, out family) || family != statFamily)) continue;
                 if (!statEdits.TryGetValue(key, out buffer)) { buffer = stat.Value.ToString(); statEdits[key] = buffer; }
-                string range = stat.Min + "～" + stat.Max;
+                string range = "范围 " + stat.Min + "～" + stat.Max;
                 float rangeWidth = stacked || !editable ? (width - gap) * .42f : Mathf.Min(width * .28f,
                     style.Tight.CalcSize(new GUIContent(range)).x + 4f * scale);
-                float nameWidth = stacked || !editable ? (width - gap) * .58f : width - rangeWidth - inputWidth - applyWidth - 3f * gap;
+                float nameWidth = stacked || !editable ? (width - gap) * .58f
+                    : width - rangeWidth - inputWidth - applyWidth - editLabelWidth - 4f * gap;
                 GUILayout.BeginHorizontal();
                 Color statColor = GUI.color;
                 if (Flashing("stat:" + key)) GUI.color = new Color(1f, .90f, .66f);
-                UiLabel(name + "  <color=#B7AE98>" + stat.Value + "</color>", style.Entry, GUILayout.Width(nameWidth));
+                UiLabel(name + "  <color=#B7AE98>当前值 " + stat.Value + "</color>", style.Entry, GUILayout.Width(nameWidth));
                 GUI.color = statColor;
                 GUILayout.Space(gap);
                 UiLabel(range, style.Tight, GUILayout.Width(rangeWidth));
@@ -1066,7 +1056,10 @@ namespace MortalHelper.Game
                     GUILayout.BeginHorizontal();
                 }
                 else GUILayout.Space(gap);
-                buffer = EditableTextField("stat:" + key, buffer, 9, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
+                UiLabel("修改值", style.Description, GUILayout.Width(editLabelWidth));
+                GUILayout.Space(gap);
+                buffer = EditableTextField("stat:" + key, buffer, 9,
+                    GUILayout.Width(stacked ? width - editLabelWidth - applyWidth - 2f * gap : inputWidth), GUILayout.Height(RowH));
                 statEdits[key] = buffer;
                 GUILayout.Space(gap);
                 if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
@@ -1094,7 +1087,6 @@ namespace MortalHelper.Game
                 GUILayout.EndHorizontal();
                 GUILayout.Space(8f * scale);
             }
-            Note("属性名后面是当前值，中间列是允许范围；只读预览时输入框会灰掉。");
         }
 
         private void ItemsBody()
@@ -1106,7 +1098,7 @@ namespace MortalHelper.Game
             if (database == null) { Note("物品数据库尚未就绪。"); return; }
             int tab = ViewTabs((int)itemType - 1, ItemViews);
             itemType = (GameItemType)(tab + 1);
-            showAllItems = DrawSwitchRow("也列出数量为 0 的物品", showAllItems, "勾选后可以给未持有的物品直接设置数量，等同于生成。");
+            showAllItems = DrawSwitchRow("显示未持有物品", showAllItems, "可直接设置数量，获得未持有物品。");
             GUILayout.BeginHorizontal();
             UiLabel("筛选", style.Description, GUILayout.Width(45f * scale));
             itemSearchEdit = EditableTextField("item-search", itemSearchEdit, 80, GUILayout.ExpandWidth(true));
@@ -1176,7 +1168,7 @@ namespace MortalHelper.Game
                 GUILayout.EndHorizontal();
                 GUILayout.Space(8f * scale);
             }
-            if (shown == 0) Note("没有匹配的物品；清空筛选或勾选「列出数量为 0 的物品」。");
+            if (shown == 0) Note("没有匹配的物品；清空筛选或开启「显示未持有物品」。");
         }
 
 
@@ -1295,7 +1287,6 @@ namespace MortalHelper.Game
                 plugin.Options.Config.Save();
                 plugin.Status = next == 1 ? "面板已切换为繁體中文。" : "面板已切换为简体中文。";
             }
-            Note("点选即切换，立即生效并保存设置。");
         }
 
         private void DrawBottomBar()
