@@ -105,11 +105,11 @@ namespace MortalHelper.Game
 
         internal void Refresh()
         {
-            bool traditional = Plugin.Instance.Options.TraditionalChinese.Value;
-            title.text = UiLanguage.Convert("基础点数", traditional);
-            placeholder.text = UiLanguage.Convert("留空为随机", traditional);
-            clearText.text = UiLanguage.Convert("自然掷骰", traditional);
-            saveText.text = UiLanguage.Convert("存档", traditional);
+            var language = Plugin.Instance.Options.LanguageKind;
+            title.text = UiLanguage.Translate("基础点数", language);
+            placeholder.text = UiLanguage.Translate("留空为随机", language);
+            clearText.text = UiLanguage.Translate("自然掷骰", language);
+            saveText.text = UiLanguage.Translate("存档", language);
             save.interactable = AnytimeNative.CanOffer;
             updating = true;
             if (!input.isFocused) input.text = Plugin.Instance.Options.Point.Value;
@@ -117,8 +117,8 @@ namespace MortalHelper.Game
             input.interactable = clear.interactable = DiceAdapter.Ready;
             bool valid = DiceAdapter.ValidInput();
             message.color = valid ? new Color(.85f,.85f,.8f) : new Color(1f,.55f,.4f);
-            message.text = UiLanguage.Convert(!valid ? "超出当前点数范围，请修改或清空" : DiceAdapter.Ready ?
-                "点击「启动」使用指定点数；留空则随机。" : "正在判定，请稍候。", traditional);
+            message.text = UiLanguage.Translate(!valid ? "超出当前点数范围，请修改或清空" : DiceAdapter.Ready ?
+                "点击「启动」使用指定点数；留空则随机。" : "正在判定，请稍候。", language);
         }
 
         private GameObject Box(string name, Vector2 position, Vector2 size, Transform parent = null)
@@ -134,7 +134,12 @@ namespace MortalHelper.Game
         private Text AddText(string value, Text reference, Vector2 position, Vector2 size, Transform parent = null)
         {
             var label = Box("Label", position, size, parent).AddComponent<Text>();
-            label.font = reference.font; label.material = reference.material;
+            // Same rule as the option tooltip: our translated labels need the panel face when
+            // the game's font has no Hangul/kana coverage.
+            var panelFont = Plugin.Instance?.Panel == null ? null : Plugin.Instance.Panel.BodyFont;
+            label.font = panelFont != null && Plugin.Instance.Options.LanguageKind != UiLang.Hans
+                ? panelFont : reference.font;
+            label.material = reference.material;
             label.fontSize = 20; label.text = value; label.color = Color.white;
             label.alignment = TextAnchor.MiddleCenter; label.raycastTarget = false;
             return label;

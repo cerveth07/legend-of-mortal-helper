@@ -89,6 +89,63 @@ namespace MortalHelper.Game
         // Shared with the save path (AnytimeStory.BeforeNativeSave) so the pre-write
         // budget and the encoder cannot disagree about what "too large" means.
         internal const int Limit = 12000000;
+
+        // The pre-write budget must cover every variable-length field, not just Expected:
+        // otherwise a save is accepted, the game rewrites the slot, and the encoder then
+        // refuses the payload after the fact.
+        internal static long Measure(AnytimeStoryRecord record)
+        {
+            if (record == null) throw new InvalidDataException("剧情附加记录缺失。");
+            long total = 32;
+            foreach (var value in new[] { record.Client, record.NativeHash, record.Baseline, record.Expected,
+                record.Script, record.Scene, record.WaitKind, record.WaitKey, record.BaselineRandomState,
+                record.RandomState, record.BaselineLuaRandomState, record.LuaRandomState })
+                total += value == null ? 1 : Encoding.UTF8.GetByteCount(value) + 4L;
+            total += ValuesSize(record.BaselineGlobals);
+            total += ValuesSize(record.ExpectedGlobals);
+            if (record.Events != null)
+                foreach (var entry in record.Events)
+                {
+                    if (entry == null) throw new InvalidDataException("剧情事件为空。");
+                    total += 12 + (entry.Kind == null ? 1 : Encoding.UTF8.GetByteCount(entry.Kind)) +
+                        (entry.Key == null ? 1 : Encoding.UTF8.GetByteCount(entry.Key));
+                }
+            return total;
+        }
+
+        private static long ValuesSize(AnytimeLuaValue[] values)
+        {
+            long total = 8;
+            if (values == null) return total;
+            foreach (var value in values)
+            {
+                if (value == null) throw new InvalidDataException("剧情变量记录为空。");
+                total += 16 + Bytes(value.Key) + Bytes(value.Kind) + Bytes(value.Text);
+                total += EntriesSize(value.Entries, 0);
+            }
+            return total;
+        }
+
+        // Mirrors the encoder so the pre-write budget cannot under-count a nested table.
+        private static long EntriesSize(AnytimeLuaEntry[] entries, int depth)
+        {
+            if (entries != null && (depth > 32 || entries.Length > 10000))
+                throw new InvalidDataException("剧情表嵌套或长度超限。");
+            long total = 8;
+            if (entries == null) return total;
+            foreach (var entry in entries)
+            {
+                if (entry == null) throw new InvalidDataException("剧情表记录为空。");
+                total += 20 + Bytes(entry.KeyKind) + Bytes(entry.Key) + Bytes(entry.Kind) + Bytes(entry.Text);
+                total += EntriesSize(entry.Entries, depth + 1);
+            }
+            return total;
+        }
+
+        // A null text is written as the int -1, so it still costs four bytes; counting one
+        // would let the pre-write budget under-count a sparse record.
+        private static long Bytes(string value) => value == null ? 4L : Encoding.UTF8.GetByteCount(value) + 4L;
+
         internal static string Write(AnytimeStoryRecord record)
         {
             using (var stream = new MemoryStream())

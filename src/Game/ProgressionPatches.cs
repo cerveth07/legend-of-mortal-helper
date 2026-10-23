@@ -199,39 +199,9 @@ namespace MortalHelper.Game
             try
             {
                 var text = GameAccess.Field<UnityEngine.UI.Text>(__instance, "_maxCountText");
-                if (text != null) text.text = UiLanguage.Convert("不限", Plugin.Instance.Options.TraditionalChinese.Value);
+                if (text != null) text.text = UiLanguage.Translate("不限", Plugin.Instance.Options.LanguageKind);
             }
             catch (System.Exception) { }
         }
-    }
-
-    // Checkpoint reminders: story flags are markers, not save points. Read only.
-    internal static class CheckpointState
-    {
-        internal static bool On => Plugin.Instance != null && Plugin.CanModifyProgress && Plugin.Instance.Options.CheckpointLog.Value;
-
-        internal static void Changed(MissionManagerData manager, string name)
-        {
-            if (!On || manager == null || string.IsNullOrEmpty(name)) return;
-            try
-            {
-                var flag = manager.GetFlag(name);
-                if (flag == null) return;
-                Plugin.Instance.Status = "剧情标记变化：" + flag.name + "=" + flag.State;
-            }
-            catch (System.Exception) { }
-        }
-    }
-
-    [HarmonyPatch(typeof(MissionManagerData), "AddFlag")]
-    internal static class CheckpointAddPatch
-    {
-        private static void Postfix(MissionManagerData __instance, string __0) { CheckpointState.Changed(__instance, __0); }
-    }
-
-    [HarmonyPatch(typeof(MissionManagerData), "SetFlag")]
-    internal static class CheckpointSetPatch
-    {
-        private static void Postfix(MissionManagerData __instance, string __0) { CheckpointState.Changed(__instance, __0); }
     }
 }

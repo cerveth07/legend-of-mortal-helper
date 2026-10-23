@@ -39,6 +39,12 @@ namespace MortalHelper.Game
         private static int pointIndex, drawIndex, roundAssists;
         private static float lastProgress;
         private static bool waiting, injecting, replaying, failed, sceneReady, finalVerified, returningTitle;
+        // Same rule as the story replay: the mutation gate may stay failed, but the input
+        // lock it takes must always be given back, or the game becomes unusable.
+        private static float failedAt;
+        private static bool inputReleased;
+        private static float loadStartedAt;
+        private static bool speedPending;
         private static string invalid;
 
         internal static bool Replaying => replaying || pending != null || finalVerified;
@@ -132,6 +138,10 @@ namespace MortalHelper.Game
             catch (Exception e) { Invalidate("无法记录开场：" + e.GetBaseException().Message); }
         }
 
+        // A duel save is the fight's opening snapshot, not its current round: the game only
+        // rebuilds a battle from the entry state (no round/HP/action survives in a save), so
+        // loading one restarts this fight. No action journal, therefore no replay and none
+        // of its failure modes.
         internal static bool SaveToSlot(string slot)
         {
             string reason = BlockReason;
@@ -139,21 +149,18 @@ namespace MortalHelper.Game
             try
             {
                 if (!Numbered(slot)) throw new InvalidDataException("请选择游戏系统菜单中的编号槽位。");
-                if (journal.Points.Count != journal.Actions.Count + 1)
-                    throw new InvalidDataException("行动与停点数量不一致。");
-                string now = DuelAudit.Capture(manager);
-                if (journal.FinalState != now)
-                {
-                    Invalidate("等待行动期间战斗状态发生变化。");
-                    throw new InvalidDataException(invalid);
-                }
+                if (opening == null || opening.Length == 0)
+                    throw new InvalidDataException("本场战斗的开场快照尚未捕获，等战斗初始化完成后再保存。");
                 var baseSave = ReadNative(opening);
                 baseSave.TimeTick = DateTime.Now.Ticks;
                 byte[] native = NativeBytes(baseSave);
-                journal.Client = Application.version;
-                journal.NativeHash = Hash(native);
-                journal.RandomState = JsonUtility.ToJson(UnityEngine.Random.state);
-                Validate(journal);
+                string startMarker = DuelStartCodec.Encode(new DuelStartRecord
+                {
+                    Client = Application.version,
+                    SceneKey = journal?.SceneKey ?? stagedSceneKey ?? "",
+                    NativeHash = Hash(native),
+                    SavedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture)
+                });
                 string path = SlotFile(slot);
                 AnytimeNative.SettleSlot(slot, path);
                 if (SlotTransaction.Exists(SlotTransaction.JournalFor(path)))
@@ -164,8 +171,8 @@ namespace MortalHelper.Game
                     (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha")) ||
                     (File.Exists(path + ".mhduel-required") && !File.Exists(path + ".mhduel")))
                     throw new IOException("此槽位有尚未处理的存档恢复材料，请先核对该槽位。");
-                WritePair(path, native, Encode(journal));
-                string message = "单挑回合已写入编号槽 " + slot + "。";
+                WriteStartPair(path, native, startMarker);
+                string message = "单挑档已写入编号槽 " + slot + "：读档后从这场战斗开头继续。";
                 try
                 {
                     SaveSystem.Instance.SetSlot(slot);
@@ -196,6 +203,36 @@ namespace MortalHelper.Game
                 // Legacy unmarked companions remain readable when still present.
                 if (!Numbered(slot)) return false;
                 string path = SlotFile(slot);
+                // A battle-start save needs nothing from us: the native file already restarts
+                // the fight, so it loads exactly like the game's own battle autosave. The
+                // marker is only a label and a fingerprint, and a stale one is set aside.
+                if (File.Exists(path + ".mhstart"))
+                {
+                    try
+                    {
+                        // Stat before read, like every other sidecar.
+                        var marker = new FileInfo(path + ".mhstart");
+                        if (!marker.Exists || marker.Length <= 0 || marker.Length > 4096)
+                            throw new InvalidDataException("战斗开场标记大小无效。");
+                        DuelStartRecord start = DuelStartCodec.Decode(File.ReadAllText(path + ".mhstart"));
+                        bool current = start.SceneKey == gameSave.CurrentSceneKey &&
+                            start.NativeHash == Hash(File.ReadAllBytes(path));
+                        if (current)
+                            Report("此档是战斗开场档：读档后从这场战斗开头继续。");
+                        else
+                        {
+                            Quarantine(path + ".mhstart");
+                            Report("该槽位的战斗开场标记与存档不匹配，已保留为 .mhstart.stale 并按原生存档载入。");
+                        }
+                    }
+                    catch (Exception error)
+                    {
+                        Quarantine(path + ".mhstart");
+                        Report("该槽位的战斗开场标记无法读取，已保留为 .mhstart.stale 并按原生存档载入：" +
+                            error.GetBaseException().Message);
+                    }
+                    return false;
+                }
                 if (File.Exists(path + ".mhduel-pending"))
                     throw new InvalidDataException("单挑存档提交曾中断；请核对 .dat/.mhduel 与备份后再读取。");
                 if (!File.Exists(path + ".mhduel"))
@@ -220,13 +257,24 @@ namespace MortalHelper.Game
                 }
                 if (!AnytimeDuelRandomPatch.Covered || loaded.Client != Application.version ||
                     loaded.SceneKey != gameSave.CurrentSceneKey)
-                    throw new InvalidDataException("客户端或战斗关卡与单挑记录不匹配。");
+                {
+                    // The document is intact but this build cannot replay it (game update, or a
+                    // scene mismatch). The native file restarts the fight, so keep it usable
+                    // unless the requirement marker says the pair must stay together.
+                    if (File.Exists(path + ".mhduel-required"))
+                        throw new InvalidDataException("客户端或战斗关卡与单挑记录不匹配，且附档必需标记仍在；" +
+                            "请保留 " + Path.GetFileName(path) + ".mhduel 与 .mhduel-required，从完整备份恢复后再读取。");
+                    Quarantine(path + ".mhduel");
+                    Report("该槽位的单挑附档与当前游戏版本或关卡不匹配，已保留为 .mhduel.stale 并按原生存档载入。");
+                    return false;
+                }
                 // Preserve the verified opening for a subsequent save after replay.
                 // CaptureStart deliberately does not replace it during recovery.
                 stagedOpening = File.ReadAllBytes(path);
                 stagedSceneKey = loaded.SceneKey;
                 pending = loaded;
                 lastProgress = Time.unscaledTime;
+                loadStartedAt = Time.unscaledTime;
                 return true;
             }
             catch (Exception e)
@@ -245,22 +293,37 @@ namespace MortalHelper.Game
 
         internal static void Tick()
         {
+            // A deferred speed restore (scene was still loading when the attempt ended).
+            if (speedPending) RestoreSpeed();
             if (failed)
             {
                 if (manager == null) { UnlockInput(); return; }
-                LockInput();
+                float waited = Time.unscaledTime - failedAt;
+                if (!inputReleased) LockInput();
                 var scene = SceneController.Instance;
-                if (!returningTitle && manager != null && scene != null && !scene.IsLoading && !scene.IsPrepare)
+                bool loading = scene == null || scene.IsLoading || scene.IsPrepare;
+                if (FailureExit.ShouldRequestTitle(loading, returningTitle, waited))
                 {
-                    returningTitle = true;
-                    scene.LoadTitle();
+                    // Latched only after the call returns: a throwing request must be retried.
+                    try { scene.LoadTitle(); returningTitle = true; }
+                    catch (Exception error)
+                    {
+                        ReleaseFailureInput("单挑恢复失败且无法回到标题：" + error.Message);
+                        return;
+                    }
                 }
+                if (FailureExit.ShouldReleaseInput(waited)) ReleaseFailureInput("单挑恢复失败");
                 return;
             }
             if (!Replaying) { UnlockInput(); return; }
             LockInput();
             // A stall, not total elapsed time: a long replay that keeps reaching
             // action points is still making progress.
+            if (FailureExit.ShouldAbortForMissingScene(sceneReady, Time.unscaledTime - loadStartedAt))
+            {
+                Fail("单挑场景在 " + (int)FailureExit.SceneReadyLimit + " 秒内没有就绪。");
+                return;
+            }
             if (Time.unscaledTime - lastProgress > 120f)
             { Fail("单挑回放超过两分钟没有出现下一个行动点（停点 " + pointIndex + "/" +
                 (journal == null ? 0 : journal.Points.Count) + "）。"); return; }
@@ -274,6 +337,8 @@ namespace MortalHelper.Game
             pointIndex = drawIndex = roundAssists = 0; waiting = injecting = replaying = failed = sceneReady = finalVerified = returningTitle = false;
             lastProgress = 0f;
             invalid = null;
+            failedAt = 0f; inputReleased = false; loadStartedAt = 0f;
+            RestoreSpeed();
             UnlockInput();
         }
 
@@ -432,6 +497,7 @@ namespace MortalHelper.Game
             if (!finalVerified || failed) return;
             finalVerified = false;
             waiting = true;
+            RestoreSpeed();
             UnlockInput();
             StoryReplay.OnNativeLoadCompleted();
             Report("单挑第 " + manager.CurrentRounds + " 回合恢复完成，状态已核验。");
@@ -439,7 +505,9 @@ namespace MortalHelper.Game
 
         private static bool BeforeAction(CombatActionType action)
         {
-            if (failed) return false;
+            // After the failure exit released input the battle must be playable again; the
+            // journal is no longer written, so the action simply goes through.
+            if (failed) return inputReleased;
             if (replaying) return injecting;
             if (finalVerified) return false;
             if (manager == null) return true;
@@ -490,10 +558,50 @@ namespace MortalHelper.Game
             catch (Exception) { }
             Time.timeScale = 1f;
             LockInput();
+            failedAt = Time.unscaledTime; inputReleased = false;
             Plugin.Instance?.Gate.Fail("单挑恢复中止：" + reason);
             Report("单挑恢复中止：" + reason + "。请重新读取存档。");
             try { Plugin.Instance?.Log("[Anytime] " + detail); } catch (Exception) { }
         }
+        // The native load watchdog gave up: stop waiting for a scene that is not coming.
+        internal static void NativeLoadAborted(string reason)
+        {
+            if (Replaying) Fail(reason);
+        }
+
+        // The duel path pins timeScale to 1 for deterministic ordering; once the attempt is
+        // over the player's own speed setting must come back.
+        private static void RestoreSpeed()
+        {
+            var options = Plugin.Instance == null ? null : Plugin.Instance.Options;
+            if (options == null || SceneController.Instance == null) return;
+            // A scene that is still loading owns timeScale; retry from the next tick instead of
+            // dropping the player's speed setting for the rest of the session.
+            if (SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+            { speedPending = true; return; }
+            // timeScale 0 means the game paused itself (menu, cutscene). Resuming it here would
+            // unpause the game behind the player's back, so keep the restore pending instead.
+            if (Time.timeScale <= 0f) { speedPending = true; return; }
+            speedPending = false;
+            float speed = options.ValidSpeed;
+            if (Mathf.Abs(Time.timeScale - speed) > 0.001f) Time.timeScale = speed;
+        }
+
+        // Failure is over: the gate stays closed, but the player keeps control.
+        private static void ReleaseFailureInput(string reason)
+        {
+            if (inputReleased) return;
+            inputReleased = true;
+            UnlockInput();
+            string message = FailureExit.FailReason(reason) + "：已解除输入锁，请自行回到标题后重新读取原生存档。";
+            if (Plugin.Instance != null)
+            {
+                Plugin.Instance.Status = message;
+                try { Plugin.Instance.Log("[Anytime] duel failure exit released input; reason=" + reason); }
+                catch (Exception) { }
+            }
+        }
+
         // Names the round, the action and random tape positions, and whether the
         // live state differed from the recorded digest. Missing data is reported
         // as absent rather than defaulted into a value that could look valid.
@@ -574,6 +682,52 @@ namespace MortalHelper.Game
         // staged, both members are re-read and verified, and only then does the
         // transaction claim a commit; a crash before that point restores the exact
         // pre-save combination recorded in the journal.
+        // Same transaction discipline as the action-journal pair, for a battle-start save:
+        // the native file plus its marker, with every earlier companion retired in the same
+        // commit so a slot never carries two meanings.
+        private static void WriteStartPair(string path, byte[] native, string marker)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string extra = path + ".mhstart";
+            string first = path + ".mhstart-native-stage", second = extra + ".stage";
+            byte[] sidecar = new UTF8Encoding(false).GetBytes(marker);
+            var transaction = SlotTransaction.Begin(SlotTransaction.JournalFor(path), "duel", new[] {
+                path, extra, path + ".mhduel", path + ".mhduel-required",
+                path + ".mha", path + ".mha-required"
+            });
+            try
+            {
+                Stage(first, native); Stage(second, sidecar);
+                if (Hash(File.ReadAllBytes(first)) != Hash(native)) throw new IOException("原生档暂存校验失败。");
+                Replace(first, path);
+                Replace(second, extra);
+                if (Hash(File.ReadAllBytes(path)) != Hash(native) ||
+                    DuelStartCodec.Decode(File.ReadAllText(extra)).NativeHash != Hash(native))
+                    throw new IOException("双文件提交校验失败。");
+                DeleteIfExists(path + ".mhduel");
+                DeleteIfExists(path + ".mhduel-required");
+                DeleteIfExists(path + ".mhduel-pending");
+                DeleteIfExists(path + ".mha");
+                DeleteIfExists(path + ".mha-required");
+                transaction.RecordReplacement(SlotTransaction.HashFile(path));
+                transaction.Commit();
+                transaction.Complete();
+            }
+            catch (Exception original)
+            {
+                var report = transaction.Rollback();
+                if (!report.Complete)
+                    throw new IOException("战斗开场档保存失败且回退未完成；事务日志与备份已保留。",
+                        new AggregateException(original, new InvalidOperationException(report.Detail)));
+                throw;
+            }
+            finally
+            {
+                try { if (File.Exists(first)) File.Delete(first); } catch (Exception) { }
+                try { if (File.Exists(second)) File.Delete(second); } catch (Exception) { }
+            }
+        }
+
         private static void WritePair(string path, byte[] native, byte[] sidecar)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
@@ -630,11 +784,13 @@ namespace MortalHelper.Game
                 else journal.Draws.Add(item);
                 return item;
             }
-            if (drawIndex >= journal.Draws.Count) { Fail("随机调用超过已保存记录。"); throw new InvalidDataException("Random tape exhausted"); }
+            // These run inside native combat routines through the transpiler: throwing here
+            // unwinds the game's own action code. Answer with a natural draw instead.
+            if (drawIndex >= journal.Draws.Count) { Fail("随机调用超过已保存记录。"); return fresh(); }
             Draw saved = journal.Draws[drawIndex++];
             if (saved.Site != requested.Site || saved.Kind != requested.Kind || saved.A != requested.A ||
                 saved.B != requested.B || saved.X != requested.X || saved.Y != requested.Y)
-            { Fail("随机调用顺序或参数变化。"); throw new InvalidDataException("Random call mismatch"); }
+            { Fail("随机调用顺序或参数变化。"); return saved; }
             return saved;
         }
 

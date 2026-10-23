@@ -170,6 +170,14 @@ namespace MortalHelper.Game
                     status = "该检查点使用旧版状态摘要；请重新录制后再恢复。";
                     return false;
                 }
+                if (document.Checkpoint == null ||
+                    !document.Checkpoint.StartsWith("manual:", StringComparison.Ordinal))
+                {
+                    // VerifyAtEnd refuses any other shape, so accepting it here would only
+                    // strand the gate in Replaying at the very end of the replay.
+                    status = "该检查点不是手动检查点，无法校验；请重新录制。";
+                    return false;
+                }
                 Position = 0; diceOrdinal = 0; diceScript = null; PendingDice = null;
                 verifyAt = 0f; lastProgress = Time.unscaledTime; startFrame = Time.frameCount;
                 choiceSnapshot = null; menuGeneration = 0;
@@ -191,13 +199,19 @@ namespace MortalHelper.Game
 
         internal static void Stop(string reason)
         {
+            // Without this the status line reports a stop that never happened every time the
+            // player loads a save normally.
+            bool active = controller != null || PendingDice != null || baselineScenePending;
             if (controller != null && controller.Replaying) controller.Cancel(reason);
             controller = null;
             PendingDice = null;
             baselineScenePending = false;
             choiceSnapshot = null; clickedMenuGeneration = -1; clickedEventPosition = -1;
-            status = reason ?? "重放已停止。";
-            Log("stopped: " + status);
+            if (active)
+            {
+                status = reason ?? "重放已停止。";
+                Log("stopped: " + status);
+            }
         }
 
         internal static void Tick()
@@ -250,6 +264,10 @@ namespace MortalHelper.Game
             catch (Exception error)
             {
                 status = "校验失败：" + error.Message;
+                // The controller is already detached, so nothing else can move the gate out of
+                // Replaying; without this the shared gate can never be reopened.
+                try { current?.Cancel(status); }
+                catch (Exception) { try { Plugin.Instance?.Gate.Fail(status); } catch (Exception) { } }
             }
             Log(status);
         }

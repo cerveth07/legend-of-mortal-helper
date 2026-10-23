@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using HarmonyLib;
 using Mortal.Core;
+using MortalHelper.Core;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -64,12 +65,18 @@ namespace MortalHelper.Game
             if (!claimed || Plugin.Instance == null) { claimed = false; return; }
             if (!Plugin.Instance.Gate.AwaitingNativeLoad) { claimed = false; return; }
             var controller = SceneController.Instance;
-            if (controller != null && (controller.IsLoading || controller.IsPrepare)) return;
-            if (Time.unscaledTime - beganAt < StallSeconds) return;
+            bool loading = controller != null && (controller.IsLoading || controller.IsPrepare);
+            // A controller that claims to be loading forever would otherwise never be caught:
+            // the old check returned early on every frame while IsLoading was true.
+            if (!FailureExit.LoadStalled(loading, Time.unscaledTime - beganAt)) return;
             claimed = false;
             string reason = "原生存档场景加载在 " + (int)StallSeconds +
                 " 秒内没有完成，当前游戏状态无法确认。操作保持锁定；请重新读取一个有效的原生存档来解除锁定。";
             Plugin.Instance.Gate.NativeLoadAborted(reason);
+            // Stop the replays that are waiting for a scene that is not coming, so their own
+            // two-minute watchdogs cannot hold input after the gate already gave up.
+            AnytimeStory.NativeLoadAborted(reason);
+            AnytimeDuel.NativeLoadAborted(reason);
             if (Plugin.Instance.Panel != null) Plugin.Instance.Panel.Visible = true;
             Plugin.Instance.Status = reason;
             try { Plugin.Instance.Log("[Anytime] native load stalled; gate=failed (lock retained)"); }

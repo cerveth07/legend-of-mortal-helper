@@ -131,7 +131,7 @@ namespace MortalHelper.Game
                     int traditionalAt = current.IndexOf(TraditionalMarker, StringComparison.Ordinal);
                     if (at < 0 || (traditionalAt >= 0 && traditionalAt < at)) at = traditionalAt;
                     if (at >= 0) current = current.Substring(0, at);
-                    string marker = Plugin.Instance.Options.TraditionalChinese.Value ? TraditionalMarker : Marker;
+                    string marker = Plugin.Instance.Options.LanguageKind == UiLang.Hant ? TraditionalMarker : Marker;
                     text.text = current.TrimEnd() + "\n" + marker + comment;
                 }
             }

@@ -37,15 +37,22 @@ namespace MortalHelper.Game
                 if (Options.AutoTour.Value || Options.PreviewEditable.Value)
                     Application.runInBackground = true;
                 Panel = new MainPanel(this);
-                foreach (string path in Directory.GetFiles(Paths.PluginPath, "*.dll", SearchOption.AllDirectories))
+                // A broken junction or an unreadable plugin directory must not abort startup:
+                // the scan is a courtesy warning, not a precondition for the mod working.
+                try
                 {
-                    string file = Path.GetFileName(path);
-                    if (file.Equals("MortalFateHelper.dll", StringComparison.OrdinalIgnoreCase) ||
-                        file.Equals("LOMSave2.dll", StringComparison.OrdinalIgnoreCase) ||
-                        file.StartsWith("DiceMaster", StringComparison.OrdinalIgnoreCase) ||
-                        file.Equals("ControlMyDestiny.dll", StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidOperationException("检测到旧辅助插件 " + file + "；请先将其移出 plugins 后重启。");
+                    foreach (string path in Directory.GetFiles(Paths.PluginPath, "*.dll", SearchOption.AllDirectories))
+                    {
+                        string file = Path.GetFileName(path);
+                        if (file.Equals("MortalFateHelper.dll", StringComparison.OrdinalIgnoreCase) ||
+                            file.Equals("LOMSave2.dll", StringComparison.OrdinalIgnoreCase) ||
+                            file.StartsWith("DiceMaster", StringComparison.OrdinalIgnoreCase) ||
+                            file.Equals("ControlMyDestiny.dll", StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException("检测到旧辅助插件 " + file + "；请先将其移出 plugins 后重启。");
+                    }
                 }
+                catch (InvalidOperationException) { throw; }
+                catch (Exception error) { Logger.LogWarning("插件目录扫描失败，已跳过旧插件检测：" + error.Message); }
                 patches = new Harmony("cerveth.mortal.helper");
                 patches.PatchAll(typeof(Plugin).Assembly);
                 SceneManager.activeSceneChanged += SceneChanged;
@@ -74,7 +81,8 @@ namespace MortalHelper.Game
             {
                 patches = new Harmony("cerveth.mortal.helper");
                 patches.PatchAll(typeof(Plugin).Assembly);
-                SceneManager.activeSceneChanged -= SceneChanged;
+                InteractionLock.Reset();
+            SceneManager.activeSceneChanged -= SceneChanged;
                 SceneManager.activeSceneChanged += SceneChanged;
                 patchFailed = false;
                 Logger.LogInfo("Mortal helper patches restored after an earlier initialisation failure.");
@@ -105,6 +113,8 @@ namespace MortalHelper.Game
                 Panel.Visible = show;
                 Logger.LogInfo("Panel toggled: target=" + (show ? "open" : "closed") + " " + Panel.Describe());
             }
+            // Each supervisor runs guarded: one throwing subsystem must not starve the
+            // watchdogs (native-load stall, failure exit) that release the input lock.
             try
             {
                 if (!Options.ExperimentalRecovery.Value)
@@ -112,23 +122,49 @@ namespace MortalHelper.Game
                     if (StoryRecovery.Recording) StoryRecovery.Stop();
                     if (StoryReplay.Active) StoryReplay.Stop("实验恢复已停用；请通过原生读档解除保护锁。");
                 }
-                AnytimeDice.Tick(); AnytimeStory.Tick(); AnytimeDuel.Tick();
-                // Re-assert the input lock: a scene created during a replay starts
-                // with its input modules enabled.
-                InteractionLock.Refresh();
-                NativeLoadBoundary.CheckStalled();
-                DiceAdapter.Tick(); ProgressionTools.Maintain(); Titles.Tick(); StoryReplay.Tick();
-#if !NO_PROBE
-                Probe.Tick();
-#endif
             }
-            catch (Exception error) { DiceAdapter.Close(); Report(error); }
+            catch (Exception error) { StepFailed("recovery-switch", error); }
+            Step("dice", AnytimeDice.Tick);
+            Step("story", AnytimeStory.Tick);
+            Step("duel", AnytimeDuel.Tick);
+            Step("lock", InteractionLock.Refresh);
+            Step("native-load", NativeLoadBoundary.CheckStalled);
+            Step("adapter", DiceAdapter.Tick);
+            Step("progress", ProgressionTools.Maintain);
+            Step("titles", Titles.Tick);
+            Step("replay", StoryReplay.Tick);
+#if !NO_PROBE
+            Step("probe", Probe.Tick);
+#endif
         }
+
+        // Rate-limited so a per-frame failure cannot flood the log; the supervisor keeps
+        // running for every other subsystem.
+        private void Step(string name, Action action)
+        {
+            try { action(); }
+            catch (Exception error) { StepFailed(name, error); }
+        }
+
+        private void StepFailed(string name, Exception error)
+        {
+            try
+            {
+                if (name == "dice" || name == "adapter") DiceAdapter.Close();
+                if (lastStepError == error.Message && Time.unscaledTime - lastStepAt < 30f) return;
+                lastStepError = error.Message; lastStepAt = Time.unscaledTime;
+                Logger.LogWarning("[MortalHelper] " + name + " tick failed: " + error);
+            }
+            catch (Exception) { }
+        }
+
+        private string lastStepError;
+        private float lastStepAt;
 
         private void OnGUI()
         {
             // Keep rendering after transient game/UI errors and rate-limit logging.
-            try { Panel?.Draw(); HintAdapter.Draw(); }
+            try { Panel?.Draw(); HintAdapter.Draw(); Panel?.DrawReplayCover(); }
             catch (Exception error)
             {
                 if (error is ExitGUIException) throw;
@@ -168,10 +204,14 @@ namespace MortalHelper.Game
         private void OnDestroy()
         {
             if (tourStarted) FinishTour();
+            InteractionLock.Reset();
             SceneManager.activeSceneChanged -= SceneChanged;
             DiceAdapter.Close(); HintAdapter.Clear();
             AnytimeStory.Reset(); AnytimeDuel.Reset();
             if (Options != null && Options.Speed.Value != 1f) Time.timeScale = 1f;
+            // A plugin teardown while a recovery held the lock would leave the input modules
+            // disabled for the rest of the process.
+            InteractionLock.Reset();
             Panel?.Dispose(); patches?.UnpatchSelf(); Config.Save();
             Instance = null;
         }

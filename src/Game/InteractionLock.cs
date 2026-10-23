@@ -40,8 +40,10 @@ namespace MortalHelper.Game
             if (system == null) return;
             if (!ReferenceEquals(system, lockedSystem))
             {
-                // Modules from the previous scene are already gone, so there is
-                // nothing to restore there; track the live ones instead.
+                // The old system may survive the switch (DontDestroyOnLoad, additive load).
+                // Re-enable what we disabled there before forgetting it, or that system's input
+                // stays dead for the rest of the process.
+                foreach (var previous in Disabled) if (previous != null) previous.enabled = true;
                 Disabled.Clear();
                 lockedSystem = system;
             }

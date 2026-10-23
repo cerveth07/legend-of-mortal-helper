@@ -81,7 +81,10 @@ namespace MortalHelper.Game
     {
         private static void Prefix(SkillButton __instance)
         {
-            if (Plugin.CanModifyProgress && Plugin.Instance.Options.GroupCooldown.Value)
+            if (!Plugin.CanModifyProgress || !Plugin.Instance.Options.GroupCooldown.Value) return;
+            // Runs for every skill button every frame; reflection writes box and re-set the
+            // value, so only write when it would actually change.
+            if (GameAccess.Field<float>(__instance, "_currentCooldownTime") != 0f)
                 GameAccess.Set(__instance, "_currentCooldownTime", 0f);
             // Native Update still checks pause/readiness/game-over/event/active and
             // completes the cooldown through its own UI and state transitions.
@@ -109,9 +112,12 @@ namespace MortalHelper.Game
                 }
                 yield return instruction;
             }
-            if (replaced != 1)
-                throw new InvalidOperationException("群战计时器版本不兼容：未找到唯一的已用时间更新。");
+            // Degrade this single feature instead of throwing out of PatchAll, which would
+            // uninstall every patch including the recovery ones.
+            if (replaced != 1) Unsupported = true;
         }
+
+        internal static bool Unsupported;
 
         private static void SetElapsed(GameLevelManager manager, int value)
         {

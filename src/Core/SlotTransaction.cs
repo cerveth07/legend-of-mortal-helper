@@ -303,7 +303,7 @@ namespace MortalHelper.Core
         // must be the journal's own slot file or one of its companions, and a
         // recorded backup must be this journal's own .bN copy.
         private static readonly string[] SlotSuffixes = {
-            "", ".mha", ".mha-required", ".mhduel", ".mhduel-required"
+            "", ".mha", ".mha-required", ".mhduel", ".mhduel-required", ".mhstart"
         };
 
         private static void RequireOwned(string journalPath, int index, SlotTransactionEntry entry)

@@ -29,7 +29,7 @@ namespace MortalHelper.Game
         private static GameObject title;
         private static bool closing;
         internal static bool Active => state.Active;
-        private static string Label(string text) => UiLanguage.Convert(text, Plugin.Instance.Options.TraditionalChinese.Value);
+        private static string Label(string text) => UiLanguage.Translate(text, Plugin.Instance.Options.LanguageKind);
 
         internal static void Ensure(MenuPanel menu, bool available)
         {
@@ -141,14 +141,14 @@ namespace MortalHelper.Game
             bool labelled = false;
             foreach (var text in title.GetComponentsInChildren<Text>(true))
             {
-                text.text = Label("储存游戏 · 单挑回合");
+                text.text = Label("储存游戏 · 战斗开头");
                 text.color = Color.white; text.alignment = TextAnchor.MiddleLeft;
                 text.horizontalOverflow = HorizontalWrapMode.Overflow;
                 text.raycastTarget = false; labelled = true;
             }
             foreach (var text in title.GetComponentsInChildren<TMP_Text>(true))
             {
-                text.text = Label("储存游戏 · 单挑回合");
+                text.text = Label("储存游戏 · 战斗开头");
                 text.color = Color.white; text.alignment = TextAlignmentOptions.MidlineLeft;
                 text.raycastTarget = false; labelled = true;
             }
