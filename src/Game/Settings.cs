@@ -17,6 +17,7 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<float> X, Y, Width, Height;
         public readonly ConfigEntry<float> Speed;
         public readonly ConfigEntry<int> SlotCount;
+        public readonly ConfigEntry<int> LegendSlotCount;
         public readonly ConfigEntry<bool> SortRecent, AnytimeSave;
         public readonly ConfigEntry<bool> TraditionalChinese;
 #if !NO_PROBE
@@ -71,6 +72,8 @@ namespace MortalHelper.Game
             DiceY = config.Bind("Window", "DiceY", -1f, "控骰条纵向位置（屏幕比例）；-1 使用默认位置，拖动后自动保存。");
             SlotCount = config.Bind("Save", "SlotCount", 0,
                 new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
+            LegendSlotCount = config.Bind("Save", "LegendSlotCount", 30,
+                new ConfigDescription("通关故事栏位上限；先显示原生12格，存满后每次追加6格。已有更高编号的故事仍保留可见。", new AcceptableValueRange<int>(12, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
             AnytimeSave = config.Bind("Save", "AnytimeSave", false, "允许在剧情对话、选项、骰子稳定等待页或单挑行动点使用原生编号槽存档；实验功能，默认关闭。");
             TraditionalChinese = config.Bind("Window", "TraditionalChinese", false, "面板使用繁體中文；关闭时使用简体中文。");

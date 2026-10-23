@@ -83,6 +83,7 @@ namespace MortalHelper.Game
         private string itemSearch = "", search = "";
         private bool showAllItems, loggedBadge;
         private string slotComment = "", commentSlot, slotCountText = "";
+        private string legendSlotCountText = "";
         private int recoverySlot = 1;
         private GameObject blocker;
         private RectTransform blockerRect;
@@ -1199,6 +1200,27 @@ namespace MortalHelper.Game
 
         private void SavePage()
         {
+            Section("通关故事栏位");
+            Note("先显示原生12格，存满后每次追加6格；可左右拖动或滚轮浏览。");
+            GUILayout.BeginHorizontal();
+            UiLabel("扩展上限", style.Entry, GUILayout.Width(90f * scale));
+            if (string.IsNullOrEmpty(legendSlotCountText)) legendSlotCountText = plugin.Options.LegendSlotCount.Value.ToString();
+            legendSlotCountText = EditableTextField("legend-slot-count", legendSlotCountText, 3,
+                GUILayout.Width(72f * scale), GUILayout.Height(RowH));
+            if (UiButton("保存上限", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                int count;
+                if (!int.TryParse(legendSlotCountText, out count) || count < 12 || count > 999)
+                    plugin.Status = "故事栏位上限必须是12～999的整数。";
+                else
+                {
+                    plugin.Options.LegendSlotCount.Value = count;
+                    plugin.Options.Config.Save();
+                    plugin.Status = "故事栏位上限已设为" + count + "格；重新打开故事列表后生效。";
+                }
+            }
+            GUILayout.EndHorizontal();
+            Note("已有故事不会删除；更高编号的已存故事仍会显示。");
             Section("随时存档（实验）");
             bool anytime = plugin.Options.AnytimeSave.Value;
             bool nextAnytime = DrawSwitchRow("启用随时存档", anytime,

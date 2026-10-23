@@ -311,6 +311,20 @@ internal static class Contracts
         finally { if(Directory.Exists(folder))Directory.Delete(folder,true); }
         TransactionChecks();
         LoadGateChecks();
+        Check(LegendSlotCapacity.Visible(30, new int[0]) == 12, "empty legend keeps native twelve");
+        var legendSlots = new System.Collections.Generic.List<int>();
+        for (int slot = 1; slot <= 12; slot++) legendSlots.Add(slot);
+        Check(LegendSlotCapacity.Visible(30, legendSlots) == 18, "full native legend adds six");
+        for (int slot = 13; slot <= 18; slot++) legendSlots.Add(slot);
+        Check(LegendSlotCapacity.Visible(30, legendSlots) == 24, "second full legend page adds six");
+        for (int slot = 19; slot <= 30; slot++) legendSlots.Add(slot);
+        Check(LegendSlotCapacity.Visible(30, legendSlots) == 30, "full legend respects configured cap");
+        legendSlots.Remove(5);
+        Check(LegendSlotCapacity.Visible(12, legendSlots) == 30, "lower cap preserves higher saved stories");
+        Check(LegendSlotCapacity.Visible(30, new[] { 13 }) == 18, "sparse high legend remains visible");
+        Check(LegendSlotCapacity.Visible(30, new[] { 24 }) == 24, "sparse legend does not grow solely from last slot");
+        Check(LegendSlotCapacity.Visible(30, new[] { 0, -1, 1000 }) == 12, "invalid legend file indices ignored");
+        Check(LegendSlotCapacity.Visible(14, new[] { 13 }) == 14, "partial final legend batch respects cap");
         passed += StoryContracts.Run();
         passed += DuelJournalTests.Run();
         passed += DuelSaveMenuStateTests.Run();

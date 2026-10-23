@@ -195,7 +195,7 @@ class SafetyWiringTests(unittest.TestCase):
         self.assertIn("GUI.GetNameOfFocusedControl() == name", panel)
         self.assertIn("Plugin.Instance?.Panel?.EditingTextField == true", access)
         self.assertEqual(panel.count("GUILayout.TextField("), 1)
-        self.assertEqual(panel.count("EditableTextField("), 8)
+        self.assertEqual(panel.count("EditableTextField("), 9)
 
     def test_lua_random_and_unsupported_table_checks_remain(self):
         story = read("src/Game/AnytimeStory.cs")
