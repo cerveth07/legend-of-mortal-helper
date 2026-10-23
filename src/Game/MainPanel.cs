@@ -98,9 +98,15 @@ namespace MortalHelper.Game
             {
                 if (value)
                 {
-                    if (open) return;
+                    // `open` only clears when the closing animation finishes, so a press
+                    // during that animation used to hit this early return and do nothing.
+                    // If the animation then stalls (the window is minimised, so OnGUI is
+                    // not called), the panel stayed collapsed and no key press could
+                    // recover it. Reopening now cancels the close instead.
+                    if (open && !closing) return;
+                    bool midClose = closing;
                     loverDraftLoaded = false;
-                    animFrom = BadgeRect();
+                    animFrom = midClose && shownRect.width > 1f ? shownRect : BadgeRect();
                     animTo = ClampWindow();
                     open = true;
                     closing = false;

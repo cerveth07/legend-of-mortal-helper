@@ -99,8 +99,11 @@ namespace MortalHelper.Game
                 Panel.OpenSaveSettings();
             if (!GameAccess.Typing && Input.GetKeyDown(Options.Toggle.Value))
             {
-                Panel.Visible = !Panel.Visible;
-                Logger.LogInfo("Panel toggled: " + Panel.Describe());
+                // Log the requested state: Panel.Visible still reports "open" while the
+                // closing animation runs, which made the log contradict the screen.
+                bool show = !Panel.Visible;
+                Panel.Visible = show;
+                Logger.LogInfo("Panel toggled: target=" + (show ? "open" : "closed") + " " + Panel.Describe());
             }
             try
             {
