@@ -13,6 +13,33 @@ namespace MortalHelper.Game
         public double Number;
     }
 
+    // Numeric edits occur inside an already established native wait. Completed
+    // dialogue/choice events follow them, so edits must replay before that wait.
+    internal static class StoryNumericEdits
+    {
+        internal static string Pack(string kind, string waitKey, string target)
+        { return kind + ":" + waitKey + "\n" + target; }
+        internal static string WaitKey(AnytimeStoryEvent entry, string kind)
+        {
+            if (entry == null || entry.Kind != "Numeric" || entry.Key == null || !entry.Key.StartsWith(kind + ":", StringComparison.Ordinal)) return null;
+            int split = entry.Key.IndexOf('\n');
+            return split < kind.Length + 2 ? null : entry.Key.Substring(kind.Length + 1, split - kind.Length - 1);
+        }
+        internal static int Apply(AnytimeStoryEvent[] events, int cursor, string kind, string key, Action<string, int, int> apply)
+        {
+            while (cursor < events.Length && key != null && events[cursor] != null && events[cursor].Kind == "Numeric" && WaitKey(events[cursor], kind) == key)
+            {
+                var entry = events[cursor];
+                if (double.IsNaN(entry.Number) || double.IsInfinity(entry.Number) || entry.Number < int.MinValue ||
+                    entry.Number > int.MaxValue || entry.Number != Math.Truncate(entry.Number)) throw new InvalidDataException("数值修改记录无效。");
+                string target = entry.Key.Substring(entry.Key.IndexOf('\n') + 1);
+                if (string.IsNullOrEmpty(target) || target.Length > 128) throw new InvalidDataException("数值修改目标无效。");
+                apply(target, entry.Choice, (int)entry.Number); cursor++;
+            }
+            return cursor;
+        }
+    }
+
     [Serializable]
     internal sealed class AnytimeLuaValue
     {

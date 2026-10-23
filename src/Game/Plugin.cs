@@ -82,12 +82,12 @@ namespace MortalHelper.Game
                     if (StoryRecovery.Recording) StoryRecovery.Stop();
                     if (StoryReplay.Active) StoryReplay.Stop("实验恢复已停用；请通过原生读档解除保护锁。");
                 }
-                AnytimeStory.Tick(); AnytimeDuel.Tick();
+                AnytimeDice.Tick(); AnytimeStory.Tick(); AnytimeDuel.Tick();
                 // Re-assert the input lock: a scene created during a replay starts
                 // with its input modules enabled.
                 InteractionLock.Refresh();
                 NativeLoadBoundary.CheckStalled();
-                DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick();
+                DiceAdapter.Tick(); ProgressionTools.Maintain(); Titles.Tick(); StoryReplay.Tick();
 #if !NO_PROBE
                 Probe.Tick();
 #endif
@@ -319,7 +319,7 @@ namespace MortalHelper.Game
         {
             "story", "story-recovery", "story-recall", "battle-duel", "battle-group",
             "growth", "growth-relation", "numeric-books", "numeric-miscs",
-            "numeric-special", "numeric-consumables", "save", "language", "badge",
+            "numeric-special", "numeric-consumables", "map", "save", "language", "badge",
             "numeric-attributes-anchor", "numeric-items-anchor", "numeric-speed-anchor", "story-notice"
         };
 
@@ -359,10 +359,12 @@ namespace MortalHelper.Game
                     Panel.Page = 3;
                     int category = view == "numeric-books" ? 0 : view == "numeric-miscs" ? 1 : view == "numeric-special" ? 2 : 3;
                     Panel.SetTourPosition(0, category); break;
-                case "save":
+                case "map":
                     Panel.Page = 4; break;
-                case "language":
+                case "save":
                     Panel.Page = 5; break;
+                case "language":
+                    Panel.Page = 6; break;
                 case "badge":
                     Panel.Visible = false; break;
             }

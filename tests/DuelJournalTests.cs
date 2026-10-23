@@ -35,7 +35,7 @@ internal static class DuelJournalTests
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         using (var sha = SHA256.Create())
-        { writer.Write(Encoding.ASCII.GetBytes("MHDL-03\n")); writer.Write(payload.Length);
+        { writer.Write(Encoding.ASCII.GetBytes("MHDL-04\n")); writer.Write(payload.Length);
           writer.Write(payload); writer.Write(sha.ComputeHash(payload)); return stream.ToArray(); }
     }
     public static int Run()
@@ -47,7 +47,7 @@ internal static class DuelJournalTests
             restored.RandomState == original.RandomState && restored.FinalState == original.FinalState &&
             restored.NativeHash == original.NativeHash, "metadata preserved");
         Check(restored.Actions.SequenceEqual(original.Actions), "all actions restored");
-        Check(restored.Format == 3 && restored.OpeningAssists == original.OpeningAssists &&
+        Check(restored.Format == 4 && restored.OpeningAssists == original.OpeningAssists &&
             restored.ActionAssists.SequenceEqual(original.ActionAssists), "differing opening and per-action assist masks restored exactly");
         Check(restored.Draws.Count == 3 && restored.Points.Count == 3, "custom lists present");
         for (int i = 0; i < 3; i++)
@@ -77,6 +77,34 @@ internal static class DuelJournalTests
         Reject(() => DuelJournalCodec.Decode(saved.Concat(new byte[] { 0 }).ToArray()), "trailing byte rejected");
         byte[] legacy = (byte[])saved.Clone(); legacy[6] = (byte)'1';
         Reject(() => DuelJournalCodec.Decode(legacy), "old lossy format rejected");
+        var edited = Example();
+        edited.Edits.Add(new DuelEdit { PointIndex = 0, Key = "stat:體力", Before = 10, After = 50 });
+        edited.Edits.Add(new DuelEdit { PointIndex = 0, Key = "stat:體力", Before = 50, After = 80 });
+        edited.Edits.Add(new DuelEdit { PointIndex = 2, Key = "friend:1001", Before = 1, After = 9 });
+        var editRestored = DuelJournalCodec.Decode(DuelJournalCodec.Encode(edited));
+        Check(editRestored.Edits.Count == 3 && editRestored.Edits[1].PointIndex == 0 &&
+            editRestored.Edits[1].Key == "stat:體力" && editRestored.Edits[1].Before == 50 &&
+            editRestored.Edits[1].After == 80 && editRestored.Edits[2].PointIndex == 2,
+            "multiple numeric edits preserve identity, order, point and old/new values");
+        Check(DuelJournalCodec.Encode(editRestored).SequenceEqual(DuelJournalCodec.Encode(edited)), "edit journal durable exact round trip");
+        var invalidEdit = Example(); invalidEdit.Edits.Add(new DuelEdit { PointIndex = -1, Key = "stat:體力" });
+        Reject(() => DuelJournalCodec.Encode(invalidEdit), "negative edit point rejected");
+        invalidEdit.Edits[0].PointIndex = invalidEdit.Points.Count;
+        Reject(() => DuelJournalCodec.Encode(invalidEdit), "edit beyond recorded point rejected");
+        invalidEdit.Edits[0].PointIndex = 0; invalidEdit.Edits[0].Key = new string('x',129);
+        Reject(() => DuelJournalCodec.Encode(invalidEdit), "oversized edit identity rejected");
+        invalidEdit.Edits[0].Key = null;
+        Reject(() => DuelJournalCodec.Encode(invalidEdit), "missing edit identity rejected");
+        invalidEdit.Edits.Clear(); invalidEdit.Edits.Add(new DuelEdit { PointIndex = 2, Key = "hp" });
+        invalidEdit.Edits.Add(new DuelEdit { PointIndex = 1, Key = "hp" });
+        Reject(() => DuelJournalCodec.Encode(invalidEdit), "out of order edit points rejected");
+        invalidEdit.Edits.Clear(); invalidEdit.Edits.Add(new DuelEdit { PointIndex = 0, Key = "hp", Before = 10, After = 30 });
+        invalidEdit.Edits.Add(new DuelEdit { PointIndex = 0, Key = "hp", Before = 20, After = 40 });
+        Reject(() => DuelJournalCodec.Encode(invalidEdit), "broken edit chain at same point rejected");
+        invalidEdit.Edits = Enumerable.Range(0,DuelJournalCodec.MaxEdits+1).Select(_ => new DuelEdit { PointIndex = 0, Key = "hp" }).ToList();
+        Reject(() => DuelJournalCodec.Encode(invalidEdit), "excessive edit count rejected");
+        invalidEdit.Edits = null;
+        Reject(() => DuelJournalCodec.Encode(invalidEdit), "missing edits list rejected");
         var bad = Example(); bad.Points[2].DrawCount = 2;
         Reject(() => DuelJournalCodec.Encode(bad), "unconsumed draw rejected");
         bad = Example(); bad.Points[2].Digest = Digest("wrong");
@@ -104,6 +132,9 @@ internal static class DuelJournalTests
             Buffer.BlockCopy(BitConverter.GetBytes(int.MaxValue), 0, excessive, offset, 4);
         }
         Reject(() => DuelJournalCodec.Decode(Seal(excessive)), "oversized count rejected before allocation");
+        byte[] excessiveEdits = (byte[])payload.Clone();
+        Buffer.BlockCopy(BitConverter.GetBytes(int.MaxValue), 0, excessiveEdits, excessiveEdits.Length-4, 4);
+        Reject(() => DuelJournalCodec.Decode(Seal(excessiveEdits)), "oversized edit count rejected before allocation");
         // No draws/actions is a legitimate save at the first stable action point.
         var first = Example(); first.Actions.Clear(); first.ActionAssists.Clear(); first.Draws.Clear(); first.Points.RemoveRange(0, 2);
         first.Points[0].DrawCount = 0;
@@ -111,14 +142,18 @@ internal static class DuelJournalTests
         // Produced by the unmodified MHDL-02 production codec before v3 was
         // introduced. This fixture has actions, random draws and checkpoints.
         byte[] v2Fixture = Convert.FromBase64String("TUhETC0wMgqdAQAAAgAAAAUxLjAuMArmsbrprKVfMDAxLHZ2TXRMREZhS0pWMjhxYUNqU2Z0c1d1ekZxVFlYQ2NmTFhsQVJmUHFabzA9CnsiczAiOjEyM30Vc3RhdGU6546p5a626auU5YqbPTQ1AgAAAAIAAAAEAAAAAwAAABBDb21iYXQuZGxsOjEwMDowAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6tb8PRBDb21iYXQuZGxsOjEwMToxAQAAAPf///8VAAAAFAAAAAAAAAAAAAAAAAAAABBDb21iYXQuZGxsOjEwMjoyAgAAAAAAAAAAAAAAAAAAALfmR8AAAChB6tZ8PwMAAAABAAAAAQAAACxwNU43WkxqS3BZOERjaHUydXM5Y2VNc2pYK3ZnNXdzYmhNMlpWQlJob0k0PQIAAAACAAAALEZqWjZyTFo2U2dGOGphaXJsV2dzeXprSVkzZ1BjUlRkb0tEZ3hWWkV4OFE9BAAAAAMAAAAsc2ZKTjdqN09hMVByR1VlR3FxYXRSZ3YwcWRudGpDUm9CejBzLy91ZmZFST0DzLJXFhR7rFn7GTHqYpCN56VxSXwREw/JzgA1CeWD/A==");
+        byte[] v3Fixture = Convert.FromBase64String("TUhETC0wMwqtAQAAAwAAAAUxLjAuMArmsbrprKVfMDAxLHZ2TXRMREZhS0pWMjhxYUNqU2Z0c1d1ekZxVFlYQ2NmTFhsQVJmUHFabzA9CnsiczAiOjEyM30Vc3RhdGU6546p5a626auU5YqbPTQ1AAAAAAIAAAACAAAABAAAAAIAAAAAAAAAAAAAAAMAAAAQQ29tYmF0LmRsbDoxMDA6MAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOrW/D0QQ29tYmF0LmRsbDoxMDE6MQEAAAD3////FQAAABQAAAAAAAAAAAAAAAAAAAAQQ29tYmF0LmRsbDoxMDI6MgIAAAAAAAAAAAAAAAAAAAC35kfAAAAoQerWfD8DAAAAAQAAAAEAAAAscDVON1pMaktwWThEY2h1MnVzOWNlTXNqWCt2ZzV3c2JoTTJaVkJSaG9JND0CAAAAAgAAACxGalo2ckxaNlNnRjhqYWlybFdnc3l6a0lZM2dQY1JUZG9LRGd4VlpFeDhRPQQAAAADAAAALHNmSk43ajdPYTFQckdVZUdxcWF0Umd2MHFkbnRqQ1JvQnowcy8vdWZmRUk9ujZG6GCoNFw+O8sRLctGQUe4k/QexGABipOwMsvjeZ0=");
+        var fromV3 = DuelJournalCodec.Decode(v3Fixture);
+        Check(fromV3.Format == 4 && fromV3.Edits.Count == 0 && fromV3.Actions.SequenceEqual(original.Actions) &&
+            fromV3.Points.Last().Digest == original.Points.Last().Digest, "v3 journal migrates to v4 with no invented edits");
         var migrated = DuelJournalCodec.Decode(v2Fixture);
-        Check(migrated.Format == 3 && migrated.OpeningAssists == 0 &&
-            migrated.ActionAssists.SequenceEqual(new[] { 0, 0 }), "legacy v2 normalizes to explicit unassisted v3");
+        Check(migrated.Format == 4 && migrated.OpeningAssists == 0 &&
+            migrated.ActionAssists.SequenceEqual(new[] { 0, 0 }), "legacy v2 normalizes to explicit unassisted v4");
         Check(migrated.Actions.SequenceEqual(original.Actions) && migrated.Draws.Count == 3 &&
             migrated.Points.Last().Digest == original.Points.Last().Digest && migrated.FinalState == original.FinalState,
             "legacy migration retains actions, RNG and strict target state");
         byte[] rewritten = DuelJournalCodec.Encode(migrated);
-        Check(Encoding.ASCII.GetString(rewritten, 0, 8) == "MHDL-03\n", "migrated save re-encodes as v3");
+        Check(Encoding.ASCII.GetString(rewritten, 0, 8) == "MHDL-04\n", "migrated save re-encodes as v4");
         migrated.Actions.Add(5); migrated.ActionAssists.Add((int)DuelAssist.Damage);
         migrated.FinalState = "legacy continued";
         migrated.Points.Add(new DuelPoint { Round = 5, DrawCount = 3, Digest = Digest(migrated.FinalState) });

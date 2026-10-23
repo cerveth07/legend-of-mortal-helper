@@ -8,14 +8,16 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<bool> ExperimentalRecovery;
         public readonly ConfigEntry<bool> Enabled, Hints, ShowEffects, ShowConditions, ShowBranches, DiagnoseScript;
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
+        public readonly ConfigEntry<float> DiceX, DiceY;
         public readonly ConfigEntry<bool> DuelHealth, DuelStamina, DuelDodge, DuelDamage, DuelZeroDamage, DuelAlwaysHit, DuelFirstStrike;
-        public readonly ConfigEntry<bool> GroupHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
+        public readonly ConfigEntry<bool> GroupHealth, GroupAllyHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
         public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge, PracticeLimit, CheckpointLog;
         public readonly ConfigEntry<string> Point;
         public readonly ConfigEntry<KeyCode> Toggle;
         public readonly ConfigEntry<float> X, Y, Width, Height;
         public readonly ConfigEntry<float> Speed;
         public readonly ConfigEntry<int> SlotCount;
+        public readonly ConfigEntry<int> LegendSlotCount;
         public readonly ConfigEntry<bool> SortRecent, AnytimeSave;
         public readonly ConfigEntry<bool> TraditionalChinese;
 #if !NO_PROBE
@@ -45,6 +47,7 @@ namespace MortalHelper.Game
             DuelAlwaysHit = config.Bind("Duel", "AlwaysHit", false, "敌方基础闪避失效，主角攻击不会落空；一击必杀已自动包含。");
             DuelFirstStrike = config.Bind("Duel", "FirstStrike", false, "行动对比必定主角成功、敌方失败；一击必杀已自动包含。");
             GroupHealth = config.Bind("GroupBattle", "KeepHealth", false, "群战主角生命不因普通伤害降低；仍可能硬直。");
+            GroupAllyHealth = config.Bind("GroupBattle", "KeepAllyHealth", false, "群战友军生命不因扣血降低；不影响主角、敌军与中立单位，剧情退场保留。");
             GroupMana = config.Bind("GroupBattle", "FullMana", false, "群战主角气力维持满值。");
             GroupCooldown = config.Bind("GroupBattle", "InstantCooldown", false, "群战技能栏不受冷却限制；保留原生施放条件。");
             GroupFreeze = config.Bind("GroupBattle", "FreezeTime", false, "冻结群战剩余时间；保留战斗事件进度，靠倒计时归零获胜的关卡需关闭。");
@@ -65,10 +68,14 @@ namespace MortalHelper.Game
                 new ConfigDescription("面板背景透明度，范围 40%～100%。", new AcceptableValueRange<float>(0.4f, 1f)));
             BadgeX = config.Bind("Window", "BadgeX", 12f, "收起徽章左上角 X 坐标。");
             BadgeY = config.Bind("Window", "BadgeY", 12f, "收起徽章左上角 Y 坐标。");
+            DiceX = config.Bind("Window", "DiceX", -1f, "控骰条横向位置（屏幕比例）；-1 使用默认位置，拖动后自动保存。");
+            DiceY = config.Bind("Window", "DiceY", -1f, "控骰条纵向位置（屏幕比例）；-1 使用默认位置，拖动后自动保存。");
             SlotCount = config.Bind("Save", "SlotCount", 0,
                 new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
+            LegendSlotCount = config.Bind("Save", "LegendSlotCount", 30,
+                new ConfigDescription("通关故事栏位上限；先显示原生12格，存满后每次追加6格。已有更高编号的故事仍保留可见。", new AcceptableValueRange<int>(12, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
-            AnytimeSave = config.Bind("Save", "AnytimeSave", false, "允许在可验证的剧情停点或单挑行动点使用原生编号槽存档；实验功能，默认关闭。");
+            AnytimeSave = config.Bind("Save", "AnytimeSave", false, "允许在剧情对话、选项、骰子稳定等待页或单挑行动点使用原生编号槽存档；实验功能，默认关闭。");
             TraditionalChinese = config.Bind("Window", "TraditionalChinese", false, "面板使用繁體中文；关闭时使用简体中文。");
 #if !NO_PROBE
             SelfTest = config.Bind("Diagnostics", "SelfTest", false, "只读检测：记录当前场景与 API 状态，不读档、不改进度或配置。");

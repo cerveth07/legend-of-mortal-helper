@@ -24,6 +24,14 @@ internal static class StoryContracts
         Check(decoded.ExpectedGlobals[0].Boolean && decoded.ExpectedGlobals[1].Number == Math.PI, "expected scalar state");
         Check(decoded.BaselineGlobals[0].Entries[0].KeyKind == "n", "numeric table keys preserved");
         Check(decoded.BaselineLuaRandomState == "lua0" && decoded.LuaRandomState == "lua1", "independent random states");
+        record.WaitKind = "Dice"; record.WaitKey = "identity|2|17|23|2|1|99|0|29|1";
+        record.Events = new[] { new AnytimeStoryEvent { Kind = "DiceRoll", Key = "0|29", Choice = 1 },
+            new AnytimeStoryEvent { Kind = "Dice", Choice = 17, Number = 2 } };
+        decoded = AnytimeStoryCodec.Read(AnytimeStoryCodec.Write(record));
+        Check(decoded.WaitKind == "Dice" && decoded.WaitKey == record.WaitKey, "full stable dice target preserved");
+        Check(decoded.Events[0].Kind == "DiceRoll" && decoded.Events[0].Key == "0|29" && decoded.Events[0].Choice == 1,
+            "reroll range and paid-fate history preserved");
+        Check(decoded.Events[1].Choice == 17 && decoded.Events[1].Number == 2, "raw dice and forced selection remain independent");
         record.Events = new AnytimeStoryEvent[0]; record.BaselineGlobals = record.ExpectedGlobals = new AnytimeLuaValue[0];
         Check(AnytimeStoryCodec.Read(AnytimeStoryCodec.Write(record)).Events.Length == 0, "zero events at first dialogue");
         foreach (string bad in new[] { "{}", "MHA3\n!!", encoded.Substring(0, encoded.Length - 12), "MHA3\n" + Convert.ToBase64String(new byte[] {3, 0, 0, 0, 255, 255, 255, 127}) })

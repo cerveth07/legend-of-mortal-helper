@@ -47,7 +47,7 @@ def run_tests(dotnet, compiler=None, base=None, framework=None):
             ROOT / 'src' / 'Game' / name for name in
             ['UiLanguage.cs', 'AnytimeStoryCodec.cs', 'AnytimeDuelJournal.cs', 'DuelSaveMenuState.cs']]
         suites = [ROOT / 'tests' / name for name in
-                  ['Contracts.cs', 'StoryContracts.cs', 'DuelJournalTests.cs', 'DuelSaveMenuStateTests.cs']]
+                  ['Contracts.cs', 'TitleContracts.cs', 'NumericEditContracts.cs', 'StoryContracts.cs', 'DuelJournalTests.cs', 'DuelSaveMenuStateTests.cs']]
         run_compiler(dotnet, compiler, base + ['-target:exe', '-out:' + str(test_exe)] +
                      ['-r:' + str(framework / n) for n in ['mscorlib.dll', 'System.dll', 'System.Core.dll']] +
                      pure + suites, output / 'tests.rsp')

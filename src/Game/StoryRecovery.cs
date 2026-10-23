@@ -151,7 +151,8 @@ namespace MortalHelper.Game
                 player.Relationships == null || player.Relationships.List == null)
                 throw new InvalidDataException("必要的原生状态源未初始化，无法验证精确恢复。");
 
-            string nativeJson = save.GetCurrentSaveData();
+            // Preserve legacy digest formatting when no title metadata is present.
+            string nativeJson = Titles.StripMetadataJson(save.GetCurrentSaveData());
             string missionJson = JsonUtility.ToJson(mission);
             var facts = new List<string>
             {

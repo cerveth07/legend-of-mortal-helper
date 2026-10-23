@@ -47,6 +47,20 @@ namespace MortalHelper.Game
         }
     }
 
+    // Protect the final health deduction: TakeDamage can override a zero input,
+    // and damage-over-time can reach ModifyHealth without calling TakeDamage.
+    [HarmonyPatch(typeof(CharacterHealth), "ModifyHealth")]
+    internal static class GroupAllyHealthPatch
+    {
+        private static void Prefix(CharacterHealth __instance, ref int __0)
+        {
+            if (__0 >= 0 || __instance.CurrentHealth <= 0 || !Plugin.CanModifyProgress ||
+                !Plugin.Instance.Options.GroupAllyHealth.Value) return;
+            var character = __instance.GetComponent<Character>();
+            if (GroupBattleTools.Is(character, EntityType.Friend)) __0 = 0;
+        }
+    }
+
     [HarmonyPatch(typeof(CharacterMana), "Update")]
     internal static class GroupManaPatch
     {

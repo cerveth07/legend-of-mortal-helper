@@ -60,6 +60,34 @@ namespace MortalHelper.Game
             }
         }
 
+        internal static string NumericEditBlockReason
+        {
+            get
+            {
+                if (failed) return "单挑恢复失败，请重新读取存档。";
+                if (Replaying) return "单挑存档正在恢复，请稍候。";
+                if (!HasCurrentManager || invalid != null) return invalid ?? "请在单挑行动按钮出现后修改。";
+                if (!waiting || journal.Points.Count != journal.Actions.Count + 1)
+                    return "请在双方结算结束、行动按钮出现后修改。";
+                if (journal.Edits.Count >= DuelJournalCodec.MaxEdits) return "本场数值修改记录已达上限。";
+                if (SceneController.Instance == null || SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+                    return "场景仍在切换。";
+                return null;
+            }
+        }
+
+        internal static void RecordNumericEdit(string key, int before, int after)
+        {
+            if (before == after) return;
+            string reason = NumericEditBlockReason;
+            if (reason != null) throw new InvalidOperationException(reason);
+            if (string.IsNullOrEmpty(key) || key.Length > 128) throw new InvalidDataException("单挑数值目标无效。");
+            journal.Edits.Add(new DuelEdit { PointIndex = journal.Actions.Count, Key = key, Before = before, After = after });
+            string state = DuelAudit.Capture(manager);
+            journal.Points[journal.Actions.Count].Digest = Hash(Encoding.UTF8.GetBytes(state));
+            journal.FinalState = state;
+        }
+
         private static int ConfiguredAssists
         {
             get
@@ -330,6 +358,9 @@ namespace MortalHelper.Game
         {
                 if (manager == null || failed || invalid != null) return;
                 lastProgress = Time.unscaledTime;
+                if (replaying)
+                    foreach (var edit in journal.Edits.Where(edit => edit.PointIndex == pointIndex))
+                        NumericEdits.ApplyRecorded(edit.Key, edit.Before, edit.After);
                 string state = DuelAudit.Capture(manager);
                 string digest = Hash(Encoding.UTF8.GetBytes(state));
                 int round = manager.CurrentRounds;
@@ -792,6 +823,8 @@ namespace MortalHelper.Game
             audit.Walk("level", battle.CombatLevel, true, 0);
             audit.Walk("enemy-intent", AccessTools.Field(typeof(CombatManager), "_enemyActionResult")?.GetValue(battle), true, 0);
             var save = (GameSave)CreateNative.Invoke(SaveSystem.Instance, null);
+            // Only this comparison-owned snapshot is normalized, including its restore data.
+            Titles.StripMetadata(save);
             string restore = save.RestoreData;
             save.RestoreData = null;
             audit.Walk("campaign", save, true, 0);

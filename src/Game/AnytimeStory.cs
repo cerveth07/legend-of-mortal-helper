@@ -108,6 +108,7 @@ namespace MortalHelper.Game
         private static AnytimeStoryRecord pendingRecord, playback;
         private static int cursor, tokenSerial;
         private static int? replayDice;
+        private static int replayDiceSelection;
         private static bool sceneReady, targetReached;
         private static bool returningTitle;
         private static float targetAt, lastProgress;
@@ -134,13 +135,58 @@ namespace MortalHelper.Game
                     !string.Equals(active, scene, StringComparison.Ordinal) ||
                     !SameScript(script, PlayerStatManagerData.Instance?.CurrentStoryScript))
                     return "当前剧情尚未建立可重放的脚本起点。";
-                if (WaitTokens.Count != 1 || (WaitKinds[0] != "Say" && WaitKinds[0] != "Choose"))
-                    return "请在对话或选项稳定等待时存档。";
-                if (DiceAdapter.Dialog != null && DiceAdapter.Dialog.isActiveAndEnabled)
-                    return "轮盘判定进行中，请完成后再存档。";
+                if (AnytimeDice.Active)
+                {
+                    if (AnytimeDice.SaveKey == null) return "轮盘正在演出或提交，请在掷骰前或结果页等待时存档。";
+                }
+                else if (DiceAdapter.Dialog != null && DiceAdapter.Dialog.isActiveAndEnabled)
+                    return "当前轮盘尚未建立可恢复的等待状态。";
+                else if (WaitTokens.Count != 1 || (WaitKinds[0] != "Say" && WaitKinds[0] != "Choose"))
+                    return "请在对话、选项或骰子稳定等待时存档。";
                 if (Events.Count >= MaximumEvents) return "本段剧情记录过长，请继续到下一个脚本后存档。";
                 return null;
             }
+        }
+
+        internal static string NumericEditBlockReason
+        {
+            get
+            {
+                if (pendingRecord != null) return "正在保存存档，请稍候。";
+                if (NumericShopRefresh.Open) return null;
+                if (Events.Count >= MaximumEvents) return "本段记录已满，请进入下一段剧情后修改。";
+                if (AnytimeDice.Active)
+                    return AnytimeDice.SaveKey == null ? "请等轮盘动画结束后修改。" : null;
+                if (WaitTokens.Count != 1 || (WaitKinds[0] != "Say" && WaitKinds[0] != "Choose"))
+                    return "请在对话、选项或骰子停稳后修改。";
+                return null;
+            }
+        }
+        internal static void RecordNumericEdit(string key, int before, int after)
+        {
+            if (NumericShopRefresh.Open)
+            {
+                // Native shop transactions are not part of the story journal.
+                // Never certify a same-script save that could not replay them.
+                invalid = "商店中已修改数值，请进入下一段剧情后再保存中途档。";
+                return;
+            }
+            string kind = AnytimeDice.Active ? "Dice" : WaitKinds[0];
+            string wait = AnytimeDice.Active ? AnytimeDice.SaveKey : WaitKeys[0];
+            Record(new AnytimeStoryEvent { Kind = "Numeric", Key = StoryNumericEdits.Pack(kind, wait, key), Choice = before, Number = after });
+        }
+        private static void ReplayNumericEdits(string kind, string key)
+        {
+            int next = StoryNumericEdits.Apply(playback.Events, cursor, kind, key, NumericEdits.ApplyRecorded);
+            if (next != cursor) { cursor = next; lastProgress = Time.unscaledTime; }
+        }
+        internal static void ReplayDiceNumericEdits()
+        {
+            if (!Replaying || cursor >= playback.Events.Length) return;
+            string recorded = StoryNumericEdits.WaitKey(playback.Events[cursor], "Dice");
+            if (recorded == null) return;
+            AnytimeDice.RestoreTargetRange(recorded);
+            ReplayNumericEdits("Dice", AnytimeDice.SaveKey);
         }
 
         internal static bool BeforeNativeSave(string slot)
@@ -174,7 +220,8 @@ namespace MortalHelper.Game
                     throw new InvalidDataException("此槽位缺少必需的单挑附档，请先恢复完整备份。");
                 var record = new AnytimeStoryRecord {
                     Client = Application.version, Baseline = baseline, Script = script, Scene = scene,
-                    WaitKind = WaitKinds[0], WaitKey = WaitKeys[0],
+                    WaitKind = AnytimeDice.Active ? "Dice" : WaitKinds[0],
+                    WaitKey = AnytimeDice.Active ? AnytimeDice.SaveKey : WaitKeys[0],
                     BaselineRandomState = baselineRandomState,
                     RandomState = JsonUtility.ToJson(UnityEngine.Random.state),
                     BaselineLuaRandomState = baselineLuaRandomState,
@@ -274,6 +321,7 @@ namespace MortalHelper.Game
 
         internal static void BeforeNativeLoad()
         {
+            AnytimeDice.Reset();
             playback = null; Failed = Verified = false; Failure = null;
             sceneReady = targetReached = returningTitle = false; replayDice = null; UnlockInput();
         }
@@ -314,11 +362,11 @@ namespace MortalHelper.Game
                 record.BaselineGlobals == null || record.ExpectedGlobals == null ||
                 string.IsNullOrEmpty(record.BaselineRandomState) || string.IsNullOrEmpty(record.RandomState) ||
                 string.IsNullOrEmpty(record.BaselineLuaRandomState) || string.IsNullOrEmpty(record.LuaRandomState) ||
-                (record.WaitKind != "Say" && record.WaitKind != "Choose"))
+                (record.WaitKind != "Say" && record.WaitKind != "Choose" && record.WaitKind != "Dice"))
                 throw new InvalidDataException("剧情附加记录缺少可重放的起点或目标。");
             if (record.Events.Length > MaximumEvents) throw new InvalidDataException("剧情事件记录超限。");
             foreach (var entry in record.Events)
-                if (entry == null || (entry.Kind != "Say" && entry.Kind != "Choose" && entry.Kind != "Random" && entry.Kind != "Dice"))
+                if (entry == null || (entry.Kind != "Say" && entry.Kind != "Choose" && entry.Kind != "Random" && entry.Kind != "Dice" && entry.Kind != "DiceRoll" && entry.Kind != "Numeric"))
                     throw new InvalidDataException("剧情事件类型无效。");
             // Native PlayerStatManagerData.Load resumes StartStoryScript, not
             // CurrentStoryScript (which its Save never writes). Use the recorded
@@ -358,15 +406,20 @@ namespace MortalHelper.Game
             if (!sceneReady || !targetReached || Time.unscaledTime - targetAt < .25f) return;
             try
             {
-                if (cursor != playback.Events.Length || WaitTokens.Count != 1 ||
-                    WaitKinds[0] != playback.WaitKind || WaitKeys[0] != playback.WaitKey)
+                if (cursor != playback.Events.Length || (playback.WaitKind == "Dice"
+                    ? AnytimeDice.SaveKey == null || AnytimeDice.SaveKey != playback.WaitKey
+                    : WaitTokens.Count != 1 || WaitKinds[0] != playback.WaitKind || WaitKeys[0] != playback.WaitKey))
                     throw new InvalidDataException("对话等待点与记录不同。");
+                if (!SameGlobals(CaptureGlobals(lua), playback.ExpectedGlobals))
+                    throw new InvalidDataException("Lua 剧情变量与存档内容不同。");
+                // Native Save copies the live Unity RNG into FreeRandomState.
+                // Presentation also consumes that RNG while replaying, so restore
+                // the recorded target seed before taking the verification snapshot.
+                // Keep every native field, including all four RNG words, checked.
+                UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.RandomState);
                 string actual = Snapshot();
                 if (!SameSnapshot(actual, playback.Expected))
                     throw new InvalidDataException("剧情状态与存档内容不同。" + SnapshotMismatch(playback.Expected, actual));
-                if (!SameGlobals(CaptureGlobals(lua), playback.ExpectedGlobals))
-                    throw new InvalidDataException("Lua 剧情变量与存档内容不同。");
-                UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.RandomState);
                 RestoreLuaRandom(lua, playback.LuaRandomState);
                 baseline = playback.Baseline; baselineGlobals = playback.BaselineGlobals;
                 baselineRandomState = playback.BaselineRandomState;
@@ -375,13 +428,18 @@ namespace MortalHelper.Game
                 Events.Clear(); Events.AddRange(playback.Events);
                 playback = null; Verified = true; UnlockInput();
                 StoryReplay.OnNativeLoadCompleted();
-                if (Plugin.Instance != null) Plugin.Instance.Status = "剧情已恢复到存档对话或选项，状态核对通过。";
+                if (Plugin.Instance != null)
+                {
+                    Plugin.Instance.Status = "剧情已恢复到存档位置，状态核对通过。";
+                    Plugin.Instance.Log("[Anytime] " + Plugin.Instance.Status);
+                }
             }
             catch (Exception error) { Fail(error.Message); }
         }
 
         internal static void Reset()
         {
+            AnytimeDice.Reset();
             AbortNativeSave(); playback = null; Verified = Failed = false; Failure = null;
             blockedReason = null;
             lua = null; script = scene = baseline = baselineRandomState = baselineLuaRandomState = invalid = null; baselineGlobals = null;
@@ -461,6 +519,7 @@ namespace MortalHelper.Game
             if (Failed) throw new InvalidDataException(Failure);
             string key = Digest(text);
             if (!Replaying) return false;
+            ReplayNumericEdits("Say", key);
             if (cursor == playback.Events.Length) { Reach("Say", key); return false; }
             var next = playback.Events[cursor];
             if (next.Kind != "Say" || next.Key != key) AbortReplay("剧情对话顺序与存档不同。");
@@ -472,7 +531,8 @@ namespace MortalHelper.Game
             if (Failed) throw new InvalidDataException(Failure);
             if (!Replaying) return 0;
             string digest = Digest(key);
-            if (cursor == playback.Events.Length) { Reach("Choose", digest); return 0; }
+            ReplayNumericEdits("Choose", digest);
+            if (cursor == playback.Events.Length) { if (playback.WaitKind != "Dice") Reach("Choose", digest); return 0; }
             var next = playback.Events[cursor];
             if (next.Kind != "Choose" || next.Key != digest || next.Choice < 1 || next.Choice > count)
                 AbortReplay("剧情选项与存档不同。");
@@ -496,12 +556,14 @@ namespace MortalHelper.Game
         internal static void BeforeDice(ref int random)
         {
             if (Failed) throw new InvalidDataException(Failure);
-            if (!Replaying) return;
+            if (!Replaying) { AnytimeDice.InjectRollRaw(random); return; }
             if (cursor >= playback.Events.Length || playback.Events[cursor].Kind != "Dice")
                 AbortReplay("轮盘判定次数与存档不同。");
+            replayDiceSelection = (int)playback.Events[cursor].Number;
             replayDice = playback.Events[cursor++].Choice;
             lastProgress = Time.unscaledTime;
             random = replayDice.Value;
+            AnytimeDice.InjectRollRaw(random);
         }
         internal static void AfterDice(DiceCheckResult result)
         {
@@ -510,11 +572,36 @@ namespace MortalHelper.Game
             {
                 if (!replayDice.HasValue || result == null || result.Random != replayDice.Value)
                     AbortReplay("轮盘判定结果与存档不同。");
-                replayDice = null;
+                if (replayDiceSelection > 0) result.Result = replayDiceSelection;
+                replayDice = null; replayDiceSelection = 0;
             }
             else if (result != null)
-                Record(new AnytimeStoryEvent { Kind = "Dice", Choice = result.Random });
+                Record(new AnytimeStoryEvent { Kind = "Dice", Choice = result.Random, Number = result.Result });
         }
+        internal static bool TryPeekDiceRoll(out string key, out int paid)
+        {
+            key = null; paid = 0;
+            if (!Replaying || cursor >= playback.Events.Length || playback.Events[cursor].Kind != "DiceRoll") return false;
+            var entry = playback.Events[cursor]; key = entry.Key; paid = entry.Choice; return true;
+        }
+        internal static void RecordDiceRoll(string key, int paid)
+        {
+            if (Failed) throw new InvalidDataException(Failure);
+            if (!Replaying) { Record(new AnytimeStoryEvent { Kind = "DiceRoll", Key = key, Choice = paid }); return; }
+            string expected; int expectedPaid;
+            if (!TryPeekDiceRoll(out expected, out expectedPaid) || expected != key || paid != expectedPaid)
+                AbortReplay("骰子范围或命运消耗与记录不同。");
+            cursor++; lastProgress = Time.unscaledTime;
+        }
+        internal static bool ReachDice(string key)
+        {
+            if (!Replaying || cursor != playback.Events.Length || playback.WaitKind != "Dice") return false;
+            AnytimeDice.RestoreTargetRange(playback.WaitKey);
+            if (AnytimeDice.SaveKey != playback.WaitKey) AbortReplay("骰子等待状态与存档不同。");
+            if (!targetReached) { targetReached = true; targetAt = Time.unscaledTime; } return true;
+        }
+        internal static void FailDice(string reason)
+        { if (Replaying) Fail(reason); else invalid = "骰子存档不可用：" + reason; }
         internal static bool SkipWait()
         {
             if (Failed) throw new InvalidDataException(Failure);
@@ -627,6 +714,9 @@ namespace MortalHelper.Game
         {
             var a = JsonUtility.FromJson<GameSave>(left); var b = JsonUtility.FromJson<GameSave>(right);
             if (a == null || b == null) return false;
+            // Display preferences belong to the save, but are not gameplay state.
+            Titles.StripMetadata(a);
+            Titles.StripMetadata(b);
             a.TimeTick = b.TimeTick = 0;
             return JsonUtility.ToJson(a) == JsonUtility.ToJson(b);
         }

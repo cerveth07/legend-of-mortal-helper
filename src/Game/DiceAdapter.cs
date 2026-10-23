@@ -59,7 +59,12 @@ namespace MortalHelper.Game
                 root.transform.SetParent(reference.transform.parent, false);
                 widget = root.AddComponent<DiceWidget>();
                 widget.Initialize(reference);
+                // Keep the existing world placement, but put controls above the
+                // native result panel's transparent raycast surface.
+                root.transform.SetParent(Dialog.transform, true);
+                widget.RestorePosition();
             }
+            widget.transform.SetAsLastSibling();
             widget.gameObject.SetActive(true);
             Session.Rearm(CanReroll());
             BindChoices();
@@ -147,6 +152,8 @@ namespace MortalHelper.Game
 
         internal static bool Commit()
         {
+            if (AnytimeDice.Submitting) return true;
+            if (AnytimeStory.Replaying) return false;
             if (!Enabled || Dialog == null) return true;
             if (!Ready || (StoryReplay.Active && !replaySubmitting) ||
                 (!StoryReplay.Active && !Plugin.Instance.Gate.CanInteract) ||
@@ -163,6 +170,7 @@ namespace MortalHelper.Game
 
         internal static bool AllowShortcut(bool reroll)
         {
+            if (AnytimeStory.Replaying) return false;
             if (!Enabled || Dialog == null) return true;
             return Ready && Plugin.Instance.Gate.CanInteract && ValidInput() &&
                 (nativeInvocation || (!GameAccess.Typing && !Plugin.Instance.Panel.Visible)) &&
@@ -171,6 +179,7 @@ namespace MortalHelper.Game
 
         internal static void BeforeRoll(ref int random)
         {
+            if (AnytimeStory.Replaying) return;
             if (!Enabled || Dialog == null) return;
             // Covers the native automatic-dice route without depending on a click event.
             if (Session.Phase == RollPhase.Input && !Commit()) return;
@@ -195,7 +204,7 @@ namespace MortalHelper.Game
 
         internal static void AfterRoll(DiceCheckResult result)
         {
-            if (Enabled && Session.Phase == RollPhase.Committed && result != null && Session.RequestedOption.HasValue)
+            if (!AnytimeStory.Replaying && Enabled && Session.Phase == RollPhase.Committed && result != null && Session.RequestedOption.HasValue)
                 result.Result = Session.RequestedOption.Value;
             // Replay injects the raw roll, so the tape must store Random, not the
             // bonus-adjusted Result.
@@ -275,7 +284,7 @@ namespace MortalHelper.Game
     {
         private static bool Prefix(ref bool __result)
         {
-            if (!DiceAdapter.Enabled || StoryReplay.Active) return true;
+            if ((!DiceAdapter.Enabled && !AnytimeStory.Replaying) || StoryReplay.Active) return true;
             __result = true;
             return false;
         }
@@ -317,7 +326,7 @@ namespace MortalHelper.Game
             foreach (string name in new[] { "NextInputAction", "DestinyAction", "RangeAction" })
                 yield return AccessTools.Method(typeof(DiceMenuDialog), name);
         }
-        private static bool Prefix() { return !DiceAdapter.Enabled || (!GameAccess.Typing && !Plugin.Instance.Panel.Visible); }
+        private static bool Prefix() { return !AnytimeStory.Replaying && (!DiceAdapter.Enabled || (!GameAccess.Typing && !Plugin.Instance.Panel.Visible)); }
     }
 
     [HarmonyPatch(typeof(DiceMenuDialog), "GetPressInput")]
@@ -325,7 +334,12 @@ namespace MortalHelper.Game
     {
         private static void Postfix(DiceMenuDialog __instance, ref bool __result)
         {
-            if (DiceAdapter.Enabled && __instance == DiceAdapter.Dialog)
+            if (AnytimeDice.WaitingForStart)
+            {
+                __result = GameAccess.Field<bool>(__instance, "_pressStartButton");
+                GameAccess.Field<MenuToggleButton>(__instance, "_startButton").gameObject.SetActive(true);
+            }
+            if (!AnytimeStory.Replaying && DiceAdapter.Enabled && __instance == DiceAdapter.Dialog)
                 __result = !GameAccess.Typing && DiceAdapter.ValidInput() && __result;
         }
     }

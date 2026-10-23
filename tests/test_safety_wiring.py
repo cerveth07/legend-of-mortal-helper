@@ -18,6 +18,20 @@ def between(text, start, end):
 
 
 class SafetyWiringTests(unittest.TestCase):
+    def test_story_target_rng_restored_before_native_snapshot(self):
+        story = read("src/Game/AnytimeStory.cs")
+        target = between(story, 'throw new InvalidDataException("对话等待点与记录不同。")',
+                         'baseline = playback.Baseline;')
+        # Native Save reads the live RNG. A replay can consume it differently for
+        # presentation even when events/choices and every gameplay field agree.
+        rng = "UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.RandomState);"
+        self.assertLess(target.index("SameGlobals("), target.index(rng))
+        self.assertLess(target.index(rng), target.index("string actual = Snapshot();"))
+        self.assertLess(target.index("string actual = Snapshot();"), target.index("SameSnapshot(actual, playback.Expected)"))
+        comparison = between(story, "private static bool SameSnapshot(string left, string right)",
+                             "private static AnytimeLuaValue[] CaptureGlobals(")
+        self.assertNotIn("FreeRandomState =", comparison)
+
     def test_unmarked_native_combat_load_has_no_required_companion(self):
         duel = read("src/Game/AnytimeDuel.cs")
         load = between(duel, "internal static bool PrepareLoad(", "internal static void AfterNativeLoadScene()")
@@ -195,7 +209,7 @@ class SafetyWiringTests(unittest.TestCase):
         self.assertIn("GUI.GetNameOfFocusedControl() == name", panel)
         self.assertIn("Plugin.Instance?.Panel?.EditingTextField == true", access)
         self.assertEqual(panel.count("GUILayout.TextField("), 1)
-        self.assertEqual(panel.count("EditableTextField("), 8)
+        self.assertEqual(panel.count("EditableTextField("), 9)
 
     def test_lua_random_and_unsupported_table_checks_remain(self):
         story = read("src/Game/AnytimeStory.cs")

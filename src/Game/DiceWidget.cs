@@ -1,23 +1,82 @@
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace MortalHelper.Game
 {
-    public sealed class DiceWidget : MonoBehaviour
+    public sealed class DiceWidget : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
     {
         private InputField input;
         private Text message;
         private Text title, placeholder, clearText;
-        private Button clear;
+        private Button clear, save;
+        private Text saveText;
         private bool updating;
+        private bool dragging;
+        private Vector2 dragOffset;
+        private readonly Vector3[] corners = new Vector3[4];
+
+        private Camera UiCamera
+        {
+            get
+            {
+                var canvas = GetComponentInParent<Canvas>();
+                return canvas == null || canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
+            }
+        }
+
+        internal void RestorePosition()
+        {
+            var options = Plugin.Instance.Options;
+            if (options.DiceX.Value >= 0f && options.DiceY.Value >= 0f)
+                MoveTo(new Vector2(options.DiceX.Value * Screen.width, options.DiceY.Value * Screen.height));
+        }
+
+        public void OnBeginDrag(PointerEventData data)
+        {
+            // Only the background/title area drags; editing and buttons keep their own gestures.
+            if (data.button != PointerEventData.InputButton.Left || data.pointerPressRaycast.gameObject != gameObject) return;
+            dragging = true;
+            dragOffset = RectTransformUtility.WorldToScreenPoint(UiCamera, transform.position) - data.position;
+        }
+
+        public void OnDrag(PointerEventData data)
+        {
+            if (dragging) MoveTo(data.position + dragOffset);
+        }
+
+        public void OnEndDrag(PointerEventData data)
+        {
+            if (!dragging) return;
+            dragging = false;
+            Vector2 point = RectTransformUtility.WorldToScreenPoint(UiCamera, transform.position);
+            Plugin.Instance.Options.DiceX.Value = point.x / Screen.width;
+            Plugin.Instance.Options.DiceY.Value = point.y / Screen.height;
+        }
+
+        private void MoveTo(Vector2 point)
+        {
+            var rect = (RectTransform)transform;
+            Camera camera = UiCamera;
+            Vector2 current = RectTransformUtility.WorldToScreenPoint(camera, transform.position);
+            rect.GetWorldCorners(corners);
+            Vector2 min = RectTransformUtility.WorldToScreenPoint(camera, corners[0]);
+            Vector2 max = RectTransformUtility.WorldToScreenPoint(camera, corners[2]);
+            point.x = Mathf.Clamp(point.x, current.x - min.x + 8f, Screen.width - (max.x - current.x) - 8f);
+            point.y = Mathf.Clamp(point.y, current.y - min.y + 8f, Screen.height - (max.y - current.y) - 8f);
+            Vector3 world;
+            if (RectTransformUtility.ScreenPointToWorldPointInRectangle((RectTransform)transform.parent, point, camera, out world))
+                transform.position = world;
+        }
 
         internal void Initialize(Text reference)
         {
             var root = (RectTransform)transform;
             root.anchorMin = root.anchorMax = new Vector2(.5f, 0f);
             root.pivot = new Vector2(.5f, 0f);
-            root.anchoredPosition = new Vector2(0, 24);
-            root.sizeDelta = new Vector2(420, 96);
+            // Keep helper controls beside the wheel, clear of its face and the options below.
+            root.anchoredPosition = new Vector2(560, 120);
+            root.sizeDelta = new Vector2(540, 96);
             var background = gameObject.AddComponent<Image>();
             background.color = new Color(.08f, .09f, .1f, .95f);
             title = AddText("", reference, new Vector2(12, 51), new Vector2(110, 34));
@@ -35,7 +94,12 @@ namespace MortalHelper.Game
             clear = buttonObject.AddComponent<Button>(); clear.targetGraphic = buttonImage;
             clearText = AddText("", reference, Vector2.zero, new Vector2(108,34), buttonObject.transform);
             clear.onClick.AddListener(() => { Plugin.Instance.Options.Point.Value = ""; input.text = ""; });
-            message = AddText("", reference, new Vector2(12,8), new Vector2(396,36));
+            var saveObject = Box("SaveDice", new Vector2(420, 51), new Vector2(108, 34));
+            var saveImage = saveObject.AddComponent<Image>(); saveImage.color = new Color(.35f,.30f,.19f);
+            save = saveObject.AddComponent<Button>(); save.targetGraphic = saveImage;
+            saveText = AddText("", reference, Vector2.zero, new Vector2(108,34), saveObject.transform);
+            save.onClick.AddListener(AnytimeDice.OpenSaveMenu);
+            message = AddText("", reference, new Vector2(12,8), new Vector2(516,36));
             message.fontSize = 17;
         }
 
@@ -45,6 +109,8 @@ namespace MortalHelper.Game
             title.text = UiLanguage.Convert("基础点数", traditional);
             placeholder.text = UiLanguage.Convert("留空为随机", traditional);
             clearText.text = UiLanguage.Convert("自然掷骰", traditional);
+            saveText.text = UiLanguage.Convert("存档", traditional);
+            save.interactable = AnytimeNative.CanOffer;
             updating = true;
             if (!input.isFocused) input.text = Plugin.Instance.Options.Point.Value;
             updating = false;

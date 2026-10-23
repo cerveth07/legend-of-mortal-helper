@@ -44,6 +44,11 @@ try {
     Assert (($load.Parameters.Count -eq 1) -and ($load.Parameters[0].ParameterType.FullName -eq 'Mortal.Core.GameSave')) 'native load boundary receives GameSave as __0'
     $scene = Get-GameMethod (Get-GameType 'Mortal.Core' 'SceneController') 'StartLoadScene'
     Assert (($scene.ReturnType.FullName -eq 'System.Collections.IEnumerator') -and ($scene.Parameters[0].ParameterType.FullName -eq 'System.String')) 'scene load observer receives scene name and native IEnumerator'
+    $player = Get-GameType 'Mortal.Core' 'PlayerStatManagerData'
+    $saveOps = Operands (Get-GameMethod $player 'Save')
+    Assert (($saveOps -contains 'UnityEngine.Random/State UnityEngine.Random::get_state()') -and ($saveOps -contains 'Mortal.Core.UnityRandomState Mortal.Core.GameSave::FreeRandomState')) 'native save snapshot captures live Unity random state'
+    $loadOps = Operands (Get-GameMethod $player 'Load')
+    Assert (($loadOps -contains 'Mortal.Core.UnityRandomState Mortal.Core.PlayerStatManagerData::_freeRandomState') -and !($loadOps -contains 'System.Void UnityEngine.Random::set_state(UnityEngine.Random/State)')) 'native load stores free random seed without restoring Unity RNG'
     $sourceRoot = Join-Path $PSScriptRoot '../src'
     $targets = @()
     foreach ($file in Get-ChildItem $sourceRoot -Recurse -Filter '*.cs') {

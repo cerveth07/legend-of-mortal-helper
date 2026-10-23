@@ -19,16 +19,13 @@ namespace MortalHelper.Game
         private const float MinWidth = 400f;
         private const float MinHeight = 570f;
 
-        private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "存档设置", "语言" };
+        private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "地图", "存档设置", "语言" };
         private static readonly string[] StoryViews = { "剧情", "回想" };
         private static readonly string[] ItemViews = { "书籍", "杂物", "贵重品", "消耗品" };
         private static readonly string[] BattleViews = { "单挑", "群战" };
-        private static readonly string[] GrowthViews = { "养成", "人际" };
+        private static readonly string[] GrowthViews = { "养成", "人际", "称号" };
         private static readonly string[] Lovers = { "自己", "小师妹", "瑞杏", "叶云裳", "虞小梅", "上官萤", "夏侯兰", "郁竹", "魏菊", "龙湘" };
-        private static readonly HashSet<string> Editable = new HashSet<string>(new[] {
-            "銀兩","個人貢獻度","門派資產","門派名聲","門派人數","向心力","心理衛生","武學點數","鍛造","毒藥",
-            "體力","內力","武功拳掌","武功暗器","武功刀劍","輕功","學問","嘴力","抗毒","抗麻",
-            "性情","處世","道德","修養","命運","陰陽內功" });
+        private static readonly HashSet<string> Editable = NumericEdits.Stats;
         private static readonly string[] StatFamilies = { "全部", "资源门派", "人物状态", "武学技艺", "才学性情", "抗性" };
         private static readonly Dictionary<string, int> StatFamilyOf = new Dictionary<string, int> {
             { "銀兩", 1 }, { "個人貢獻度", 1 }, { "門派資產", 1 }, { "門派名聲", 1 }, { "門派人數", 1 }, { "向心力", 1 },
@@ -48,6 +45,7 @@ namespace MortalHelper.Game
 
         private readonly Plugin plugin;
         private readonly PanelStyle style = new PanelStyle();
+        private readonly MapViewer map = new MapViewer();
         private Rect windowRect;
         private Rect shownRect;
         private Rect masterRect;
@@ -80,8 +78,9 @@ namespace MortalHelper.Game
         private readonly Vector2[] scroll = new Vector2[Pages.Length];
         private GameItemType itemType = GameItemType.雜物;
         private string itemSearch = "", search = "";
-        private bool showAllItems, loggedBadge;
+        private bool showAllItems, loggedBadge, showAllTitles;
         private string slotComment = "", commentSlot, slotCountText = "";
+        private string legendSlotCountText = "";
         private int recoverySlot = 1;
         private GameObject blocker;
         private RectTransform blockerRect;
@@ -109,6 +108,7 @@ namespace MortalHelper.Game
                 else
                 {
                     if (!open || closing) return;
+                    map.EndDrag();
                     animFrom = shownRect.width > 1f ? shownRect : ClampWindow();
                     animTo = BadgeRect();
                     closing = true;
@@ -122,7 +122,7 @@ namespace MortalHelper.Game
         // list, matching the previous panel's shortcut.
         internal void OpenSaveSettings()
         {
-            page = 4;
+            page = 5;
             commentSlot = null;
             Visible = true;
         }
@@ -539,6 +539,7 @@ namespace MortalHelper.Game
             float contentWidth = ContentWidth();
             float viewportWidth = ViewportWidth();
             float horizontalPadding = style.Skin != null ? style.Skin.window.padding.horizontal : 32f;
+            if (page == 4) viewportWidth = Mathf.Max(120f * s, shownRect.width - horizontalPadding);
             float sideMargin = Mathf.Max(0f, (shownRect.width - horizontalPadding - viewportWidth) * .5f);
             GUILayout.BeginHorizontal(GUILayout.ExpandHeight(true));
             if (sideMargin > .5f) GUILayout.Space(sideMargin);
@@ -547,27 +548,30 @@ namespace MortalHelper.Game
             if (!features) UiLabel(AnytimeDuel.ApplyingRecordedAssists ?
                 "辅助已暂停；单挑当前行动按开始时设置完成，下次行动关闭辅助。" :
                 "万象录辅助功能已暂停。", style.Description);
-            // Body width always reserves the scrollbar gutter. Hide its visual track
-            // when content fits; showing/hiding it never changes text wrapping.
-            scroll[page] = GUILayout.BeginScrollView(scroll[page], false, false, GUIStyle.none,
-                GUI.skin.verticalScrollbar, GUIStyle.none, GUILayout.ExpandHeight(true));
-            GUILayout.BeginVertical(GUIStyle.none, GUILayout.Width(contentWidth), GUILayout.ExpandWidth(false));
-            firstSection = true;
-            if (features || page >= 4)
+            if (page == 4) MapPage();
+            else
             {
-                switch (page)
+                // Body width reserves the scrollbar gutter, keeping text wrapping stable.
+                scroll[page] = GUILayout.BeginScrollView(scroll[page], false, false, GUIStyle.none,
+                    GUI.skin.verticalScrollbar, GUIStyle.none, GUILayout.ExpandHeight(true));
+                GUILayout.BeginVertical(GUIStyle.none, GUILayout.Width(contentWidth), GUILayout.ExpandWidth(false));
+                firstSection = true;
+                if (features || page >= 5)
                 {
-                    case 0: StoryPage(); break;
-                    case 1: BattlePage(); break;
-                    case 2: GrowthPage(); break;
-                    case 3: NumericPage(); break;
-                    case 4: SavePage(); break;
-                    case 5: LanguagePage(); break;
+                    switch (page)
+                    {
+                        case 0: StoryPage(); break;
+                        case 1: BattlePage(); break;
+                        case 2: GrowthPage(); break;
+                        case 3: NumericPage(); break;
+                        case 5: SavePage(); break;
+                        case 6: LanguagePage(); break;
+                    }
                 }
+                GUILayout.Space(16f * s);
+                GUILayout.EndVertical();
+                GUILayout.EndScrollView();
             }
-            GUILayout.Space(16f * s);
-            GUILayout.EndVertical();
-            GUILayout.EndScrollView();
             if (!string.IsNullOrEmpty(statusForLayout))
             {
                 GUILayout.Space(6f * s);
@@ -581,6 +585,21 @@ namespace MortalHelper.Game
             GUILayout.EndVertical();
             GUILayout.EndHorizontal();
             DrawBottomBar();
+        }
+
+        private void MapPage()
+        {
+            GUILayout.BeginHorizontal(GUILayout.Height(RowH));
+            UiLabel("崆峒派地图", style.SectionTitle);
+            GUILayout.FlexibleSpace();
+            if (UiButton("复位", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
+                map.ResetView();
+            GUILayout.EndHorizontal();
+            Rect area = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none,
+                GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true), GUILayout.MinHeight(120f * scale));
+            map.Draw(area, style, Localize);
+            GUILayout.Space(6f * scale);
+            UiLabel("滚轮缩放 · 拖动查看", style.Description);
         }
 
         // The master switch lives in the title bar so every page keeps its full height.
@@ -798,6 +817,7 @@ namespace MortalHelper.Game
             else
             {
                 plugin.Options.GroupHealth.Value = on;
+                plugin.Options.GroupAllyHealth.Value = on;
                 plugin.Options.GroupMana.Value = on;
                 plugin.Options.GroupCooldown.Value = on;
                 plugin.Options.GroupFreeze.Value = on;
@@ -830,6 +850,8 @@ namespace MortalHelper.Game
         {
             plugin.Options.GroupHealth.Value = DrawSwitchRow("主角生命不减少", plugin.Options.GroupHealth.Value,
                 "仍会硬直；友军与剧情退场按原生规则。");
+            plugin.Options.GroupAllyHealth.Value = DrawSwitchRow("友军生命不减少", plugin.Options.GroupAllyHealth.Value,
+                "仅保护友军；仍会硬直，剧情退场保留。");
             plugin.Options.GroupMana.Value = DrawSwitchRow("气力保持充足", plugin.Options.GroupMana.Value,
                 "只影响群战气力条。");
             plugin.Options.GroupCooldown.Value = DrawSwitchRow("技能无冷却", plugin.Options.GroupCooldown.Value,
@@ -845,6 +867,7 @@ namespace MortalHelper.Game
             int view = ViewTabs(growthView, GrowthViews);
             if (view != growthView) { growthView = view; loverDraftLoaded = false; scroll[2] = Vector2.zero; }
             if (growthView == 1) { Relationships(); return; }
+            if (growthView == 2) { TitlesPage(); return; }
             Note("以下选项只在自由活动场景空闲时生效；练功与锻造炼丹两组按操作前后恢复点数与金钱。");
             Section("练功");
             plugin.Options.PracticeLimit.Value = DrawSwitchRow("解除修炼点数消耗上限", plugin.Options.PracticeLimit.Value,
@@ -861,6 +884,46 @@ namespace MortalHelper.Game
             Section("日常行动");
             plugin.Options.UnlimitedActions.Value = DrawSwitchRow("无限日常行动点", plugin.Options.UnlimitedActions.Value,
                 "行动点至少为 1 且不减；日期不会因点数用完前进。");
+        }
+
+        private void TitlesPage()
+        {
+            Section("称号");
+            if (!GameAccess.Loaded) { Note("请先开始游戏或读取存档。"); return; }
+            int selected = Titles.History.Selected;
+            Note("当前显示：" + Titles.DisplayName(selected >= 0 ? selected : Titles.Current));
+            Note("剧情称号：" + Titles.DisplayName(Titles.Current));
+            bool canChoose = GameAccess.CanEditValues;
+            bool enabled = GUI.enabled;
+            GUI.enabled = enabled && canChoose && selected >= 0;
+            if (UiButton(selected < 0 ? "已跟随剧情" : "跟随剧情", style.ButtonStyle, GUILayout.Height(RowH)))
+                deferred.Enqueue(() => plugin.Status = Titles.Choose(-1));
+            GUI.enabled = enabled;
+            showAllTitles = DrawSwitchRow("显示全部称号", showAllTitles, "包含未获得称号，可自由选择外观。");
+            Note("记录与选择随当前存档保存，新开游戏互不继承。旧档只能确认当前称号；从安装本功能后开始记录新获得的称号。");
+            if (!canChoose) Note("请在自由活动时，关闭游戏内菜单后修改。");
+            Section(showAllTitles ? "全部称号" : "已获得称号");
+            // Catalog IDs come from the native language table, never global history.
+            for (int id = 0; id <= 25; id++)
+            {
+                bool acquired = Titles.History.Contains(id);
+                if (!showAllTitles && !acquired) continue;
+                if (Titles.Name(id) == null) continue;
+                GUILayout.BeginHorizontal();
+                UiLabel(Titles.DisplayName(id) + (acquired ? "" : "（未获得）"), style.Entry,
+                    GUILayout.Width(Mathf.Max(120f * scale, ContentWidth() - 78f * scale)));
+                GUILayout.Space(8f * scale);
+                GUI.enabled = enabled && canChoose && selected != id;
+                if (UiButton(selected == id ? "使用中" : "使用", style.ButtonStyle, GUILayout.Width(70f * scale), GUILayout.Height(RowH)))
+                {
+                    int choice = id;
+                    deferred.Enqueue(() => plugin.Status = Titles.Choose(choice));
+                }
+                GUI.enabled = enabled;
+                GUILayout.EndHorizontal();
+                GUILayout.Space(6f * scale);
+            }
+            Note("仅替换显示称号；剧情判定与原生称号数值保持原样。选择后请正常存档。");
         }
 
         private void Relationships()
@@ -1003,9 +1066,9 @@ namespace MortalHelper.Game
         {
             var player = PlayerStatManagerData.Instance;
             if (player == null) { Note("尚未进入游戏进度；读档后这里会列出可改的属性。"); return; }
-            bool editable = GameAccess.CanEditValues ||
+            bool editable = GameAccess.CanEditNumbers ||
                 (plugin != null && plugin.Gate.CanInteract && plugin.Options.PreviewEditable.Value);
-            if (!editable) Note("当前不能修改（战斗中 / 加载中 / 恢复中）；下面是只读预览。");
+            if (!editable) Note(GameAccess.NumericEditBlockReason + " 下面是只读预览。");
             GUILayout.BeginHorizontal();
             UiLabel("筛选", style.Description, GUILayout.Width(45f * scale));
             searchEdit = EditableTextField("stat-search", searchEdit, 80, GUILayout.ExpandWidth(true));
@@ -1065,7 +1128,7 @@ namespace MortalHelper.Game
                 if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
                 {
                     int number;
-                    if (!GameAccess.CanEditValues) plugin.Status = "预览或恢复锁定中：不能修改属性。";
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
                     else if (!player.Stats.List.Contains(stat)) plugin.Status = "属性列表已变化，请重新打开本页。";
                     else if (!int.TryParse(buffer, out number) || number < stat.Min || number > stat.Max)
                         plugin.Status = name + " 必须在 " + stat.Min + "～" + stat.Max + " 之间。";
@@ -1074,11 +1137,10 @@ namespace MortalHelper.Game
                         try
                         {
                             int old = stat.Value;
-                            plugin.Gate.NotifyMutation("修改属性 " + key);
-                            stat.SetValue(number);
+                            NumericEdits.SetStat(stat, number);
                             statEdits[key] = stat.Value.ToString();
-                            Record("属性 " + name + " " + old + "→" + stat.Value, () => stat.SetValue(old));
-                            plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。";
+                            Record("属性 " + name + " " + old + "→" + stat.Value, () => NumericEdits.SetStat(stat, old));
+                            plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。" + NumericEdits.SaveNote;
                             Flash("stat:" + key);
                         }
                         catch (Exception error) { plugin.Report(error); }
@@ -1091,9 +1153,9 @@ namespace MortalHelper.Game
 
         private void ItemsBody()
         {
-            bool editable = GameAccess.CanEditValues ||
+            bool editable = GameAccess.CanEditNumbers ||
                 (plugin != null && plugin.Gate.CanInteract && plugin.Options.PreviewEditable.Value);
-            if (!editable) Note("当前不能修改（战斗中 / 加载中 / 恢复中）；下面是只读预览。");
+            if (!editable) Note(GameAccess.NumericEditBlockReason + " 下面是只读预览。");
             var database = ItemDatabase.Instance;
             if (database == null) { Note("物品数据库尚未就绪。"); return; }
             int tab = ViewTabs((int)itemType - 1, ItemViews);
@@ -1134,6 +1196,12 @@ namespace MortalHelper.Game
                 GUI.color = itemColor;
                 GUILayout.Space(gap);
                 UiLabel(current, style.Tight, GUILayout.Width(countWidth));
+                if (!editable)
+                {
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(8f * scale);
+                    continue;
+                }
                 if (stacked)
                 {
                     GUILayout.EndHorizontal();
@@ -1147,7 +1215,7 @@ namespace MortalHelper.Game
                 if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
                 {
                     int number;
-                    if (!GameAccess.CanEditValues) plugin.Status = "预览或恢复锁定中：不能修改物品。";
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
                     else if (!int.TryParse(buffer, out number) || number < 0 || number > 999999)
                         plugin.Status = name + " 的数量必须在 0～999999 之间。";
                     else
@@ -1155,11 +1223,12 @@ namespace MortalHelper.Game
                         try
                         {
                             int previous = item.CurrentCount;
-                            plugin.Gate.NotifyMutation("修改物品 " + item.Id);
-                            item.SetCount(number);
+                            NumericEdits.SetItem(itemType, item, number);
                             itemEdits[key] = item.CurrentCount.ToString();
-                            Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => item.SetCount(previous));
-                            plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。";
+                            GameItemType undoType = itemType;
+                            Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => NumericEdits.SetItem(undoType, item, previous));
+                            plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。" +
+                                (NumericShopRefresh.Open ? "商店列表已刷新，待购／待售数量已重置。" : "") + NumericEdits.SaveNote;
                             Flash("item:" + key);
                         }
                         catch (Exception error) { plugin.Report(error); }
@@ -1175,10 +1244,31 @@ namespace MortalHelper.Game
 
         private void SavePage()
         {
+            Section("通关故事栏位");
+            Note("先显示原生12格，存满后每次追加6格；可左右拖动或滚轮浏览。");
+            GUILayout.BeginHorizontal();
+            UiLabel("扩展上限", style.Entry, GUILayout.Width(90f * scale));
+            if (string.IsNullOrEmpty(legendSlotCountText)) legendSlotCountText = plugin.Options.LegendSlotCount.Value.ToString();
+            legendSlotCountText = EditableTextField("legend-slot-count", legendSlotCountText, 3,
+                GUILayout.Width(72f * scale), GUILayout.Height(RowH));
+            if (UiButton("保存上限", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                int count;
+                if (!int.TryParse(legendSlotCountText, out count) || count < 12 || count > 999)
+                    plugin.Status = "故事栏位上限必须是12～999的整数。";
+                else
+                {
+                    plugin.Options.LegendSlotCount.Value = count;
+                    plugin.Options.Config.Save();
+                    plugin.Status = "故事栏位上限已设为" + count + "格；重新打开故事列表后生效。";
+                }
+            }
+            GUILayout.EndHorizontal();
+            Note("已有故事不会删除；更高编号的已存故事仍会显示。");
             Section("随时存档（实验）");
             bool anytime = plugin.Options.AnytimeSave.Value;
             bool nextAnytime = DrawSwitchRow("启用随时存档", anytime,
-                "通过游戏「系统→储存游戏」选择编号槽；仅在可验证的剧情停点和单挑行动点开放。群战现场、轮盘动画和恢复期间仍禁止。");
+                "通过游戏「系统→储存游戏」选择编号槽；骰子页也可点「存档」。支持剧情对话、选项、骰子等待页和单挑行动点；动画、群战与恢复期间不可用。");
             if (nextAnytime != anytime)
             {
                 plugin.Options.AnytimeSave.Value = nextAnytime;
@@ -1572,18 +1662,17 @@ namespace MortalHelper.Game
                 if (UiButton("撤销", style.SubtleStyle, GUILayout.Width(Col(.16f))))
                 {
                     var item = record;
-                    if (!GameAccess.CanEditValues) plugin.Status = "当前场景不能撤销修改。";
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
                     else Defer(() =>
                     {
-                        if (!GameAccess.CanEditValues)
+                        if (!GameAccess.CanEditNumbers)
                         {
                             plugin.Status = "恢复或加载已开始，撤销请求已取消。";
                             return;
                         }
                         try
                         {
-                            plugin.Gate.NotifyMutation("撤销数值修改");
-                            item.Undo(); editLog.Remove(item); plugin.Status = "已撤销：" + item.Label;
+                            item.Undo(); editLog.Remove(item); plugin.Status = "已撤销：" + item.Label + "。" + NumericEdits.SaveNote;
                         }
                         catch (Exception error) { plugin.Status = "撤销失败：" + error.Message; }
                     });
@@ -1700,6 +1789,7 @@ namespace MortalHelper.Game
         }
         internal void Dispose()
         {
+            map.Dispose();
             if (blocker != null) UnityEngine.Object.Destroy(blocker);
             style.Dispose();
             if (ownedBodyFont != null) UnityEngine.Object.Destroy(ownedBodyFont);

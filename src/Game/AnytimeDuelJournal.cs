@@ -20,6 +20,12 @@ namespace MortalHelper.Game
         public string Digest;
     }
 
+    internal sealed class DuelEdit
+    {
+        public int PointIndex, Before, After;
+        public string Key;
+    }
+
     [Flags]
     internal enum DuelAssist
     {
@@ -29,13 +35,14 @@ namespace MortalHelper.Game
 
     internal sealed class DuelJournal
     {
-        public int Format = 3;
+        public int Format = 4;
         public int OpeningAssists;
         public List<int> ActionAssists = new List<int>();
         public string Client, SceneKey, NativeHash, RandomState, FinalState;
         public List<int> Actions = new List<int>();
         public List<DuelDraw> Draws = new List<DuelDraw>();
         public List<DuelPoint> Points = new List<DuelPoint>();
+        public List<DuelEdit> Edits = new List<DuelEdit>();
     }
 
     // Explicit fields preserve every draw and float bit. Unity JsonUtility can
@@ -45,7 +52,8 @@ namespace MortalHelper.Game
         internal const int MaxFile = 32 * 1024 * 1024;
         internal const int MaxActions = 10000;
         internal const int MaxDraws = 1000000;
-        private static readonly byte[] Magic = Encoding.ASCII.GetBytes("MHDL-03\n");
+        internal const int MaxEdits = 10000;
+        private static readonly byte[] Magic = Encoding.ASCII.GetBytes("MHDL-04\n");
 
         internal static byte[] Encode(DuelJournal value)
         {
@@ -72,6 +80,9 @@ namespace MortalHelper.Game
                 writer.Write(value.Points.Count);
                 foreach (var point in value.Points)
                 { writer.Write(point.Round); writer.Write(point.DrawCount); writer.Write(point.Digest); }
+                writer.Write(value.Edits.Count);
+                foreach (var edit in value.Edits)
+                { writer.Write(edit.PointIndex); writer.Write(edit.Key); writer.Write(edit.Before); writer.Write(edit.After); }
                 data = stream.ToArray();
             }
             if (data.Length > MaxFile - Magic.Length - 36)
@@ -96,7 +107,8 @@ namespace MortalHelper.Game
                 if (Encoding.ASCII.GetString(header) == "MHDL-01\n")
                     throw new InvalidDataException("旧版单挑附档可能遗漏随机记录，无法保证完整恢复，请重新保存。");
                 bool legacy = Encoding.ASCII.GetString(header) == "MHDL-02\n";
-                if (!legacy && !header.SequenceEqual(Magic)) throw new InvalidDataException("单挑附档头无效。");
+                bool v3 = Encoding.ASCII.GetString(header) == "MHDL-03\n";
+                if (!legacy && !v3 && !header.SequenceEqual(Magic)) throw new InvalidDataException("单挑附档头无效。");
                 int length = reader.ReadInt32();
                 if (length <= 0 || length != bytes.Length - Magic.Length - 36)
                     throw new InvalidDataException("单挑附档长度无效。");
@@ -109,7 +121,7 @@ namespace MortalHelper.Game
                     var value = new DuelJournal { Format = fields.ReadInt32(),
                         Client = fields.ReadString(), SceneKey = fields.ReadString(), NativeHash = fields.ReadString(),
                         RandomState = fields.ReadString(), FinalState = fields.ReadString() };
-                    if (value.Format != (legacy ? 2 : 3))
+                    if (value.Format != (legacy ? 2 : v3 ? 3 : 4))
                         throw new InvalidDataException("单挑附档头与格式版本不一致。");
                     if (!legacy) value.OpeningAssists = fields.ReadInt32();
                     int count = Count(fields, MaxActions, 4);
@@ -129,9 +141,16 @@ namespace MortalHelper.Game
                     count = Count(fields, MaxActions + 1, 10);
                     for (int i = 0; i < count; i++) value.Points.Add(new DuelPoint {
                         Round = fields.ReadInt32(), DrawCount = fields.ReadInt32(), Digest = fields.ReadString() });
+                    if (!legacy && !v3)
+                    {
+                        count = Count(fields, MaxEdits, 13);
+                        for (int i = 0; i < count; i++) value.Edits.Add(new DuelEdit {
+                            PointIndex = fields.ReadInt32(), Key = fields.ReadString(),
+                            Before = fields.ReadInt32(), After = fields.ReadInt32() });
+                    }
                     if (payload.Position != payload.Length)
                         throw new InvalidDataException("单挑附档包含未识别内容。");
-                    value.Format = 3;
+                    value.Format = 4;
                     Validate(value);
                     return value;
                 }
@@ -148,14 +167,27 @@ namespace MortalHelper.Game
 
         internal static void Validate(DuelJournal value)
         {
-            if (value == null || value.Format != 3 || string.IsNullOrEmpty(value.Client) ||
+            if (value == null || value.Format != 4 || string.IsNullOrEmpty(value.Client) ||
                 string.IsNullOrEmpty(value.SceneKey) || string.IsNullOrEmpty(value.NativeHash) ||
                 string.IsNullOrEmpty(value.RandomState) || string.IsNullOrEmpty(value.FinalState) ||
-                value.Actions == null || value.Points == null || value.Draws == null || value.ActionAssists == null ||
+                value.Actions == null || value.Points == null || value.Draws == null || value.ActionAssists == null || value.Edits == null ||
                 value.ActionAssists.Count != value.Actions.Count ||
-                value.Actions.Count > MaxActions || value.Draws.Count > MaxDraws ||
+                value.Actions.Count > MaxActions || value.Draws.Count > MaxDraws || value.Edits.Count > MaxEdits ||
                 value.Points.Count != value.Actions.Count + 1)
                 throw new InvalidDataException("单挑记录结构不完整。");
+            int priorEditPoint = -1;
+            var editValues = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var edit in value.Edits)
+            {
+                if (edit == null || edit.PointIndex < priorEditPoint || edit.PointIndex < 0 ||
+                    edit.PointIndex >= value.Points.Count || string.IsNullOrEmpty(edit.Key) || edit.Key.Length > 128)
+                    throw new InvalidDataException("单挑数值修改记录无效。");
+                if (edit.PointIndex != priorEditPoint) editValues.Clear();
+                if (editValues.TryGetValue(edit.Key, out int previous) && previous != edit.Before)
+                    throw new InvalidDataException("单挑同一行动点的数值修改记录不连续。");
+                editValues[edit.Key] = edit.After;
+                priorEditPoint = edit.PointIndex;
+            }
             ValidateAssistMask(value.OpeningAssists);
             foreach (int assists in value.ActionAssists) ValidateAssistMask(assists);
             if (value.Actions.Any(action => action < 0 || action > 7))
