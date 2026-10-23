@@ -17,8 +17,9 @@ namespace MortalHelper.Game
             var root = (RectTransform)transform;
             root.anchorMin = root.anchorMax = new Vector2(.5f, 0f);
             root.pivot = new Vector2(.5f, 0f);
-            root.anchoredPosition = new Vector2(0, 24);
-            root.sizeDelta = new Vector2(420, 96);
+            // Keep helper controls beside the wheel, clear of its face and the options below.
+            root.anchoredPosition = new Vector2(560, 120);
+            root.sizeDelta = new Vector2(540, 96);
             var background = gameObject.AddComponent<Image>();
             background.color = new Color(.08f, .09f, .1f, .95f);
             title = AddText("", reference, new Vector2(12, 51), new Vector2(110, 34));
@@ -41,7 +42,7 @@ namespace MortalHelper.Game
             save = saveObject.AddComponent<Button>(); save.targetGraphic = saveImage;
             saveText = AddText("", reference, Vector2.zero, new Vector2(108,34), saveObject.transform);
             save.onClick.AddListener(AnytimeDice.OpenSaveMenu);
-            message = AddText("", reference, new Vector2(12,8), new Vector2(396,36));
+            message = AddText("", reference, new Vector2(12,8), new Vector2(516,36));
             message.fontSize = 17;
         }
 
