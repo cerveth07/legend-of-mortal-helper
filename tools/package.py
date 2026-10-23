@@ -83,10 +83,13 @@ def main() -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     sources = {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / "src").rglob("*.cs"))}
     tests = {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / "tests").glob("*.cs"))}
+    python_tests = {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / "tests").glob("test_*.py"))}
     if (manifest.get("plugin_sha256") != sha256(plugin) or manifest.get("sources") != sources
-            or manifest.get("tests") != tests or manifest.get("build_script_sha256") != sha256(ROOT / "build.py")
-            or manifest.get("diagnostics") is not False or not isinstance(manifest.get("contract_checks"), int)
-            or manifest["contract_checks"] <= 0):
+            or manifest.get("tests") != tests or manifest.get("python_tests") != python_tests
+            or manifest.get("build_script_sha256") != sha256(ROOT / "build.py")
+            or manifest.get("diagnostics") is not False
+            or not isinstance(manifest.get("contract_checks"), int) or manifest["contract_checks"] <= 0
+            or not isinstance(manifest.get("ally_checks"), int) or manifest["ally_checks"] <= 0):
         parser.error("build is stale, untested or diagnostic; rebuild current sources with build.py --test")
     version_source = (ROOT / "src" / "Game" / "Plugin.cs").read_text(encoding="utf-8")
     if not re.search(r'\[BepInPlugin\("cerveth\.mortal\.helper",\s*"[^"\n]+",\s*"' + re.escape(args.version) + r'"\)\]', version_source):
@@ -105,7 +108,11 @@ def main() -> int:
     shutil.copy2(ROOT / "THIRD_PARTY.md", plugin_root / "THIRD_PARTY.md")
     shutil.copy2(ROOT / "PROVENANCE.md", plugin_root / "PROVENANCE.md")
     shutil.copy2(ROOT / "docs" / "ANYTIME-SAVE-ACCEPTANCE.md", plugin_root / "随时存档验收.md")
-    shutil.copy2(manifest_path, plugin_root / "build-manifest.json")
+    # The build record names the developer's local game/loader assemblies; that is
+    # useful on the build machine and meaningless (and slightly revealing) to users.
+    shipped = {key: value for key, value in manifest.items() if key != "references"}
+    (plugin_root / "build-manifest.json").write_text(
+        json.dumps(shipped, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     make_sums(plugin_root)
     write_zip(plugin_root, out / ("%s-%s-plugin.zip" % (NAME, args.version)))
     made.append(plugin_root)

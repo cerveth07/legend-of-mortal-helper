@@ -6,7 +6,7 @@
 
 数值页改为属性、物品、速度三组折叠，并为 26 项可编辑属性加入六类筛选；修改记录与撤销保留。语言页改为简体／繁体双选，选项文字也随语言转换。面板最小尺寸调整为 400×570，收起徽章为 52×152，字号同步缩小；窄面板的编辑行仍在正文宽度低于 520 时换行。
 
-在独立桌面以最小面板尺寸完成标题场景只读巡视：57 张截图、18 个视图、前台进程未切换，BepInEx 日志没有异常。人工检查了语言页、数值页三组展开图与徽章；发现速度说明在窄面板末尾出现孤立标点，缩短文案后又复拍 57 张，问题消失。再以 640×600 面板和繁体配置复拍 42 张，分类按钮和语言页文字均已转换；配置按字节恢复，玩家存档未变化。截图与日志在 `D:\DSH WORKAREA\_tmp\ui-audit-20261021\merged20261022_final\` 及 `merged20261022_traditional\`，实测屏幕为 1920×1080。巡视没有执行属性修改、语言点击或存档读写，不能替代这些交互的游戏内验收。
+在独立桌面以最小面板尺寸完成标题场景只读巡视：57 张截图、18 个视图、前台进程未切换，BepInEx 日志没有异常。人工检查了语言页、数值页三组展开图与徽章；发现速度说明在窄面板末尾出现孤立标点，缩短文案后又复拍 57 张，问题消失。再以 640×600 面板和繁体配置复拍 42 张，分类按钮和语言页文字均已转换；配置按字节恢复，玩家存档未变化。截图与日志在审核工作区的 `ui-audit-20261021/merged20261022_final/` 及 `merged20261022_traditional/`（本机路径已按开源要求隐去），实测屏幕为 1920×1080。巡视没有执行属性修改、语言点击或存档读写，不能替代这些交互的游戏内验收。
 
 ## 本轮布局调整
 
@@ -30,9 +30,9 @@
 
 ## 前轮字形修复实拍证据
 
-Windows汇总根目录：`D:\DSH WORKAREA\_tmp\ui-audit-20261021`
+Windows 汇总根目录（本机绝对路径从记录中移除，目录结构如下）：`<审核工作区>\ui-audit-20261021`
 
-WSL：`/mnt/d/DSH WORKAREA/_tmp/ui-audit-20261021`
+WSL：`<审核工作区>/ui-audit-20261021`
 
 | 面板尺寸 | 时间目录（汇总根目录之下） | 原图数 | 视图数 |
 |---|---|---:|---:|
@@ -73,15 +73,17 @@ AutoTour禁用交互；每次切换和异步截图后均等待至少0.5秒。每
 本轮确认批保存于同一汇总根目录：
 
 ```text
-Windows:
-D:\DSH WORKAREA\_tmp\ui-audit-20261021\spacing-default-confirm\
-D:\DSH WORKAREA\_tmp\ui-audit-20261021\spacing-small-confirm\
-D:\DSH WORKAREA\_tmp\ui-audit-20261021\spacing-wide-confirm\
+Windows 汇总根目录（本机路径因机器而异，以下为相对结构）:
+<审核工作区>\ui-audit-20261021\
+  spacing-default-confirm\
+  spacing-small-confirm\
+  spacing-wide-confirm\
 
-WSL:
-/mnt/d/DSH WORKAREA/_tmp/ui-audit-20261021/spacing-default-confirm/
-/mnt/d/DSH WORKAREA/_tmp/ui-audit-20261021/spacing-small-confirm/
-/mnt/d/DSH WORKAREA/_tmp/ui-audit-20261021/spacing-wide-confirm/
+WSL（同一目录）:
+<审核工作区>/ui-audit-20261021/
+  spacing-default-confirm/
+  spacing-small-confirm/
+  spacing-wide-confirm/
 ```
 
 各目录下使用独立 `tour-YYYYMMDD-HHMMSS/`，截图数量、实际几何和 DLL SHA-256 待本轮完成后补录，不预先宣称通过。

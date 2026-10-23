@@ -19,6 +19,9 @@ namespace MortalHelper.Game
         private static int? queuedOption;
         private static bool nativeInvocation;
         private static bool replaySubmitting;
+        // A patch body that throws runs inside native game code; reporting the same
+        // failure from a per-frame poll would flood the log, so latch it.
+        private static bool patchFailureReported;
         // The dice controls live in the game UI: the widget is always shown while a
         // wheel is open and clicking an option always picks it. No modes to switch.
         internal static bool Enabled => Plugin.Active;
@@ -26,6 +29,15 @@ namespace MortalHelper.Game
         // of the configured point.
         internal static int? ReplayPoint;
         internal static bool Ready => Enabled && Dialog != null && Dialog.isActiveAndEnabled && Session.Phase == RollPhase.Input;
+
+        // Harmony never catches patch exceptions, so one bad field name would turn a
+        // per-frame patch into a per-frame exception inside native input polling.
+        internal static void ReportPatchFailure(Exception error)
+        {
+            if (patchFailureReported) return;
+            patchFailureReported = true;
+            try { Plugin.Instance?.Report(error); } catch (Exception) { }
+        }
 
         internal static void Open(DiceMenuDialog dialog)
         {
@@ -133,6 +145,7 @@ namespace MortalHelper.Game
             if (!Ready || StoryReplay.Active || !Plugin.Instance.Gate.CanInteract ||
                 pointer.Owner != Dialog || pointer.Generation != Session.Generation) return;
             Button[] buttons = Dialog.CachedButtons;
+            if (buttons == null) return;
             int index = Array.FindIndex(buttons, b => b != null && b.gameObject == pointer.gameObject);
             if (index < 0 || !pointer.gameObject.activeInHierarchy) return;
             queuedOption = index + 1;
@@ -160,10 +173,18 @@ namespace MortalHelper.Game
                 (!nativeInvocation && !replaySubmitting &&
                 (GameAccess.Typing || Plugin.Instance.Panel.Visible))) return false;
             string error;
-            string pointValue = ReplayPoint.HasValue ? ReplayPoint.Value.ToString() : Plugin.Instance.Options.Point.Value;
+            // Culture-independent: ParsePoint reads with InvariantCulture, so a locale
+            // with a non-ASCII negative sign must not be able to round-trip a point.
+            string pointValue = ReplayPoint.HasValue
+                ? ReplayPoint.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : Plugin.Instance.Options.Point.Value;
+            // CachedButtons is legitimately null before the dialog has bound its
+            // choices (BindChoices already guards it); a throw here aborts the
+            // native submit path.
+            Button[] cached = Dialog.CachedButtons;
             bool ok = Session.Commit(Session.Generation, pointValue,
                 GameAccess.Field<int>(Dialog, "_diceMin"), GameAccess.Field<int>(Dialog, "_diceMax"),
-                queuedOption, Dialog.CachedButtons.Length, out error);
+                queuedOption, cached == null ? 0 : cached.Length, out error);
             if (!ok) Plugin.Instance.Status = error;
             return ok;
         }
@@ -304,7 +325,13 @@ namespace MortalHelper.Game
             yield return AccessTools.Method(typeof(DiceMenuDialog), "PressStartButton");
             yield return AccessTools.Method(typeof(DiceMenuDialog), "PressRestartButton");
         }
-        private static bool Prefix() { return DiceAdapter.Commit(); }
+        private static bool Prefix()
+        {
+            // A prefix that throws aborts the native press; falling through to the
+            // native behaviour is the safe answer when the mod cannot decide.
+            try { return DiceAdapter.Commit(); }
+            catch (Exception error) { DiceAdapter.ReportPatchFailure(error); return true; }
+        }
     }
 
     [HarmonyPatch]
@@ -315,7 +342,11 @@ namespace MortalHelper.Game
             yield return AccessTools.Method(typeof(DiceMenuDialog), "RestartButtonClick");
             yield return AccessTools.Method(typeof(DiceMenuDialog), "DestinyRestartAction");
         }
-        private static bool Prefix() { return DiceAdapter.AllowShortcut(true); }
+        private static bool Prefix()
+        {
+            try { return DiceAdapter.AllowShortcut(true); }
+            catch (Exception error) { DiceAdapter.ReportPatchFailure(error); return true; }
+        }
     }
 
     [HarmonyPatch]
@@ -334,13 +365,19 @@ namespace MortalHelper.Game
     {
         private static void Postfix(DiceMenuDialog __instance, ref bool __result)
         {
-            if (AnytimeDice.WaitingForStart)
+            // Runs every frame while a wheel is open: nothing may escape from here.
+            try
             {
-                __result = GameAccess.Field<bool>(__instance, "_pressStartButton");
-                GameAccess.Field<MenuToggleButton>(__instance, "_startButton").gameObject.SetActive(true);
+                if (AnytimeDice.WaitingForStart)
+                {
+                    __result = GameAccess.Field<bool>(__instance, "_pressStartButton");
+                    MenuToggleButton start = GameAccess.Field<MenuToggleButton>(__instance, "_startButton");
+                    if (start != null && start.gameObject != null) start.gameObject.SetActive(true);
+                }
+                if (!AnytimeStory.Replaying && DiceAdapter.Enabled && __instance == DiceAdapter.Dialog)
+                    __result = !GameAccess.Typing && DiceAdapter.ValidInput() && __result;
             }
-            if (!AnytimeStory.Replaying && DiceAdapter.Enabled && __instance == DiceAdapter.Dialog)
-                __result = !GameAccess.Typing && DiceAdapter.ValidInput() && __result;
+            catch (Exception error) { DiceAdapter.ReportPatchFailure(error); }
         }
     }
 

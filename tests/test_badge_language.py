@@ -27,13 +27,30 @@ class BadgeLanguageTests(unittest.TestCase):
         self.assertNotIn('UiLabel(new Rect(badge.x + 2f * s, titleY', body)
         self.assertNotIn('Localize("萬', body)
 
+    @staticmethod
+    def _table(language, name):
+        marker = name + ' = "'
+        start = language.index(marker) + len(marker)
+        return language[start:language.index('"', start)]
+
     def test_language_toggle_still_converts_panel_body_text(self):
         panel = read("src/Game/MainPanel.cs")
         self.assertIn("private string Localize(string text)", panel)
         self.assertIn("private void UiLabel(string text, GUIStyle design", panel)
         language = read("src/Game/UiLanguage.cs")
-        self.assertIn("萬", language)  # table carries 萬 -> 万 in the simplified direction
-        self.assertIn("万", language)
+        s2t_source = self._table(language, "SimplifiedToTraditionalSource")
+        s2t_target = self._table(language, "SimplifiedToTraditionalTarget")
+        t2s_source = self._table(language, "TraditionalToSimplifiedSource")
+        t2s_target = self._table(language, "TraditionalToSimplifiedTarget")
+        # Convert maps by character index, so equal lengths plus the correct pairing is
+        # the actual contract. Merely containing both characters would also pass if the
+        # tables were reversed or shifted.
+        self.assertEqual(len(s2t_source), len(s2t_target), "simplified->traditional tables differ in length")
+        self.assertEqual(len(t2s_source), len(t2s_target), "traditional->simplified tables differ in length")
+        self.assertEqual(s2t_target[s2t_source.index("万")], "萬")
+        self.assertEqual(s2t_target[s2t_source.index("戏")], "戲")
+        self.assertEqual(t2s_target[t2s_source.index("萬")], "万")
+        self.assertEqual(t2s_target[t2s_source.index("戲")], "戏")
 
 
 if __name__ == "__main__":

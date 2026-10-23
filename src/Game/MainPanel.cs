@@ -618,6 +618,13 @@ namespace MortalHelper.Game
             if (next != features)
             {
                 plugin.Options.Enabled.Value = next;
+                if (next && !plugin.RepairPatches())
+                {
+                    // Enabling must not pretend to work when the earlier initialisation
+                    // failure left no patches installed.
+                    plugin.Options.Enabled.Value = false;
+                    plugin.Status = "上次初始化失败，补丁无法恢复；请先按日志处理原因再重启游戏。";
+                }
                 plugin.Options.Config.Save();
             }
         }

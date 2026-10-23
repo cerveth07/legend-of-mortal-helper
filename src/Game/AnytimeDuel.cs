@@ -625,8 +625,11 @@ namespace MortalHelper.Game
         {
             try
             {
+                // Never delete an earlier quarantine: a second stale companion must not
+                // destroy the first one, which may be the only copy left.
                 string target = path + ".stale";
-                if (File.Exists(target)) File.Delete(target);
+                for (int index = 2; File.Exists(target); index++)
+                    target = path + ".stale-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 File.Move(path, target);
             }
             catch (Exception error) { Plugin.Instance?.Report(error); }

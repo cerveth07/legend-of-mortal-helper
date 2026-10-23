@@ -89,9 +89,14 @@ class SafetyWiringTests(unittest.TestCase):
         native = read("src/Game/AnytimeNative.cs")
         begin = between(native, "internal static void BeginLoad(", "internal static void EndLoad(")
         self.assertIn("SettleSlot(loadingSlot, PathFor(loadingSlot))", begin)
+        # Settlement must only run for a numbered slot, and the guard has to precede the
+        # call. (The previous version compared an index against the length of the string
+        # it was taken from, which is true by construction.)
+        self.assertLess(begin.index("!Numbered(loadingSlot)"), begin.index("SettleSlot(loadingSlot"))
+        # The load path that applies a save must be gated on the same numbered check.
         prepare = between(native, "internal static void PrepareLoad(ref GameSave data)", "internal static bool Numbered(")
-        self.assertIn("PrepareLoad", prepare)
-        self.assertLess(begin.index("SettleSlot("), begin.index("EndLoad") if "EndLoad" in begin else len(begin))
+        self.assertIn('Numbered(loadingSlot) && data.CurrentScene == "Combat"', prepare)
+        self.assertIn('Numbered(loadingSlot) && (data.CurrentScene == "Story"', prepare)
 
     def test_settled_journal_finishes_forward_only_for_a_verified_replacement(self):
         native = read("src/Game/AnytimeNative.cs")

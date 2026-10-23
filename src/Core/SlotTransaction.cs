@@ -176,6 +176,7 @@ namespace MortalHelper.Core
                 if (string.IsNullOrEmpty(entry.Path)) throw new InvalidDataException("存档事务日志条目路径为空。");
                 if (entry.Existed && (string.IsNullOrEmpty(entry.OriginalHash) || string.IsNullOrEmpty(entry.BackupPath)))
                     throw new InvalidDataException("存档事务日志缺少原始哈希或备份路径。");
+                RequireOwned(journalPath, index, entry);
                 transaction.entries.Add(entry);
             }
             return transaction;
@@ -294,6 +295,51 @@ namespace MortalHelper.Core
             report.Detail = "已按事务日志恢复到写入前状态。";
             Complete();
             return report;
+        }
+
+        // The journal is plain text inside the player's save folder, so it is
+        // untrusted input: without these checks a crafted journal would turn
+        // Rollback/Complete into an arbitrary file copy or delete. A recorded path
+        // must be the journal's own slot file or one of its companions, and a
+        // recorded backup must be this journal's own .bN copy.
+        private static readonly string[] SlotSuffixes = {
+            "", ".mha", ".mha-required", ".mhduel", ".mhduel-required"
+        };
+
+        private static void RequireOwned(string journalPath, int index, SlotTransactionEntry entry)
+        {
+            try
+            {
+                string journal = Path.GetFullPath(journalPath);
+                string folder = Path.GetDirectoryName(journal);
+                string slot = Path.GetFileName(journal);
+                if (slot.EndsWith(Suffix, StringComparison.OrdinalIgnoreCase))
+                    slot = slot.Substring(0, slot.Length - Suffix.Length);
+                if (string.IsNullOrEmpty(folder) || string.IsNullOrEmpty(slot))
+                    throw new InvalidDataException("存档事务日志所在目录无效。");
+
+                string path = Path.GetFullPath(entry.Path);
+                if (!string.Equals(Path.GetDirectoryName(path), folder, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("存档事务日志条目指向存档目录之外：" + entry.Path);
+                string name = Path.GetFileName(path);
+                bool owned = false;
+                foreach (string suffix in SlotSuffixes)
+                    if (string.Equals(name, slot + suffix, StringComparison.OrdinalIgnoreCase)) { owned = true; break; }
+                if (!owned) throw new InvalidDataException("存档事务日志条目不是该槽位的存档文件：" + entry.Path);
+
+                if (entry.BackupPath != null)
+                {
+                    string expected = Path.GetFullPath(journalPath + ".b" +
+                        index.ToString(CultureInfo.InvariantCulture));
+                    if (!string.Equals(Path.GetFullPath(entry.BackupPath), expected, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("存档事务日志备份路径无效：" + entry.BackupPath);
+                }
+            }
+            catch (InvalidDataException) { throw; }
+            catch (Exception error)
+            {
+                throw new InvalidDataException("存档事务日志条目路径无法解析：" + entry.Path, error);
+            }
         }
 
         private bool CanRestore(SlotTransactionEntry entry)

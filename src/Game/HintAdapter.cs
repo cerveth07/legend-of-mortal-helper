@@ -42,6 +42,15 @@ namespace MortalHelper.Game
                     " · 可对应分支 " + branches.Count;
         }
         internal static void Clear() { Revision++; hovered = null; branches.Clear(); ScriptName = ""; }
+        // Patch bodies run inside native game code, so a failure is reported once and
+        // swallowed instead of escaping into the native method.
+        private static bool patchFailureReported;
+        internal static void PatchFailed(Exception error)
+        {
+            if (patchFailureReported) return;
+            patchFailureReported = true;
+            try { Plugin.Instance?.Report(error); } catch (Exception) { }
+        }
         internal static void Bind(Component target, Text source, Text condition = null)
         {
             var pointer = target.GetComponent<HintPointer>() ?? target.gameObject.AddComponent<HintPointer>();
@@ -168,14 +177,26 @@ namespace MortalHelper.Game
     [HarmonyPatch(typeof(NormalOptionButton), "UpdateContent")]
     internal static class NormalHintPatch
     {
+        // A renamed private field must cost the hint, not leave UpdateContent
+        // half-executed: Harmony never catches postfix exceptions.
         private static void Postfix(NormalOptionButton __instance)
-        { HintAdapter.Bind(__instance, GameAccess.Field<Text>(__instance, "_source")); }
+        {
+            try { HintAdapter.Bind(__instance, GameAccess.Field<Text>(__instance, "_source")); }
+            catch (Exception error) { HintAdapter.PatchFailed(error); }
+        }
     }
 
     [HarmonyPatch(typeof(DiceOption), "UpdateContent")]
     internal static class DiceHintPatch
     {
         private static void Postfix(DiceOption __instance)
-        { HintAdapter.Bind(__instance, GameAccess.Field<Text>(__instance, "_sourceText"), GameAccess.Field<Text>(__instance, "_conditionText")); }
+        {
+            try
+            {
+                HintAdapter.Bind(__instance, GameAccess.Field<Text>(__instance, "_sourceText"),
+                    GameAccess.Field<Text>(__instance, "_conditionText"));
+            }
+            catch (Exception error) { HintAdapter.PatchFailed(error); }
+        }
     }
 }

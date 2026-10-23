@@ -231,7 +231,7 @@ python build.py --test-only
 python tools/check_source.py
 ```
 
-第一条需要 .NET 8 SDK，无需游戏或 BepInEx。离线工作流模板位于 docs/ci/contracts.yml；当前 GitHub OAuth 缺少 workflow scope，服务器拒绝包含 .github/workflows/contracts.yml 的推送。因此模板暂未安装到 Actions 目录；取得对应权限后复制到该目录即可启用，不预先宣称远端通过。历史 `Recovery contract tests` 工作流曾有失败运行（例如 39377273456），已查运行 39377273456：任务未启动，GitHub 提示账户付款失败或需提高开支限额；这属于 Actions 账户额度问题，不是合同断言失败。
+第一条需要 .NET 8 SDK，无需游戏或 BepInEx。离线工作流现位于 `.github/workflows/contracts.yml`，运行源码清点、契约套件、群战盟友血量套件与全部 Python 测试。历史背景：此前 GitHub OAuth 缺少 workflow scope，服务器拒绝包含 `.github/workflows/contracts.yml` 的推送，因此曾以模板形式放在 `docs/ci/contracts.yml` 且从未在远端运行；2026-10-23 起模板已替换为正式工作流，但尚未取得远端运行记录，故仍不宣称远端通过。历史 `Recovery contract tests` 工作流曾有失败运行（例如 39377273456），已查运行 39377273456：任务未启动，GitHub 提示账户付款失败或需提高开支限额；这属于 Actions 账户额度问题，不是合同断言失败。
 
 完整插件编译使用用户本机游戏、加载器和 Roslyn：
 

@@ -16,6 +16,11 @@ source_archives = {}
 if manifest.is_file():
     for item in json.loads(manifest.read_text(encoding='utf-8')).get('sources', []):
         source_archives[manifest.parent / item['path']] = item['sha256']
+# A declared archive that is absent from the tree breaks the redistribution claim just
+# as much as one whose hash changed, so both are errors.
+for path, expected in source_archives.items():
+    if not path.is_file():
+        errors.append('Declared corresponding source archive is missing: ' + str(path.relative_to(root)))
 for path in files:
     if path in source_archives:
         if hashlib.sha256(path.read_bytes()).hexdigest() != source_archives[path]:

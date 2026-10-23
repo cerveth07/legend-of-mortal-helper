@@ -16,14 +16,22 @@ namespace MortalHelper.Game
         private static int loading;
         private static Mortal.Free.FreeManager lastFree;
         private static int lastDisplay = int.MinValue;
+        private static bool refreshFailed;
         internal static void Tick()
         {
             if (loading != 0 || !GameAccess.Loaded) return;
             var free = Mortal.Free.FreeManager.Instance;
             int display = Plugin.Instance.Options.Enabled.Value && History.Selected >= 0 ? History.Selected : Current;
-            if (free != lastFree || display != lastDisplay)
+            if (free == lastFree && display == lastDisplay) return;
+            // Book-keeping happens before the risky call: a throwing Refresh() used to
+            // re-run (and re-log an error) on every frame in free roam.
+            lastFree = free; lastDisplay = display;
+            try { Refresh(); refreshFailed = false; }
+            catch (Exception error)
             {
-                Refresh(); lastFree = free; lastDisplay = display;
+                if (refreshFailed) return;
+                refreshFailed = true;
+                try { Plugin.Instance?.Report(error); } catch (Exception) { }
             }
         }
         internal static int Current => PlayerStatManagerData.Instance?.Stats?.Get(GameStatType.稱號)?.Value ?? -1;

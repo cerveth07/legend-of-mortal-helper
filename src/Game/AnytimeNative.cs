@@ -373,9 +373,11 @@ namespace MortalHelper.Game
             AnytimeDuel.Reset();
             try
             {
-                if (data.CurrentScene == "Combat")
+                // Only numbered slots own the companion files; a game-owned slot name
+                // must never be probed for (or rename) "<slot>.mha*".
+                if (Numbered(loadingSlot) && data.CurrentScene == "Combat")
                     AnytimeDuel.PrepareLoad(loadingSlot, ref data);
-                else if (data.CurrentScene == "Story" || data.CurrentScene == "Break")
+                else if (Numbered(loadingSlot) && (data.CurrentScene == "Story" || data.CurrentScene == "Break"))
                     AnytimeStory.PrepareLoad(loadingSlot, ref data);
             }
             catch (Exception error)

@@ -16,5 +16,7 @@ jobs:
         with:
           python-version: '3.x'
       - run: python tools/check_source.py
+      # Runs the contract suite and the group-battle ally-health suite.
       - run: python build.py --test-only
-      - run: python -m unittest discover -s tests -p test_package.py
+      # All Python suites, not just the packaging one.
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v

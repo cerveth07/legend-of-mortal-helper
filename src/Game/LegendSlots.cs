@@ -14,9 +14,21 @@ namespace MortalHelper.Game
     internal static class LegendSlots
     {
         private static readonly MethodInfo GetPath = AccessTools.Method(typeof(SaveSystem), "GetLegendDataFile");
+        // The handle is resolved by name once. A game update must degrade this single
+        // feature, not throw a NullReferenceException out of a prefix.
+        private static bool missingPathReported;
 
         private static int VisibleCount()
         {
+            if (GetPath == null || SaveSystem.Instance == null)
+            {
+                if (!missingPathReported)
+                {
+                    missingPathReported = true;
+                    Plugin.Instance?.Log("[LegendSlots] SaveSystem.GetLegendDataFile unavailable; legend slot expansion disabled.");
+                }
+                return LegendSlotCapacity.Visible(Plugin.Instance.Options.LegendSlotCount.Value, new List<int>());
+            }
             string path = (string)GetPath.Invoke(SaveSystem.Instance, new object[] { 1 });
             string directory = Path.GetDirectoryName(path);
             var saved = new List<int>();

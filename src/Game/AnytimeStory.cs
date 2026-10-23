@@ -218,6 +218,10 @@ namespace MortalHelper.Game
                     throw new InvalidDataException("此槽位缺少必需的剧情附档，请先恢复完整备份。");
                 if (File.Exists(path + ".mhduel-required") && !File.Exists(path + ".mhduel"))
                     throw new InvalidDataException("此槽位缺少必需的单挑附档，请先恢复完整备份。");
+                // SameScript treats "both sides unavailable" as equal, so the guard above
+                // can pass with an empty script name. PrepareLoad refuses an empty Script,
+                // so committing here would create a slot this plugin can never load again.
+                if (string.IsNullOrEmpty(script)) throw new InvalidDataException("当前剧情尚未建立可重放的脚本起点。");
                 var record = new AnytimeStoryRecord {
                     Client = Application.version, Baseline = baseline, Script = script, Scene = scene,
                     WaitKind = AnytimeDice.Active ? "Dice" : WaitKinds[0],
@@ -233,8 +237,11 @@ namespace MortalHelper.Game
                     string.IsNullOrEmpty(record.BaselineRandomState) || record.BaselineRandomState == "{}" ||
                     string.IsNullOrEmpty(record.RandomState) || record.RandomState == "{}")
                     throw new InvalidDataException("无法序列化游戏随机状态。");
-                if (string.IsNullOrEmpty(record.Expected) || record.Expected.Length > MaximumSidecarBytes)
-                    throw new InvalidDataException("当前进度超出附加记录容量。 ");
+                // The pre-write budget must use the same unit as the encoder (UTF-8
+                // bytes), or an accepted save is rolled back after the native write.
+                if (string.IsNullOrEmpty(record.Expected) ||
+                    Encoding.UTF8.GetByteCount(record.Expected) > AnytimeStoryCodec.Limit)
+                    throw new InvalidDataException("当前进度超出附加记录容量。");
                 // Snapshot the slot before the game writes anything into it.
                 pendingTransaction = SlotTransaction.Begin(JournalFor(path), "story", new[] {
                     path, path + ".mha", path + ".mha-required", path + ".mhduel", path + ".mhduel-required"
@@ -682,6 +689,9 @@ namespace MortalHelper.Game
             string detail;
             try { detail = AnytimeStoryDiagnostics.Difference(expected, actual); }
             catch (Exception error) { detail = "差异解析失败：" + error.Message; }
+#if !NO_PROBE
+            // Development only: these dumps are the complete player progress. The
+            // release build must not write diagnostic artefacts (docs/IMPLEMENTATION.md).
             try
             {
                 string folder = Path.Combine(BepInEx.Paths.BepInExRootPath, "MortalHelperDiagnostics");
@@ -696,6 +706,9 @@ namespace MortalHelper.Game
                 try { Plugin.Instance?.Log("[Anytime] snapshot diagnostics unavailable: " + error.Message + "; " + detail); }
                 catch (Exception) { }
             }
+#else
+            try { Plugin.Instance?.Log("[Anytime] snapshot mismatch: " + detail); } catch (Exception) { }
+#endif
             return detail;
         }
         private static string Snapshot()
@@ -1004,8 +1017,11 @@ namespace MortalHelper.Game
         {
             try
             {
+                // Never delete an earlier quarantine: a second stale sidecar must not
+                // destroy the first one, which may be the only copy left.
                 string target = path + ".stale";
-                if (File.Exists(target)) File.Delete(target);
+                for (int index = 2; File.Exists(target); index++)
+                    target = path + ".stale-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 File.Move(path, target);
             }
             catch (Exception error) { Plugin.Instance?.Report(error); }
@@ -1019,6 +1035,11 @@ namespace MortalHelper.Game
         private static AnytimeStoryRecord ReadRecord(string nativePath, GameSave native)
         {
             string side = nativePath + ".mha";
+            // Stat first: a swapped or corrupted sidecar must be refused before it is
+            // pulled into memory. The codec's own limits are only reached after the read.
+            var probe = new FileInfo(side);
+            if (!probe.Exists || probe.Length <= 0 || probe.Length > MaximumSidecarBytes)
+                throw new InvalidDataException("剧情附加记录大小无效。");
             var bytes = File.ReadAllBytes(side);
             if (bytes.Length == 0 || bytes.Length > MaximumSidecarBytes) throw new InvalidDataException("剧情附加记录大小无效。");
             var record = AnytimeStoryCodec.Read(Encoding.UTF8.GetString(bytes));

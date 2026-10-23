@@ -241,7 +241,15 @@ namespace MortalHelper.Game
         private static class SlotClickPatch
         {
             private static bool Prefix(LoadSlotPanel __instance)
-            { if (!Owns(__instance)) return true; Choose(__instance); return false; }
+            {
+                if (!Owns(__instance)) return true;
+                // Only the Selecting phase may start a slot choice. The slot list stays
+                // clickable while the native overwrite panel is up, and letting that
+                // click reach Select() made it throw and abort the whole save.
+                if (state.Phase != DuelSaveMenuPhase.Selecting) return false;
+                Choose(__instance);
+                return false;
+            }
         }
         [HarmonyPatch(typeof(LoadSlotPanel), "DeleteButtonClick")]
         private static class DeleteClickPatch

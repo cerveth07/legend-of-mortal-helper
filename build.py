@@ -65,6 +65,31 @@ def run_tests(dotnet, compiler=None, base=None, framework=None):
     return int(match.group(1))
 
 
+def run_ally_tests(dotnet, compiler=None, base=None, framework=None):
+    """Group-battle ally-health routing suite; a separate binary because it stubs the
+    Harmony and game types that the contract suite compiles for real."""
+    if compiler:
+        output = ROOT / 'artifacts'
+        ally_exe = output / 'GroupAllyTests.exe'
+        ally_exe.unlink(missing_ok=True)
+        run_compiler(dotnet, compiler, base + ['-target:exe', '-out:' + str(ally_exe)] +
+                     ['-r:' + str(framework / n) for n in ['mscorlib.dll', 'System.dll', 'System.Core.dll']] +
+                     [ROOT / 'src' / 'Game' / 'GroupBattleTools.cs',
+                      ROOT / 'tests' / 'GroupAllyHealthBehavior.cs'], output / 'group-ally.rsp')
+        if os.name != 'nt' and dotnet.lower().endswith('.exe'):
+            ally_exe.chmod(ally_exe.stat().st_mode | 0o111)
+        command = [str(ally_exe)] if os.name == 'nt' or dotnet.lower().endswith('.exe') else ['mono', str(ally_exe)]
+    else:
+        command = [dotnet, 'run', '--project', native_path(ROOT / 'tests' / 'GroupAllyHealth.csproj', dotnet.lower().endswith('.exe')), '--configuration', 'Release']
+    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            errors='replace')
+    print(result.stdout, end='')
+    match = re.search(r'^PASS: ([1-9][0-9]*) production ally-health routing checks', result.stdout, re.M)
+    if result.returncode or not match:
+        raise SystemExit('Group ally-health checks failed or did not report a positive PASS count.')
+    return int(match.group(1))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game', type=Path)
@@ -78,6 +103,7 @@ def main():
     args = parser.parse_args()
     if args.test_only:
         run_tests(args.dotnet)
+        run_ally_tests(args.dotnet)
         return
     if not all((args.game, args.loader, args.compiler)):
         parser.error('--game, --loader and --compiler are required for a plugin build')
@@ -105,13 +131,17 @@ def main():
     run_compiler(args.dotnet, compiler, base + defines + ['-target:library', '-out:' + str(plugin)] +
                  ['-r:' + str(p) for p in references.values()] + compiled, output / 'plugin.rsp')
     count = None
+    ally_count = None
     if args.test:
         framework = args.framework or Path('C:/Windows/Microsoft.NET/Framework64/v4.0.30319' if os.name == 'nt' else '/mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319')
         count = run_tests(args.dotnet, compiler, base, framework)
+        ally_count = run_ally_tests(args.dotnet, compiler, base, framework)
     manifest = {'plugin_sha256': sha256(plugin), 'diagnostics': args.diagnostics, 'contract_checks': count,
+                'ally_checks': ally_count,
                 'sources': {str(p.relative_to(ROOT)): sha256(p) for p in sources},
                 'build_script_sha256': sha256(Path(__file__)),
                 'tests': {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / 'tests').glob('*.cs'))},
+                'python_tests': {str(p.relative_to(ROOT)): sha256(p) for p in sorted((ROOT / 'tests').glob('test_*.py'))},
                 'references': {name: sha256(p) for name, p in references.items()}}
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     print('Build completed. No files were installed in the game.')
