@@ -33,7 +33,7 @@ UI 为用户自制，保留原有界面；不能因代码曾位于旧整合项�
 
 ## 一、功能与用法
 
-`Tab` 打开/收起面板。界面分七页：**剧情辅助 / 战斗辅助 / 养成辅助 / 数值编辑 / 地图 / 存档设置 / 语言**；最后一页可切换简体、繁體中文，设置立即生效并保存。`剧情辅助` 下有「单挑回想」子页，`养成辅助` 下有「人际关系」子页。收起后左侧是竖排「萬象錄」徽章，点击展开、可拖动并记忆位置。底部滑杆调界面透明度（40%～100%），窗口四边/四角均可拖拽缩放，标题栏可拖动移动。
+`Tab` 打开/收起面板。界面分七页：**剧情辅助 / 战斗辅助 / 养成辅助 / 数值编辑 / 地图 / 存档设置 / 语言**；最后一页可切换简体、繁體中文，设置立即生效并保存。`剧情辅助` 下有「单挑回想」子页，`养成辅助` 下有「人际关系」与「称号」子页。收起后左侧是竖排「萬象錄」徽章，点击展开、可拖动并记忆位置。底部滑杆调界面透明度（40%～100%），窗口四边/四角均可拖拽缩放，标题栏可拖动移动。
 
 ### 1. 剧情辅助
 
@@ -90,6 +90,8 @@ UI 为用户自制，保留原有界面；不能因代码曾位于旧整合项�
 
 **人际关系**（子页）：好感编辑（仅已登场角色，0～各自上限，应用前复核当前值）；心上人（九位候选 + 自己，写入 `GameStatType.愛人`，不补齐结缘事件）。
 
+**称号**（子页）：列出本档已获得的称号，点击「使用」替换显示，或选择「跟随剧情」。开启「显示全部称号」可选择未获得称号的外观，但不会把它标为已获得。仅在自由活动空闲时修改；选择与已获记录随当前存档保存，新开游戏、读取不同存档互不混用。旧档首次使用只能确认当前原生称号；后续获得的称号开始累积记录。仅改变展示，剧情使用的原生称号数值保持不变；本功能待用户实机验收。
+
 ### 4. 数值编辑
 
 | 功能 | 用法 | 限制 |
@@ -127,22 +129,30 @@ UI 为用户自制，保留原有界面；不能因代码曾位于旧整合项�
 
 ## 二、安装
 
-历史发行包见 [Releases](../../releases)。本轮准备 **0.1.1 仅插件包**（`mortal-helper-0.1.1-plugin.zip`），尚未发布。需要 Windows x64、游戏和已安装的 BepInEx 6 Mono x64。
+推荐从 [Releases](../../releases) 下载 **`MortalHelper-Setup.exe` 便携安装器**（不要下载 Source code）。本轮0.1.1候选已在本地构建，尚未发布。适用于 Windows 10 / 11 x64。
 
-解压后把 `BepInEx/plugins/cerveth.mortal.helper/MortalHelper.dll` 放入游戏的同名目录。包内附有 `SHA256SUMS.txt`、构建摘要、许可证和来源说明。暂不重新分发含加载器的整合包，待各组件的许可文本、署名和源码供应义务核实后再恢复。
+1. 完全退出游戏，备份存档。
+2. 双击安装器，自动识别 Steam 游戏目录；未找到时点击「选择…」，选择游戏的 `Mortal.exe`。
+3. 点击「安装 / 更新」。首次安装会离线安装所需加载器，已有兼容加载器则保留原样。
+4. 从 Steam 启动游戏，按 `Tab` 打开万象录。
+
+以后用同一安装器更新或卸载。安装器不常驻，不注册服务，无需管理员权限，用完可删除；以后需要时重新下载即可。卸载保留游戏存档和设置；共用或已修改的加载器保留。未做代码签名，下载页提供 `.exe.sha256` 校验文件。
+
+仍提供 **`mortal-helper-0.1.1-plugin.zip` 仅插件包**，供已经安装 BepInEx 6 Mono x64 的用户手动更新。离线安装器附带固定验收版本加载器的许可证、署名和对应源码；见 [安装器说明](installer/README.md) 与 [第三方材料](installer/third-party/THIRD-PARTY-NOTICES.md)。
 
 制作自建包：
 
 ```bash
 python build.py --game "<游戏目录>" --loader "<BepInEx core 目录>" --compiler "<csc.dll>" --test
 python tools/package.py --plugin artifacts/MortalHelper.dll --out dist/0.1.1 --version 0.1.1
+python tools/build_installer.py --plugin artifacts/MortalHelper.dll --loader-zip "<官方be692归档>" --out dist/MortalHelper-Setup.exe --test
 ```
 
 打包器拒绝过期源码、未通过测试或包含开发探测的产物，并拒绝覆盖现有包目录。
 
 如果你更愿意自己装：
 1. **完全退出游戏**，把存档目录整体备份（通常为 `%USERPROFILE%\AppData\LocalLow\Obb Studio\Mortal\<SteamID>`）。
-2. 安装 [BepInEx 6.0.0-be.692](https://github.com/BepInEx/BepInEx)（Unity Mono x64）到游戏目录：解压后应存在 `winhttp.dll`、`doorstop_config.ini`、`.doorstop_version`、`BepInEx\`。
+2. 安装 [BepInEx 6.0.0-be.692](https://builds.bepinex.dev/projects/bepinex_be/692/BepInEx-Unity.Mono-win-x64-6.0.0-be.692%2B851521c.zip)（Unity Mono x64）到游戏目录：解压后应存在 `winhttp.dll`、`doorstop_config.ini`、`.doorstop_version`、`BepInEx\`。
 3. 把 `MortalHelper.dll` 放进 `BepInEx\plugins\`（子目录也可以，例如 `BepInEx\plugins\cerveth.mortal.helper\`）。
 4. 从 Steam 启动游戏，等待加载完成后按 `Tab`。
 
@@ -167,7 +177,7 @@ LegendOfMortal/
 
 - **备份**：退出游戏后复制完整存档目录（含随时存档生成的 `.mha`、`.mha-required`、`.mhduel`、`.mhduel-required`）、`BepInEx\config`（含本插件的 `cerveth.mortal.helper.cfg`、`*.choices.txt`、`*.slots.txt`、`mhr\`）、以及 `BepInEx\plugins` 下的插件。
 - **升级**：替换 `MortalHelper.dll` 即可；配置与记录文件保留。
-- **卸载**：只移走本插件 `MortalHelper.dll`；共用加载器和其他插件应保留。已制作的剧情或单挑中途档依赖插件重放，卸载后应从普通原生存档读取。关闭开关不会删除已有的中途档附加记录，也不会撤销已写入的数值或备注。
+- **卸载**：使用便携安装器的「卸载万象录」；手动安装用户只移走本插件 `MortalHelper.dll`；共用加载器和其他插件应保留。已制作的剧情或单挑中途档依赖插件重放，卸载后应从普通原生存档读取。关闭开关不会删除已有的中途档附加记录，也不会撤销已写入的数值或备注。
 
 ## 四、配置文件
 
@@ -226,7 +236,7 @@ python build.py --game "D:\steam\steamapps\common\LegendOfMortal" `
 - `tools/check_source.py`：检查源码/文档目录没有游戏或旧插件二进制、旧命名空间。
 - `tools/provenance_scan.py`：与旧仓库源码做 token shingle 与最长公共片段比对（启发式，非法律结论）。
 - 离线断言：`tests/Contracts.cs`，只用人工数据与临时目录，不读取玩家存档；本轮完整构建通过 292 项（历史审计为 266 项），后续断言数以运行输出为准。
-- 无游戏依赖的测试：安装 .NET 8 SDK 后运行 `python build.py --test-only`。GitHub Actions 仅执行这组测试与源码清单检查，不构建或分发游戏程序集；首次远程运行结果待推送后确认。
+- 无游戏依赖的测试：安装 .NET 8 SDK 后运行 `python build.py --test-only`。可在不提供游戏程序集的环境执行这组测试和源码清单检查；完整插件构建需要本机游戏依赖。
 - WSL 可传 `--dotnet "/mnt/c/Program Files/dotnet/dotnet.exe"` 使用 Windows 运行时编译；运行时本身不包含 SDK，因此 `--test-only` 需要另有 SDK。`--test` 可用本地 Roslyn 与 .NET Framework 引用运行，无需 SDK。
 
 ## 七、许可证

@@ -87,7 +87,7 @@ namespace MortalHelper.Game
                 // with its input modules enabled.
                 InteractionLock.Refresh();
                 NativeLoadBoundary.CheckStalled();
-                DiceAdapter.Tick(); ProgressionTools.Maintain(); StoryReplay.Tick();
+                DiceAdapter.Tick(); ProgressionTools.Maintain(); Titles.Tick(); StoryReplay.Tick();
 #if !NO_PROBE
                 Probe.Tick();
 #endif

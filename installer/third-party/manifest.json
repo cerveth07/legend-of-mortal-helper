@@ -1,0 +1,94 @@
+{
+  "redistribution_verified": true,
+  "archive_sha256": "9a3472f5eefb35a84ae8c6dea16814b728aff807c67c14fbfd448e20112951a6",
+  "archive_url": "https://builds.bepinex.dev/projects/bepinex_be/692/BepInEx-Unity.Mono-win-x64-6.0.0-be.692%2B851521c.zip",
+  "version": "6.0.0-be.692+851521c",
+  "target": "Unity.Mono-win-x64",
+  "bepinex_commit": "851521cc126e4f9d841d2d9bfe857558f0395939",
+  "verified_date": "2026-10-23",
+  "verification": "Official archive matches local validated loader byte-for-byte. All non-BepInEx managed DLLs match official NuGet net35 binaries. BepInEx and UnityDoorstop unmodified corresponding source archives and upstream licenses accompany offline package.",
+  "sources": [
+    {
+      "path": "BepInEx-851521cc126e4f9d841d2d9bfe857558f0395939-source.zip",
+      "url": "https://codeload.github.com/BepInEx/BepInEx/zip/851521cc126e4f9d841d2d9bfe857558f0395939",
+      "sha256": "fe4c1b18c6c6634fe16d5768958462c99e369adf374848d2a11b391ac21c82b2"
+    },
+    {
+      "path": "UnityDoorstop-v4.3.0-source.zip",
+      "url": "https://codeload.github.com/NeighTools/UnityDoorstop/zip/refs/tags/v4.3.0",
+      "sha256": "63a7364d13b82c18e646efb5504f0b9bda64650450632f85ac43622f981334ac"
+    }
+  ],
+  "nuget_verification": [
+    {
+      "package": "harmonyx",
+      "nuget_sha256": "b5b07ae4c4e26e60d98bf6a5081385151c0a22a2c2d180b6dda5e4e7bbba7ddd",
+      "binary_matches": [
+        "BepInEx/core/0Harmony.dll"
+      ]
+    },
+    {
+      "package": "monomod.utils",
+      "nuget_sha256": "e66e82f1a9c2d19e0885ac60e8f4e65d4ed43868b2cd5f9bc990cef3ec3f925f",
+      "binary_matches": [
+        "BepInEx/core/MonoMod.Utils.dll"
+      ]
+    },
+    {
+      "package": "monomod.runtimedetour",
+      "nuget_sha256": "8afc5027a556c736a96b1903be4459bc34158297e614fd5a7d1971eb2a250573",
+      "binary_matches": [
+        "BepInEx/core/MonoMod.RuntimeDetour.dll"
+      ]
+    },
+    {
+      "package": "mono.cecil",
+      "nuget_sha256": "3451a4a112a81be0bf76b8dc2bca396acdf0455d80c8961e7903ce1fb35c2a9a",
+      "binary_matches": [
+        "BepInEx/core/Mono.Cecil.dll",
+        "BepInEx/core/Mono.Cecil.Mdb.dll",
+        "BepInEx/core/Mono.Cecil.Pdb.dll",
+        "BepInEx/core/Mono.Cecil.Rocks.dll"
+      ]
+    },
+    {
+      "package": "semanticversioning",
+      "nuget_sha256": "779b5426c8431e4feb84daaded197d4bf160e76e9e9757da79a9cd1ca72ab408",
+      "binary_matches": [
+        "BepInEx/core/SemanticVersioning.dll"
+      ]
+    },
+    {
+      "package": "assetripper.primitives",
+      "nuget_sha256": "ebcf9ef12be709c196b30e61f0ff789e69c3ca94096e683e66373cd8921d1955",
+      "binary_matches": [
+        "BepInEx/core/AssetRipper.Primitives.dll"
+      ]
+    }
+  ],
+  "loader_files": {
+    "doorstop_config.ini": "be1262bfc70f34bab7cf47c4355cce1421d1be34e6b912b1b350beb9e470aced",
+    "changelog.txt": "626372673c25f63824bcde155977284a51560dcaf1b9783bce17a9c00ade83a8",
+    "winhttp.dll": "d3b62f4c9c3e2196ef82603c52d6b98c043a0d6c125c081fd33d7ca3798b41b8",
+    ".doorstop_version": "2744735fee2ee237e29f592f88ab669dc8d478fca31e6da4caf9a4a1b3abb7f1",
+    "BepInEx/core/Mono.Cecil.Rocks.dll": "54ac539fb5ddc8b44c0e9acd0fcb7324f89d1a072edf8ebc1b06dd691e3d3927",
+    "BepInEx/core/BepInEx.Unity.Mono.Preloader.xml": "f4e5cf80a35cedde1c8c1cd5e6a9cce212150a81c54b6c108b3df26613863304",
+    "BepInEx/core/BepInEx.Preloader.Core.dll": "5d0d3c4ac7b8b92776f212ee4bd096564bbf5609ecc8ffc38c034b206176ebb4",
+    "BepInEx/core/BepInEx.Unity.Common.xml": "d3164c64d07fffbd4e5a28dd4a7201d4971bf15f5d471fc919d4707009fc9114",
+    "BepInEx/core/BepInEx.Unity.Mono.xml": "84f09bab2cccf337d6c9f9e215c0334c891619db4cbe5e036a6dcf410b871115",
+    "BepInEx/core/BepInEx.Unity.Mono.dll": "f1f0cdc821a6f7d824a4a027950fae95e12f7de12219b5d0f57f3ae875a935c8",
+    "BepInEx/core/Mono.Cecil.Mdb.dll": "5896d1898f616701fff18f3b2c71e6b844d2390ef9f41e1c5fccce8cb27c698e",
+    "BepInEx/core/BepInEx.Unity.Mono.Preloader.dll": "0fcfa54344626f8f791d768538c85e115c6ed890239b039ab08bd60cf176bca1",
+    "BepInEx/core/0Harmony.dll": "93c0a24085babf49d8478b28b8271217a76dd02a5db68794e222baaa3ce6f2fb",
+    "BepInEx/core/MonoMod.Utils.dll": "0c6cbede5a816fd00f8158548f0f4011d33d1ab3b61dbee56037604ac36d58a0",
+    "BepInEx/core/BepInEx.Core.dll": "0c3ae15668f9aeff35feb05d29a65a249c025c7b9418d7149404ee8f234b866e",
+    "BepInEx/core/SemanticVersioning.dll": "8603f22e2d552a37a9b59474e952fad4320b53b20a902ab639e7a2adddf4fa3e",
+    "BepInEx/core/AssetRipper.Primitives.dll": "677b7513cd9eac47385b66365cada31f8679c37bdd7e132c48e2a072daa31c04",
+    "BepInEx/core/Mono.Cecil.dll": "7ae470288fff4a402899c254d0a76cefef55877f5c54f96e83c797cc5bb6e2f6",
+    "BepInEx/core/BepInEx.Unity.Common.dll": "541f377ba0445d0560664e86ecd0778a2cac7dc862c32b8989e52afbcf7dddb9",
+    "BepInEx/core/MonoMod.RuntimeDetour.dll": "bd349394835af325854045aea90ec58117d029d2303ebb4748b177b73186afd0",
+    "BepInEx/core/BepInEx.Core.xml": "1a19ea693c0c2549d35b95b04e4a5f51b419a43a0fc4bfeb998349ecb80b5762",
+    "BepInEx/core/BepInEx.Preloader.Core.xml": "f7e68941a96a6bbb42237b428f0b38077ac139597ac24c7cbb51e661f51ae3f1",
+    "BepInEx/core/Mono.Cecil.Pdb.dll": "174db44a067f58561510af746f3caeb032037762c57a31c8d9ee32db25174984"
+  }
+}

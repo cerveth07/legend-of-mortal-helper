@@ -792,6 +792,8 @@ namespace MortalHelper.Game
             audit.Walk("level", battle.CombatLevel, true, 0);
             audit.Walk("enemy-intent", AccessTools.Field(typeof(CombatManager), "_enemyActionResult")?.GetValue(battle), true, 0);
             var save = (GameSave)CreateNative.Invoke(SaveSystem.Instance, null);
+            // Only this comparison-owned snapshot is normalized, including its restore data.
+            Titles.StripMetadata(save);
             string restore = save.RestoreData;
             save.RestoreData = null;
             audit.Walk("campaign", save, true, 0);

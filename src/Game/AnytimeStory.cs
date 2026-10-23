@@ -667,6 +667,9 @@ namespace MortalHelper.Game
         {
             var a = JsonUtility.FromJson<GameSave>(left); var b = JsonUtility.FromJson<GameSave>(right);
             if (a == null || b == null) return false;
+            // Display preferences belong to the save, but are not gameplay state.
+            Titles.StripMetadata(a);
+            Titles.StripMetadata(b);
             a.TimeTick = b.TimeTick = 0;
             return JsonUtility.ToJson(a) == JsonUtility.ToJson(b);
         }

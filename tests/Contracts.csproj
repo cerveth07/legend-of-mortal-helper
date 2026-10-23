@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Contracts.cs" />
+    <Compile Include="TitleContracts.cs" />
     <Compile Include="StoryContracts.cs" />
     <Compile Include="DuelJournalTests.cs" />
     <Compile Include="DuelSaveMenuStateTests.cs" />

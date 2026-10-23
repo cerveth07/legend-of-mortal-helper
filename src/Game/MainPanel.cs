@@ -23,7 +23,7 @@ namespace MortalHelper.Game
         private static readonly string[] StoryViews = { "剧情", "回想" };
         private static readonly string[] ItemViews = { "书籍", "杂物", "贵重品", "消耗品" };
         private static readonly string[] BattleViews = { "单挑", "群战" };
-        private static readonly string[] GrowthViews = { "养成", "人际" };
+        private static readonly string[] GrowthViews = { "养成", "人际", "称号" };
         private static readonly string[] Lovers = { "自己", "小师妹", "瑞杏", "叶云裳", "虞小梅", "上官萤", "夏侯兰", "郁竹", "魏菊", "龙湘" };
         private static readonly HashSet<string> Editable = new HashSet<string>(new[] {
             "銀兩","個人貢獻度","門派資產","門派名聲","門派人數","向心力","心理衛生","武學點數","鍛造","毒藥",
@@ -81,7 +81,7 @@ namespace MortalHelper.Game
         private readonly Vector2[] scroll = new Vector2[Pages.Length];
         private GameItemType itemType = GameItemType.雜物;
         private string itemSearch = "", search = "";
-        private bool showAllItems, loggedBadge;
+        private bool showAllItems, loggedBadge, showAllTitles;
         private string slotComment = "", commentSlot, slotCountText = "";
         private string legendSlotCountText = "";
         private int recoverySlot = 1;
@@ -870,6 +870,7 @@ namespace MortalHelper.Game
             int view = ViewTabs(growthView, GrowthViews);
             if (view != growthView) { growthView = view; loverDraftLoaded = false; scroll[2] = Vector2.zero; }
             if (growthView == 1) { Relationships(); return; }
+            if (growthView == 2) { TitlesPage(); return; }
             Note("以下选项只在自由活动场景空闲时生效；练功与锻造炼丹两组按操作前后恢复点数与金钱。");
             Section("练功");
             plugin.Options.PracticeLimit.Value = DrawSwitchRow("解除修炼点数消耗上限", plugin.Options.PracticeLimit.Value,
@@ -886,6 +887,46 @@ namespace MortalHelper.Game
             Section("日常行动");
             plugin.Options.UnlimitedActions.Value = DrawSwitchRow("无限日常行动点", plugin.Options.UnlimitedActions.Value,
                 "行动点至少为 1 且不减；日期不会因点数用完前进。");
+        }
+
+        private void TitlesPage()
+        {
+            Section("称号");
+            if (!GameAccess.Loaded) { Note("请先开始游戏或读取存档。"); return; }
+            int selected = Titles.History.Selected;
+            Note("当前显示：" + Titles.DisplayName(selected >= 0 ? selected : Titles.Current));
+            Note("剧情称号：" + Titles.DisplayName(Titles.Current));
+            bool canChoose = GameAccess.CanEditValues;
+            bool enabled = GUI.enabled;
+            GUI.enabled = enabled && canChoose && selected >= 0;
+            if (UiButton(selected < 0 ? "已跟随剧情" : "跟随剧情", style.ButtonStyle, GUILayout.Height(RowH)))
+                deferred.Enqueue(() => plugin.Status = Titles.Choose(-1));
+            GUI.enabled = enabled;
+            showAllTitles = DrawSwitchRow("显示全部称号", showAllTitles, "包含未获得称号，可自由选择外观。");
+            Note("记录与选择随当前存档保存，新开游戏互不继承。旧档只能确认当前称号；从安装本功能后开始记录新获得的称号。");
+            if (!canChoose) Note("请在自由活动时，关闭游戏内菜单后修改。");
+            Section(showAllTitles ? "全部称号" : "已获得称号");
+            // Catalog IDs come from the native language table, never global history.
+            for (int id = 0; id <= 25; id++)
+            {
+                bool acquired = Titles.History.Contains(id);
+                if (!showAllTitles && !acquired) continue;
+                if (Titles.Name(id) == null) continue;
+                GUILayout.BeginHorizontal();
+                UiLabel(Titles.DisplayName(id) + (acquired ? "" : "（未获得）"), style.Entry,
+                    GUILayout.Width(Mathf.Max(120f * scale, ContentWidth() - 78f * scale)));
+                GUILayout.Space(8f * scale);
+                GUI.enabled = enabled && canChoose && selected != id;
+                if (UiButton(selected == id ? "使用中" : "使用", style.ButtonStyle, GUILayout.Width(70f * scale), GUILayout.Height(RowH)))
+                {
+                    int choice = id;
+                    deferred.Enqueue(() => plugin.Status = Titles.Choose(choice));
+                }
+                GUI.enabled = enabled;
+                GUILayout.EndHorizontal();
+                GUILayout.Space(6f * scale);
+            }
+            Note("仅替换显示称号；剧情判定与原生称号数值保持原样。选择后请正常存档。");
         }
 
         private void Relationships()
