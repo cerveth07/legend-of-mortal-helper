@@ -2,6 +2,16 @@
 
 更新：2026-10-23，0.1.1 开发候选。离线断言、元数据检查和真实游戏交互是不同层次的证据。
 
+## 2026-10-23 剧情存档随机状态误判修复
+
+用户报告读取剧情档自动重放后返回标题页。已读取真实故障日志及第091槽的只读副本：ch6_6_1重放158/158事件，目标Choose匹配；递归比较原生诊断expected/actual，除TimeTick外只有FreeRandomState四个整数不同。附档RandomState与expected.FreeRandomState完全相同；把诊断actual的随机状态恢复为该附档目标后，完整原生快照一致。
+
+当前游戏程序集验证：PlayerStatManagerData.Save从即时UnityEngine.Random.state生成GameSave.FreeRandomState，Load仅设置经理持有字段，未恢复即时Unity随机状态。旧顺序先Snapshot再恢复随机状态，画面效果与重放期间的随机消耗导致误判。修复为先验证事件/目标等待点与Lua变量，恢复附档目标Unity随机状态，再Snapshot执行完整比较；未删除或忽略随机字段，Lua随机恢复和解锁仍在检查通过后执行。存档格式未改，原故障档可直接重试。
+
+生产DLL SHA-256：`416045f0d5d59e0a987794f430d0c12476503bc09b96caf5af94c615d2f3fea0`。488项C#契约、27项Python、16项游戏元数据契约及86个具名Harmony目标和计时器协程目标通过。新增回归检查约束目标随机状态恢复必须早于快照、快照仍参加完整比较；新增两个元数据断言核对原生随机语义。独立审查通过。
+
+证据位于工作区外的mortal-runtime-evidence/story-rng-fix-20261023，包含只读091副本、诊断JSON、故障日志及regression-evidence.json；没有修改玩家存档。本轮未操作游戏或焦点，未宣称重新实机通过，仍需用户用新版本读取原故障档验收。
+
 ## 2026-10-23 便携安装器与每档称号（称号待用户实测）
 
 便携WinForms安装器以系统.NET Framework运行，单exe约1.07MiB，无常驻进程、服务和提权。固定官方BepInEx6 Mono x64 be692，归档及对应源码哈希和许可材料见installer/third-party。22项Windows后端检查在临时伪游戏目录执行，覆盖实际加载器安装、更新、卸载、共享加载器、修改文件保留、设置/存档保留、兼容检查、冲突插件及路径越界拒绝。离屏DrawToBitmap检查125% DPI界面，未显示或激活窗口，截图artifacts/installer-smoke.png。没有向真实游戏安装。

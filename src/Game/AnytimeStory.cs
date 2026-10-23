@@ -369,12 +369,16 @@ namespace MortalHelper.Game
                     ? AnytimeDice.SaveKey == null || AnytimeDice.SaveKey != playback.WaitKey
                     : WaitTokens.Count != 1 || WaitKinds[0] != playback.WaitKind || WaitKeys[0] != playback.WaitKey))
                     throw new InvalidDataException("对话等待点与记录不同。");
+                if (!SameGlobals(CaptureGlobals(lua), playback.ExpectedGlobals))
+                    throw new InvalidDataException("Lua 剧情变量与存档内容不同。");
+                // Native Save copies the live Unity RNG into FreeRandomState.
+                // Presentation also consumes that RNG while replaying, so restore
+                // the recorded target seed before taking the verification snapshot.
+                // Keep every native field, including all four RNG words, checked.
+                UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.RandomState);
                 string actual = Snapshot();
                 if (!SameSnapshot(actual, playback.Expected))
                     throw new InvalidDataException("剧情状态与存档内容不同。" + SnapshotMismatch(playback.Expected, actual));
-                if (!SameGlobals(CaptureGlobals(lua), playback.ExpectedGlobals))
-                    throw new InvalidDataException("Lua 剧情变量与存档内容不同。");
-                UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.RandomState);
                 RestoreLuaRandom(lua, playback.LuaRandomState);
                 baseline = playback.Baseline; baselineGlobals = playback.BaselineGlobals;
                 baselineRandomState = playback.BaselineRandomState;
