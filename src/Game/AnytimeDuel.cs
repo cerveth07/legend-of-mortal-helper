@@ -514,17 +514,15 @@ namespace MortalHelper.Game
             return text.ToString();
         }
 
-        private static void Report(string message)
-        {
-            if (Plugin.Instance != null) { Plugin.Instance.Status = message; Plugin.Instance.Log(message); }
-        }
+        // One implementation per helper: these used to be private copies that had
+        // already drifted (no log guard, no "[Anytime]" prefix here).
+        private static void Report(string message) => AnytimeNative.Report(message);
 
         private static void LockInput() { InteractionLock.Set(InteractionHold.Duel, true); }
 
         private static void UnlockInput() { InteractionLock.Set(InteractionHold.Duel, false); }
 
-        private static bool Numbered(string slot) => slot != null && slot.Length == 3 && slot != "000" &&
-            slot.All(c => c >= '0' && c <= '9');
+        private static bool Numbered(string slot) => AnytimeNative.Numbered(slot);
         private static string SlotFile(string slot) => (string)GetSlotFile.Invoke(SaveSystem.Instance, new object[] { slot });
 
         private static byte[] NativeBytes(GameSave save)
@@ -616,24 +614,11 @@ namespace MortalHelper.Game
             }
         }
 
-        private static void DeleteIfExists(string path)
-        { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
+        private static void DeleteIfExists(string path) => AnytimeNative.DeleteIfExists(path);
 
-        // Never delete a companion the player might still need; a rename keeps it
-        // out of the load path and leaves it recoverable by hand.
-        private static void Quarantine(string path)
-        {
-            try
-            {
-                // Never delete an earlier quarantine: a second stale companion must not
-                // destroy the first one, which may be the only copy left.
-                string target = path + ".stale";
-                for (int index = 2; File.Exists(target); index++)
-                    target = path + ".stale-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                File.Move(path, target);
-            }
-            catch (Exception error) { Plugin.Instance?.Report(error); }
-        }
+        // Never delete a companion the player might still need; the shared
+        // implementation renames it aside and never overwrites an earlier quarantine.
+        private static void Quarantine(string path) => AnytimeNative.Quarantine(path);
 
         private static Draw DrawRandom(Draw requested, Func<Draw> fresh)
         {

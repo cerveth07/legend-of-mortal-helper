@@ -1007,7 +1007,7 @@ namespace MortalHelper.Game
                     {
                         try
                         {
-                            plugin.Gate.NotifyMutation("修改角色好感");
+                            plugin.Gate.NotifyMutation();
                             item.SetValue(parsed);
                             relationshipEdits[key] = item.Value.ToString();
                             plugin.Status = key + " 好感已改为 " + item.Value + "；正常存档后保留。";

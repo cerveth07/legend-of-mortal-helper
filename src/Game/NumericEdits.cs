@@ -40,7 +40,7 @@ namespace MortalHelper.Game
             if (value == before) return;
             if (minimum > maximum || value < minimum || value > maximum)
                 throw new InvalidOperationException("数值超出允许范围（" + minimum + "～" + maximum + "）。");
-            Plugin.Instance.Gate.NotifyMutation("修改数值 " + key);
+            Plugin.Instance.Gate.NotifyMutation();
             write(value);
             int after = read();
             string scene = SceneManager.GetActiveScene().name;

@@ -1012,26 +1012,10 @@ namespace MortalHelper.Game
             catch (Exception) { return null; }
         }
         // Never delete a sidecar the player might still need. Renaming keeps it
-        // out of the load path while leaving it recoverable by hand.
-        private static void Quarantine(string path)
-        {
-            try
-            {
-                // Never delete an earlier quarantine: a second stale sidecar must not
-                // destroy the first one, which may be the only copy left.
-                string target = path + ".stale";
-                for (int index = 2; File.Exists(target); index++)
-                    target = path + ".stale-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                File.Move(path, target);
-            }
-            catch (Exception error) { Plugin.Instance?.Report(error); }
-        }
-        private static void Report(string message)
-        {
-            if (Plugin.Instance == null) return;
-            Plugin.Instance.Status = message;
-            try { Plugin.Instance.Log("[Anytime] " + message); } catch (Exception) { }
-        }
+        // out of the load path while leaving it recoverable by hand; the shared
+        // implementation lives in AnytimeNative so the two paths cannot drift apart.
+        private static void Quarantine(string path) => AnytimeNative.Quarantine(path);
+        private static void Report(string message) => AnytimeNative.Report(message);
         private static AnytimeStoryRecord ReadRecord(string nativePath, GameSave native)
         {
             string side = nativePath + ".mha";

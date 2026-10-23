@@ -220,7 +220,7 @@ namespace MortalHelper.Game
                 GameAccess.Set(Dialog, "_currentRandomValue", random);
             }
             if (Session.HasOverride && !authorizedReplay)
-                Plugin.Instance.Gate.NotifyMutation("判定结果被修改");
+                Plugin.Instance.Gate.NotifyMutation();
         }
 
         internal static void AfterRoll(DiceCheckResult result)

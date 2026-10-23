@@ -27,7 +27,9 @@ namespace MortalHelper.Game
                     missingPathReported = true;
                     Plugin.Instance?.Log("[LegendSlots] SaveSystem.GetLegendDataFile unavailable; legend slot expansion disabled.");
                 }
-                return LegendSlotCapacity.Visible(Plugin.Instance.Options.LegendSlotCount.Value, new List<int>());
+                // With no readable slot list the occupancy scan is meaningless: the
+                // configured limit only ever grows past the native 12 once slots fill.
+                return LegendSlotCapacity.Original;
             }
             string path = (string)GetPath.Invoke(SaveSystem.Instance, new object[] { 1 });
             string directory = Path.GetDirectoryName(path);

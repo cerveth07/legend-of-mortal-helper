@@ -114,7 +114,7 @@ internal static class Contracts
         original.Events[0].Integer=999;
         var replacement=Document();replacement.Events[0].Integer=123;
         Reject(()=>cursor.Prepare(replacement,"test-client",RecoveryKind.Story),"second recovery replaced active tape");
-        Reject(()=>gate.NotifyMutation("edit"),"editing during recovery allowed");
+        Reject(()=>gate.NotifyMutation(),"editing during recovery allowed");
         Reject(()=>gate.Advance(RecoveryPhase.Idle),"verification bypass allowed");
         gate.Advance(RecoveryPhase.Loading);gate.Advance(RecoveryPhase.Replaying);
         var peek=cursor.Peek();
@@ -130,7 +130,7 @@ internal static class Contracts
         Check(gate.Phase==RecoveryPhase.Failed && !gate.CanInteract,"failure did not remain locked");
         Reject(()=>gate.NativeLoadCompleted(),"failed gate unlocked without native load start");
         gate.NativeLoadStarted();
-        Reject(()=>gate.NotifyMutation("edit during native load"),"native load permitted edits");
+        Reject(()=>gate.NotifyMutation(),"native load permitted edits");
         gate.NativeLoadCompleted();Check(gate.CanInteract,"native load did not reset failure");
         Reject(()=>gate.NativeLoadCompleted(),"idle gate accepted duplicate native completion");
 
@@ -181,7 +181,7 @@ internal static class Contracts
         Reject(()=>sharedGate.NativeLoadStarted(),"native load did not require replay cancellation");
         Check(sharedGate.Phase==RecoveryPhase.Replaying && !sharedGate.CanInteract,
             "shared mutation gate was not locked by recovery");
-        Reject(()=>sharedGate.NotifyMutation("manual edit"),
+        Reject(()=>sharedGate.NotifyMutation(),
             "shared gate permitted an edit during replay");
         sharedController.Cancel("simulated scene switch");
         Check(sharedGate.Phase==RecoveryPhase.Failed && !sharedGate.CanInteract,
