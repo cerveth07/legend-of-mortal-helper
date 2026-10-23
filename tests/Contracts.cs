@@ -134,30 +134,6 @@ internal static class Contracts
         gate.NativeLoadCompleted();Check(gate.CanInteract,"native load did not reset failure");
         Reject(()=>gate.NativeLoadCompleted(),"idle gate accepted duplicate native completion");
 
-        var recorder=new RecordingSession();
-        Reject(()=>recorder.Capture("state"),"capture without baseline allowed");
-        recorder.Begin(Document());
-        long token=recorder.Enter(EventKind.Dialogue,"line-1");
-        var pending=recorder.Capture("before-line");
-        Check(pending.Events.Count==0 && pending.Checkpoint=="1:line-1","unfinished line was recorded as complete");
-        recorder.Finish(token,0);
-        Reject(()=>recorder.Capture("state"),"capture outside safe stop allowed");
-        recorder.Enter(EventKind.Choice,"menu-1");
-        var stopped=recorder.Capture("before-menu");
-        Check(stopped.Events.Count==1 && stopped.Events[0].Key=="line-1","completed dialogue missing");
-        stopped.Events.Clear();Check(recorder.Capture("state").Events.Count==1,"mutable recording escaped");
-        recorder.Enter(EventKind.Dialogue,"nested");Check(!recorder.Valid,"unsupported nested call accepted");
-        recorder.Begin(Document());token=recorder.Enter(EventKind.Choice,"menu");
-        recorder.Finish(token+1,1);Check(!recorder.Valid,"stale completion accepted");
-        recorder.Begin(Document());recorder.Random("random:1",.25);
-        recorder.Enter(EventKind.Dialogue,"line");Check(recorder.Capture("s").Events[0].Number==.25,"random event lost");
-        recorder.Random("nested-random",.75);Check(!recorder.Valid,"nested random silently dropped");
-        recorder.Reset();Check(!recorder.Valid && !recorder.Waiting,"recording survived reset");
-        recorder.Begin(Document());recorder.Enter(EventKind.Dialogue,"old");
-        var invalidSeed=Document();invalidSeed.Client="";
-        Reject(()=>recorder.Begin(invalidSeed),"invalid baseline accepted");
-        Check(!recorder.Valid,"old baseline survived a failed new baseline");
-
         // Recovery controller: the phase sequence the Unity adapter will call.
         var controller=new RecoveryController();var fake=new FakeHost();
         Check(!controller.TryConsume(EventKind.Dialogue,"line-1",out _),"idle controller consumed replay input");

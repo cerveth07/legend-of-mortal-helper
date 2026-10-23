@@ -136,8 +136,9 @@ namespace MortalHelper.Recovery
             callback?.Abort(reason);
         }
 
-        // Matches the checkpoint text RecordingSession.Capture writes: the pending
-        // interaction kind followed by its key.
+        // "kind:key" checkpoint text. No shipped producer writes this form any more:
+        // StoryRecovery writes "manual:"+timestamp and finishes through VerifyAtEnd,
+        // so the whole stop-point branch is retained only for recorded-file compatibility.
         private static string CheckpointOf(EventKind kind, string key)
         {
             return ((int)kind).ToString(CultureInfo.InvariantCulture) + ":" + (key ?? "");

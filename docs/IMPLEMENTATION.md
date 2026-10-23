@@ -5,7 +5,7 @@
 - `Core`：纯 BCL 的交互状态、输入校验、受限提示分析与游戏写入保护。`SlotTransaction`
   是编号槽的文件级写前日志：写入前记录每个参与文件的存在性与哈希，回退只按记录
   执行，详见 [存档槽事务设计](SAVE-TRANSACTION.md)。
-- `Recovery`：有界 `.mhr` 数据格式、完整性检查、备份、录制和恢复控制器。`StoryReplay.Host` 已实现 `IReplayHost` 并接入游戏，不能再描述为仅测试假实现。
+- `Recovery`：有界 `.mhr` 数据格式、完整性检查、备份与恢复控制器（录制由 `StoryRecovery` 负责；原先独立的 `RecordingSession` 已删除，它没有任何生产调用方）。`StoryReplay.Host` 已实现 `IReplayHost` 并接入游戏，不能再描述为仅测试假实现。
 - `Game`：BepInEx/Harmony 入口、原生骰子与选项、剧情提示、分支记录、存档设置、单挑/群战与养成辅助、人际及数值编辑、面板。
 - 骰子输入留空为自然随机；旧三态模式已经移除，旧配置不自动覆盖。
 - 恢复使用版本化全状态指纹；时间戳规范化、真实回放时序与原生读档解锁需结合测试和游戏回归验证。自由场景随机状态未完整恢复，`Recovery/ExperimentalEnabled` 默认关闭；入口与后端同时检查显式启用，实验功能不作为原生存档替代。基线加载不再主动调用写盘的 `SaveUniverseData()`。
