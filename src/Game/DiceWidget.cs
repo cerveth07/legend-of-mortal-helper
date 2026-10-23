@@ -8,7 +8,8 @@ namespace MortalHelper.Game
         private InputField input;
         private Text message;
         private Text title, placeholder, clearText;
-        private Button clear;
+        private Button clear, save;
+        private Text saveText;
         private bool updating;
 
         internal void Initialize(Text reference)
@@ -35,6 +36,11 @@ namespace MortalHelper.Game
             clear = buttonObject.AddComponent<Button>(); clear.targetGraphic = buttonImage;
             clearText = AddText("", reference, Vector2.zero, new Vector2(108,34), buttonObject.transform);
             clear.onClick.AddListener(() => { Plugin.Instance.Options.Point.Value = ""; input.text = ""; });
+            var saveObject = Box("SaveDice", new Vector2(420, 51), new Vector2(108, 34));
+            var saveImage = saveObject.AddComponent<Image>(); saveImage.color = new Color(.35f,.30f,.19f);
+            save = saveObject.AddComponent<Button>(); save.targetGraphic = saveImage;
+            saveText = AddText("", reference, Vector2.zero, new Vector2(108,34), saveObject.transform);
+            save.onClick.AddListener(AnytimeDice.OpenSaveMenu);
             message = AddText("", reference, new Vector2(12,8), new Vector2(396,36));
             message.fontSize = 17;
         }
@@ -45,6 +51,8 @@ namespace MortalHelper.Game
             title.text = UiLanguage.Convert("基础点数", traditional);
             placeholder.text = UiLanguage.Convert("留空为随机", traditional);
             clearText.text = UiLanguage.Convert("自然掷骰", traditional);
+            saveText.text = UiLanguage.Convert("存档", traditional);
+            save.interactable = AnytimeNative.CanOffer;
             updating = true;
             if (!input.isFocused) input.text = Plugin.Instance.Options.Point.Value;
             updating = false;

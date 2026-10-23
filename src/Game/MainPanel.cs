@@ -1181,7 +1181,7 @@ namespace MortalHelper.Game
             Section("随时存档（实验）");
             bool anytime = plugin.Options.AnytimeSave.Value;
             bool nextAnytime = DrawSwitchRow("启用随时存档", anytime,
-                "通过游戏「系统→储存游戏」选择编号槽；仅在可验证的剧情停点和单挑行动点开放。群战现场、轮盘动画和恢复期间仍禁止。");
+                "通过游戏「系统→储存游戏」选择编号槽；骰子页也可点「存档」。支持剧情对话、选项、骰子等待页和单挑行动点；动画、群战与恢复期间不可用。");
             if (nextAnytime != anytime)
             {
                 plugin.Options.AnytimeSave.Value = nextAnytime;

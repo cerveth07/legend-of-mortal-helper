@@ -69,7 +69,7 @@ namespace MortalHelper.Game
             SlotCount = config.Bind("Save", "SlotCount", 0,
                 new ConfigDescription("存档格数 2～999；0 表示使用游戏默认。重新打开存档/读档界面后生效。", new AcceptableValueRange<int>(0, 999)));
             SortRecent = config.Bind("Save", "SortRecent", false, "读档列表按最近存档时间排序；游戏中按 F3 切换。");
-            AnytimeSave = config.Bind("Save", "AnytimeSave", false, "允许在可验证的剧情停点或单挑行动点使用原生编号槽存档；实验功能，默认关闭。");
+            AnytimeSave = config.Bind("Save", "AnytimeSave", false, "允许在剧情对话、选项、骰子稳定等待页或单挑行动点使用原生编号槽存档；实验功能，默认关闭。");
             TraditionalChinese = config.Bind("Window", "TraditionalChinese", false, "面板使用繁體中文；关闭时使用简体中文。");
 #if !NO_PROBE
             SelfTest = config.Bind("Diagnostics", "SelfTest", false, "只读检测：记录当前场景与 API 状态，不读档、不改进度或配置。");

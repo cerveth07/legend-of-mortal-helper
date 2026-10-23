@@ -82,7 +82,7 @@ namespace MortalHelper.Game
                     if (StoryRecovery.Recording) StoryRecovery.Stop();
                     if (StoryReplay.Active) StoryReplay.Stop("实验恢复已停用；请通过原生读档解除保护锁。");
                 }
-                AnytimeStory.Tick(); AnytimeDuel.Tick();
+                AnytimeDice.Tick(); AnytimeStory.Tick(); AnytimeDuel.Tick();
                 // Re-assert the input lock: a scene created during a replay starts
                 // with its input modules enabled.
                 InteractionLock.Refresh();

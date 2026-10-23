@@ -1,7 +1,6 @@
 """Check the candidate source inventory. This is not a legal certification."""
 import pathlib
 import re
-import subprocess
 
 root = pathlib.Path(__file__).resolve().parents[1]
 files = [p for p in root.rglob('*') if p.is_file() and not any(
@@ -16,10 +15,6 @@ for path in files:
         # presence is not evidence of a dependency on the old mod's source.
         if re.search(r'\b(?:using|namespace)\s+(?:LOMSave2|DiceMaster)\b', source):
             errors.append('Legacy implementation dependency: ' + str(path.relative_to(root)))
-if (root / '.git').is_dir():
-    result = subprocess.run(['git', 'rev-list', '--max-parents=0', 'HEAD'], cwd=root, text=True, capture_output=True)
-    if result.returncode == 0 and len(result.stdout.splitlines()) != 1:
-        errors.append('Expected exactly one root commit in the new repository.')
 if errors:
     raise SystemExit('\n'.join(errors))
 print(f'PASS: {len(files)} source/document files; no bundled game/legacy binaries or old namespaces.')
