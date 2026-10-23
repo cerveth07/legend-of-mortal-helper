@@ -34,6 +34,7 @@ internal static class Contracts
         Check(UiLanguage.Convert("群战·郁竹·因为", true) == "群戰·郁竹·因為", "traditional UI wording changed names");
         Check(UiLanguage.Convert("ID 42 / F2", true) == "ID 42 / F2", "non-Chinese UI text changed");
         TitleContracts.Run(Check);
+        NumericEditContracts.Run(Check);
         var session = new InteractionSession(); string error; int? number;
         Check(!session.Commit(0,"",0,100,null,2,out error),"closed session accepted click");
         session.Open(); long first = session.Generation;

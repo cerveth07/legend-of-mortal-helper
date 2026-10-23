@@ -51,6 +51,24 @@ namespace MortalHelper.Game
             !SceneController.Instance.IsLoading && !SceneController.Instance.IsPrepare &&
             SceneManager.GetActiveScene().name != "Title";
 
+        public static bool CanEditNumbers => NumericEditBlockReason == null;
+        public static string NumericEditBlockReason
+        {
+            get
+            {
+                string scene = SceneManager.GetActiveScene().name;
+                if (PlayerStatManagerData.Instance == null || SceneController.Instance == null || scene == "Title")
+                    return "请先开始游戏或读取存档。";
+                if (SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+                    return "场景正在加载，请稍候。";
+                if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract || AnytimeStory.Replaying || AnytimeDuel.Replaying)
+                    return "存档恢复尚未完成，请等待恢复或重新读取有效存档。";
+                if (scene == "Story" || scene == "Break") return AnytimeStory.NumericEditBlockReason;
+                if (scene == "Combat") return AnytimeDuel.NumericEditBlockReason;
+                return null;
+            }
+        }
+
         // Editing during story callbacks or free-roam processing can invalidate
         // in-flight conditions and animation state. Use the native idle boundary.
         public static bool CanEditValues => CanEdit;

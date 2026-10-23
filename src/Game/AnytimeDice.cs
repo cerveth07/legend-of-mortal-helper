@@ -140,6 +140,7 @@ namespace MortalHelper.Game
             if (!AnytimeStory.Replaying || SaveKey == null) return;
             try
             {
+                AnytimeStory.ReplayDiceNumericEdits();
                 string key; int paid;
                 if (!timer && AnytimeStory.TryPeekDiceRoll(out key, out paid))
                 {

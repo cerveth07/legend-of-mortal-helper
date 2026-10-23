@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="Contracts.cs" />
     <Compile Include="TitleContracts.cs" />
+    <Compile Include="NumericEditContracts.cs" />
     <Compile Include="StoryContracts.cs" />
     <Compile Include="DuelJournalTests.cs" />
     <Compile Include="DuelSaveMenuStateTests.cs" />

@@ -25,10 +25,7 @@ namespace MortalHelper.Game
         private static readonly string[] BattleViews = { "单挑", "群战" };
         private static readonly string[] GrowthViews = { "养成", "人际", "称号" };
         private static readonly string[] Lovers = { "自己", "小师妹", "瑞杏", "叶云裳", "虞小梅", "上官萤", "夏侯兰", "郁竹", "魏菊", "龙湘" };
-        private static readonly HashSet<string> Editable = new HashSet<string>(new[] {
-            "銀兩","個人貢獻度","門派資產","門派名聲","門派人數","向心力","心理衛生","武學點數","鍛造","毒藥",
-            "體力","內力","武功拳掌","武功暗器","武功刀劍","輕功","學問","嘴力","抗毒","抗麻",
-            "性情","處世","道德","修養","命運","陰陽內功" });
+        private static readonly HashSet<string> Editable = NumericEdits.Stats;
         private static readonly string[] StatFamilies = { "全部", "资源门派", "人物状态", "武学技艺", "才学性情", "抗性" };
         private static readonly Dictionary<string, int> StatFamilyOf = new Dictionary<string, int> {
             { "銀兩", 1 }, { "個人貢獻度", 1 }, { "門派資產", 1 }, { "門派名聲", 1 }, { "門派人數", 1 }, { "向心力", 1 },
@@ -1069,9 +1066,9 @@ namespace MortalHelper.Game
         {
             var player = PlayerStatManagerData.Instance;
             if (player == null) { Note("尚未进入游戏进度；读档后这里会列出可改的属性。"); return; }
-            bool editable = GameAccess.CanEditValues ||
+            bool editable = GameAccess.CanEditNumbers ||
                 (plugin != null && plugin.Gate.CanInteract && plugin.Options.PreviewEditable.Value);
-            if (!editable) Note("当前不能修改（战斗中 / 加载中 / 恢复中）；下面是只读预览。");
+            if (!editable) Note(GameAccess.NumericEditBlockReason + " 下面是只读预览。");
             GUILayout.BeginHorizontal();
             UiLabel("筛选", style.Description, GUILayout.Width(45f * scale));
             searchEdit = EditableTextField("stat-search", searchEdit, 80, GUILayout.ExpandWidth(true));
@@ -1131,7 +1128,7 @@ namespace MortalHelper.Game
                 if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
                 {
                     int number;
-                    if (!GameAccess.CanEditValues) plugin.Status = "预览或恢复锁定中：不能修改属性。";
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
                     else if (!player.Stats.List.Contains(stat)) plugin.Status = "属性列表已变化，请重新打开本页。";
                     else if (!int.TryParse(buffer, out number) || number < stat.Min || number > stat.Max)
                         plugin.Status = name + " 必须在 " + stat.Min + "～" + stat.Max + " 之间。";
@@ -1140,11 +1137,10 @@ namespace MortalHelper.Game
                         try
                         {
                             int old = stat.Value;
-                            plugin.Gate.NotifyMutation("修改属性 " + key);
-                            stat.SetValue(number);
+                            NumericEdits.SetStat(stat, number);
                             statEdits[key] = stat.Value.ToString();
-                            Record("属性 " + name + " " + old + "→" + stat.Value, () => stat.SetValue(old));
-                            plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。";
+                            Record("属性 " + name + " " + old + "→" + stat.Value, () => NumericEdits.SetStat(stat, old));
+                            plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。" + NumericEdits.SaveNote;
                             Flash("stat:" + key);
                         }
                         catch (Exception error) { plugin.Report(error); }
@@ -1157,9 +1153,9 @@ namespace MortalHelper.Game
 
         private void ItemsBody()
         {
-            bool editable = GameAccess.CanEditValues ||
+            bool editable = GameAccess.CanEditNumbers ||
                 (plugin != null && plugin.Gate.CanInteract && plugin.Options.PreviewEditable.Value);
-            if (!editable) Note("当前不能修改（战斗中 / 加载中 / 恢复中）；下面是只读预览。");
+            if (!editable) Note(GameAccess.NumericEditBlockReason + " 下面是只读预览。");
             var database = ItemDatabase.Instance;
             if (database == null) { Note("物品数据库尚未就绪。"); return; }
             int tab = ViewTabs((int)itemType - 1, ItemViews);
@@ -1200,6 +1196,12 @@ namespace MortalHelper.Game
                 GUI.color = itemColor;
                 GUILayout.Space(gap);
                 UiLabel(current, style.Tight, GUILayout.Width(countWidth));
+                if (!editable)
+                {
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(8f * scale);
+                    continue;
+                }
                 if (stacked)
                 {
                     GUILayout.EndHorizontal();
@@ -1213,7 +1215,7 @@ namespace MortalHelper.Game
                 if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
                 {
                     int number;
-                    if (!GameAccess.CanEditValues) plugin.Status = "预览或恢复锁定中：不能修改物品。";
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
                     else if (!int.TryParse(buffer, out number) || number < 0 || number > 999999)
                         plugin.Status = name + " 的数量必须在 0～999999 之间。";
                     else
@@ -1221,11 +1223,12 @@ namespace MortalHelper.Game
                         try
                         {
                             int previous = item.CurrentCount;
-                            plugin.Gate.NotifyMutation("修改物品 " + item.Id);
-                            item.SetCount(number);
+                            NumericEdits.SetItem(itemType, item, number);
                             itemEdits[key] = item.CurrentCount.ToString();
-                            Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => item.SetCount(previous));
-                            plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。";
+                            GameItemType undoType = itemType;
+                            Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => NumericEdits.SetItem(undoType, item, previous));
+                            plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。" +
+                                (NumericShopRefresh.Open ? "商店列表已刷新，待购／待售数量已重置。" : "") + NumericEdits.SaveNote;
                             Flash("item:" + key);
                         }
                         catch (Exception error) { plugin.Report(error); }
@@ -1659,18 +1662,17 @@ namespace MortalHelper.Game
                 if (UiButton("撤销", style.SubtleStyle, GUILayout.Width(Col(.16f))))
                 {
                     var item = record;
-                    if (!GameAccess.CanEditValues) plugin.Status = "当前场景不能撤销修改。";
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
                     else Defer(() =>
                     {
-                        if (!GameAccess.CanEditValues)
+                        if (!GameAccess.CanEditNumbers)
                         {
                             plugin.Status = "恢复或加载已开始，撤销请求已取消。";
                             return;
                         }
                         try
                         {
-                            plugin.Gate.NotifyMutation("撤销数值修改");
-                            item.Undo(); editLog.Remove(item); plugin.Status = "已撤销：" + item.Label;
+                            item.Undo(); editLog.Remove(item); plugin.Status = "已撤销：" + item.Label + "。" + NumericEdits.SaveNote;
                         }
                         catch (Exception error) { plugin.Status = "撤销失败：" + error.Message; }
                     });

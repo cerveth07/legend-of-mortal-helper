@@ -148,6 +148,47 @@ namespace MortalHelper.Game
             }
         }
 
+        internal static string NumericEditBlockReason
+        {
+            get
+            {
+                if (pendingRecord != null) return "正在保存存档，请稍候。";
+                if (NumericShopRefresh.Open) return null;
+                if (Events.Count >= MaximumEvents) return "本段记录已满，请进入下一段剧情后修改。";
+                if (AnytimeDice.Active)
+                    return AnytimeDice.SaveKey == null ? "请等轮盘动画结束后修改。" : null;
+                if (WaitTokens.Count != 1 || (WaitKinds[0] != "Say" && WaitKinds[0] != "Choose"))
+                    return "请在对话、选项或骰子停稳后修改。";
+                return null;
+            }
+        }
+        internal static void RecordNumericEdit(string key, int before, int after)
+        {
+            if (NumericShopRefresh.Open)
+            {
+                // Native shop transactions are not part of the story journal.
+                // Never certify a same-script save that could not replay them.
+                invalid = "商店中已修改数值，请进入下一段剧情后再保存中途档。";
+                return;
+            }
+            string kind = AnytimeDice.Active ? "Dice" : WaitKinds[0];
+            string wait = AnytimeDice.Active ? AnytimeDice.SaveKey : WaitKeys[0];
+            Record(new AnytimeStoryEvent { Kind = "Numeric", Key = StoryNumericEdits.Pack(kind, wait, key), Choice = before, Number = after });
+        }
+        private static void ReplayNumericEdits(string kind, string key)
+        {
+            int next = StoryNumericEdits.Apply(playback.Events, cursor, kind, key, NumericEdits.ApplyRecorded);
+            if (next != cursor) { cursor = next; lastProgress = Time.unscaledTime; }
+        }
+        internal static void ReplayDiceNumericEdits()
+        {
+            if (!Replaying || cursor >= playback.Events.Length) return;
+            string recorded = StoryNumericEdits.WaitKey(playback.Events[cursor], "Dice");
+            if (recorded == null) return;
+            AnytimeDice.RestoreTargetRange(recorded);
+            ReplayNumericEdits("Dice", AnytimeDice.SaveKey);
+        }
+
         internal static bool BeforeNativeSave(string slot)
         {
             string reason = BlockReason;
@@ -325,7 +366,7 @@ namespace MortalHelper.Game
                 throw new InvalidDataException("剧情附加记录缺少可重放的起点或目标。");
             if (record.Events.Length > MaximumEvents) throw new InvalidDataException("剧情事件记录超限。");
             foreach (var entry in record.Events)
-                if (entry == null || (entry.Kind != "Say" && entry.Kind != "Choose" && entry.Kind != "Random" && entry.Kind != "Dice" && entry.Kind != "DiceRoll"))
+                if (entry == null || (entry.Kind != "Say" && entry.Kind != "Choose" && entry.Kind != "Random" && entry.Kind != "Dice" && entry.Kind != "DiceRoll" && entry.Kind != "Numeric"))
                     throw new InvalidDataException("剧情事件类型无效。");
             // Native PlayerStatManagerData.Load resumes StartStoryScript, not
             // CurrentStoryScript (which its Save never writes). Use the recorded
@@ -478,6 +519,7 @@ namespace MortalHelper.Game
             if (Failed) throw new InvalidDataException(Failure);
             string key = Digest(text);
             if (!Replaying) return false;
+            ReplayNumericEdits("Say", key);
             if (cursor == playback.Events.Length) { Reach("Say", key); return false; }
             var next = playback.Events[cursor];
             if (next.Kind != "Say" || next.Key != key) AbortReplay("剧情对话顺序与存档不同。");
@@ -489,6 +531,7 @@ namespace MortalHelper.Game
             if (Failed) throw new InvalidDataException(Failure);
             if (!Replaying) return 0;
             string digest = Digest(key);
+            ReplayNumericEdits("Choose", digest);
             if (cursor == playback.Events.Length) { if (playback.WaitKind != "Dice") Reach("Choose", digest); return 0; }
             var next = playback.Events[cursor];
             if (next.Kind != "Choose" || next.Key != digest || next.Choice < 1 || next.Choice > count)
