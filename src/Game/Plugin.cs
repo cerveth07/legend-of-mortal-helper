@@ -319,7 +319,7 @@ namespace MortalHelper.Game
         {
             "story", "story-recovery", "story-recall", "battle-duel", "battle-group",
             "growth", "growth-relation", "numeric-books", "numeric-miscs",
-            "numeric-special", "numeric-consumables", "save", "language", "badge",
+            "numeric-special", "numeric-consumables", "map", "save", "language", "badge",
             "numeric-attributes-anchor", "numeric-items-anchor", "numeric-speed-anchor", "story-notice"
         };
 
@@ -359,10 +359,12 @@ namespace MortalHelper.Game
                     Panel.Page = 3;
                     int category = view == "numeric-books" ? 0 : view == "numeric-miscs" ? 1 : view == "numeric-special" ? 2 : 3;
                     Panel.SetTourPosition(0, category); break;
-                case "save":
+                case "map":
                     Panel.Page = 4; break;
-                case "language":
+                case "save":
                     Panel.Page = 5; break;
+                case "language":
+                    Panel.Page = 6; break;
                 case "badge":
                     Panel.Visible = false; break;
             }

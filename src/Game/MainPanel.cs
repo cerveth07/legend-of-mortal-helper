@@ -19,7 +19,7 @@ namespace MortalHelper.Game
         private const float MinWidth = 400f;
         private const float MinHeight = 570f;
 
-        private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "存档设置", "语言" };
+        private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "地图", "存档设置", "语言" };
         private static readonly string[] StoryViews = { "剧情", "回想" };
         private static readonly string[] ItemViews = { "书籍", "杂物", "贵重品", "消耗品" };
         private static readonly string[] BattleViews = { "单挑", "群战" };
@@ -48,6 +48,7 @@ namespace MortalHelper.Game
 
         private readonly Plugin plugin;
         private readonly PanelStyle style = new PanelStyle();
+        private readonly MapViewer map = new MapViewer();
         private Rect windowRect;
         private Rect shownRect;
         private Rect masterRect;
@@ -109,6 +110,7 @@ namespace MortalHelper.Game
                 else
                 {
                     if (!open || closing) return;
+                    map.EndDrag();
                     animFrom = shownRect.width > 1f ? shownRect : ClampWindow();
                     animTo = BadgeRect();
                     closing = true;
@@ -122,7 +124,7 @@ namespace MortalHelper.Game
         // list, matching the previous panel's shortcut.
         internal void OpenSaveSettings()
         {
-            page = 4;
+            page = 5;
             commentSlot = null;
             Visible = true;
         }
@@ -539,6 +541,7 @@ namespace MortalHelper.Game
             float contentWidth = ContentWidth();
             float viewportWidth = ViewportWidth();
             float horizontalPadding = style.Skin != null ? style.Skin.window.padding.horizontal : 32f;
+            if (page == 4) viewportWidth = Mathf.Max(120f * s, shownRect.width - horizontalPadding);
             float sideMargin = Mathf.Max(0f, (shownRect.width - horizontalPadding - viewportWidth) * .5f);
             GUILayout.BeginHorizontal(GUILayout.ExpandHeight(true));
             if (sideMargin > .5f) GUILayout.Space(sideMargin);
@@ -547,27 +550,30 @@ namespace MortalHelper.Game
             if (!features) UiLabel(AnytimeDuel.ApplyingRecordedAssists ?
                 "辅助已暂停；单挑当前行动按开始时设置完成，下次行动关闭辅助。" :
                 "万象录辅助功能已暂停。", style.Description);
-            // Body width always reserves the scrollbar gutter. Hide its visual track
-            // when content fits; showing/hiding it never changes text wrapping.
-            scroll[page] = GUILayout.BeginScrollView(scroll[page], false, false, GUIStyle.none,
-                GUI.skin.verticalScrollbar, GUIStyle.none, GUILayout.ExpandHeight(true));
-            GUILayout.BeginVertical(GUIStyle.none, GUILayout.Width(contentWidth), GUILayout.ExpandWidth(false));
-            firstSection = true;
-            if (features || page >= 4)
+            if (page == 4) MapPage();
+            else
             {
-                switch (page)
+                // Body width reserves the scrollbar gutter, keeping text wrapping stable.
+                scroll[page] = GUILayout.BeginScrollView(scroll[page], false, false, GUIStyle.none,
+                    GUI.skin.verticalScrollbar, GUIStyle.none, GUILayout.ExpandHeight(true));
+                GUILayout.BeginVertical(GUIStyle.none, GUILayout.Width(contentWidth), GUILayout.ExpandWidth(false));
+                firstSection = true;
+                if (features || page >= 5)
                 {
-                    case 0: StoryPage(); break;
-                    case 1: BattlePage(); break;
-                    case 2: GrowthPage(); break;
-                    case 3: NumericPage(); break;
-                    case 4: SavePage(); break;
-                    case 5: LanguagePage(); break;
+                    switch (page)
+                    {
+                        case 0: StoryPage(); break;
+                        case 1: BattlePage(); break;
+                        case 2: GrowthPage(); break;
+                        case 3: NumericPage(); break;
+                        case 5: SavePage(); break;
+                        case 6: LanguagePage(); break;
+                    }
                 }
+                GUILayout.Space(16f * s);
+                GUILayout.EndVertical();
+                GUILayout.EndScrollView();
             }
-            GUILayout.Space(16f * s);
-            GUILayout.EndVertical();
-            GUILayout.EndScrollView();
             if (!string.IsNullOrEmpty(statusForLayout))
             {
                 GUILayout.Space(6f * s);
@@ -581,6 +587,21 @@ namespace MortalHelper.Game
             GUILayout.EndVertical();
             GUILayout.EndHorizontal();
             DrawBottomBar();
+        }
+
+        private void MapPage()
+        {
+            GUILayout.BeginHorizontal(GUILayout.Height(RowH));
+            UiLabel("崆峒派地图", style.SectionTitle);
+            GUILayout.FlexibleSpace();
+            if (UiButton("复位", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
+                map.ResetView();
+            GUILayout.EndHorizontal();
+            Rect area = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none,
+                GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true), GUILayout.MinHeight(120f * scale));
+            map.Draw(area, style, Localize);
+            GUILayout.Space(6f * scale);
+            UiLabel("滚轮缩放 · 拖动查看", style.Description);
         }
 
         // The master switch lives in the title bar so every page keeps its full height.
@@ -1703,6 +1724,7 @@ namespace MortalHelper.Game
         }
         internal void Dispose()
         {
+            map.Dispose();
             if (blocker != null) UnityEngine.Object.Destroy(blocker);
             style.Dispose();
             if (ownedBodyFont != null) UnityEngine.Object.Destroy(ownedBodyFont);
