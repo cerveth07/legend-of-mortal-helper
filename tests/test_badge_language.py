@@ -1,0 +1,62 @@
+"""Guard the fixed brand scroll text against the panel language toggle.
+
+The collapsed badge is a vertical scroll that always reads 萬象錄 in traditional
+characters. Routing it through the panel's simplified/traditional switch turned
+it into 万象录, so the badge draw call must not use the localizing label helper.
+"""
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+# The literal the badge must draw. Asserting this substring (rather than pinning the
+# whole GUI.Label call) keeps the guarantee while surviving layout-only edits.
+BADGE_TEXT = '"萬\\n象\\n錄"'
+
+
+def read(path):
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+class BadgeLanguageTests(unittest.TestCase):
+    def test_badge_scroll_is_drawn_with_traditional_characters(self):
+        panel = read("src/Game/MainPanel.cs")
+        start = panel.index("private void DrawBadge()")
+        body = panel[start:panel.index("private void", start + 20)]
+        self.assertIn(BADGE_TEXT, body)
+        self.assertIn("GUI.Label(", body)
+
+    def test_badge_scroll_is_not_passed_through_the_language_toggle(self):
+        panel = read("src/Game/MainPanel.cs")
+        start = panel.index("private void DrawBadge()")
+        body = panel[start:panel.index("private void", start + 20)]
+        self.assertNotIn('UiLabel(new Rect(badge.x + 2f * s, titleY', body)
+        self.assertNotIn('Localize("萬', body)
+
+    @staticmethod
+    def _table(language, name):
+        marker = name + ' = "'
+        start = language.index(marker) + len(marker)
+        return language[start:language.index('"', start)]
+
+    def test_language_toggle_still_converts_panel_body_text(self):
+        panel = read("src/Game/MainPanel.cs")
+        self.assertIn("private string Localize(string text)", panel)
+        self.assertIn("private void UiLabel(string text, GUIStyle design", panel)
+        language = read("src/Game/UiLanguage.cs")
+        s2t_source = self._table(language, "SimplifiedToTraditionalSource")
+        s2t_target = self._table(language, "SimplifiedToTraditionalTarget")
+        t2s_source = self._table(language, "TraditionalToSimplifiedSource")
+        t2s_target = self._table(language, "TraditionalToSimplifiedTarget")
+        # Convert maps by character index, so equal lengths plus the correct pairing is
+        # the actual contract. Merely containing both characters would also pass if the
+        # tables were reversed or shifted.
+        self.assertEqual(len(s2t_source), len(s2t_target), "simplified->traditional tables differ in length")
+        self.assertEqual(len(t2s_source), len(t2s_target), "traditional->simplified tables differ in length")
+        self.assertEqual(s2t_target[s2t_source.index("万")], "萬")
+        self.assertEqual(s2t_target[s2t_source.index("戏")], "戲")
+        self.assertEqual(t2s_target[t2s_source.index("萬")], "万")
+        self.assertEqual(t2s_target[t2s_source.index("戲")], "戏")
+
+
+if __name__ == "__main__":
+    unittest.main()

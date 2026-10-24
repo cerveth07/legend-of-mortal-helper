@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Contracts.cs" />
+    <Compile Include="TitleContracts.cs" />
+    <Compile Include="NumericEditContracts.cs" />
+    <Compile Include="StoryContracts.cs" />
+    <Compile Include="DuelJournalTests.cs" />
+    <Compile Include="DuelSaveMenuStateTests.cs" />
+    <Compile Include="../src/Core/*.cs" />
+    <Compile Include="../src/Recovery/*.cs" />
+    <Compile Include="../src/Game/UiLanguage.cs" />
+    <Compile Include="../src/Game/AnytimeStoryCodec.cs" />
+    <Compile Include="../src/Game/AnytimeDuelJournal.cs" />
+    <Compile Include="../src/Game/DuelSaveMenuState.cs" />
+  </ItemGroup>
+</Project>

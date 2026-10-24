@@ -1,0 +1,1958 @@
+using System;
+using System.Collections.Generic;
+using BepInEx.Configuration;
+using Mortal.Core;
+using UnityEngine;
+using UnityEngine.UI;
+
+namespace MortalHelper.Game
+{
+    // Visual shell reproduced from the previous panel: a parchment sheet with
+    // corner accents, ink wash, scroll rolls, the tab row with a paper
+    // highlight, switch rows, footer opacity slider, resize grip and the vertical
+    // KaiTi badge. Feature bodies below are this project's own implementations.
+    internal sealed class MainPanel
+    {
+        private const float ExpandDuration = .22f;
+        private const float BadgeWidth = 52f;
+        private const float BadgeHeight = 152f;
+        private const float MinWidth = 400f;
+        private const float MinHeight = 570f;
+
+        private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "地图", "存档设置", "语言" };
+        private static readonly string[] StoryViews = { "剧情", "回想" };
+        private static readonly string[] ItemViews = { "书籍", "杂物", "贵重品", "消耗品" };
+        private static readonly string[] BattleViews = { "单挑", "群战" };
+        private static readonly string[] GrowthViews = { "养成", "人际", "称号" };
+        private static readonly string[] Lovers = { "自己", "小师妹", "瑞杏", "叶云裳", "虞小梅", "上官萤", "夏侯兰", "郁竹", "魏菊", "龙湘" };
+        private static readonly HashSet<string> Editable = NumericEdits.Stats;
+        private static readonly string[] StatFamilies = { "全部", "资源门派", "人物状态", "武学技艺", "才学性情", "抗性" };
+        private static readonly Dictionary<string, int> StatFamilyOf = new Dictionary<string, int> {
+            { "銀兩", 1 }, { "個人貢獻度", 1 }, { "門派資產", 1 }, { "門派名聲", 1 }, { "門派人數", 1 }, { "向心力", 1 },
+            { "體力", 2 }, { "內力", 2 }, { "心理衛生", 2 }, { "武學點數", 2 }, { "命運", 2 }, { "陰陽內功", 2 },
+            { "武功拳掌", 3 }, { "武功暗器", 3 }, { "武功刀劍", 3 }, { "輕功", 3 }, { "鍛造", 3 }, { "毒藥", 3 },
+            { "學問", 4 }, { "嘴力", 4 }, { "性情", 4 }, { "處世", 4 }, { "道德", 4 }, { "修養", 4 },
+            { "抗毒", 5 }, { "抗麻", 5 }
+        };
+
+        private readonly Plugin plugin;
+        private readonly PanelStyle style = new PanelStyle();
+        private readonly MapViewer map = new MapViewer();
+        private Rect windowRect;
+        private Rect shownRect;
+        private Rect masterRect;
+        private bool recoveryOpen;
+        private bool idGlossaryOpen;
+        private bool editOpen = true;
+        private bool statsOpen = true, itemsOpen, worldOpen;
+        private int statFamily;
+        private bool confirmResetSlots, confirmClearComments;
+        private bool confirmRestoreMain, confirmRestoreBackup;
+        private readonly Dictionary<string, string> relationshipEdits = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> statEdits = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> itemEdits = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly List<EditRecord> editLog = new List<EditRecord>();
+        private sealed class EditRecord { internal string Label; internal Action Undo; }
+
+        private Vector2 badgePosition;
+        private bool open, initialized;
+        private float scale;
+        private float opacity;
+        private bool animating, closing;
+        private float progress;
+        private Rect animFrom, animTo;
+        private float tabTransition = 1f;
+        private int page, storyView, battleView, growthView, loverIndex;
+        private int lastPage = -1;
+        private bool loverDraftLoaded;
+        private Font ownedBodyFont;
+        private readonly Queue<Action> deferred = new Queue<Action>();
+        private string searchEdit = "", itemSearchEdit = "";
+        private readonly Vector2[] scroll = new Vector2[Pages.Length];
+        private GameItemType itemType = GameItemType.雜物;
+        private string itemSearch = "", search = "";
+        private bool showAllItems, loggedBadge, showAllTitles;
+        private string slotComment = "", commentSlot, slotCountText = "";
+        private string legendSlotCountText = "";
+        private int recoverySlot = 1;
+        private GameObject blocker;
+        private RectTransform blockerRect;
+        private int tabColumns;
+        private float tabSlotWidth;
+        private bool draggingBadge, badgeMoved, draggingWindow;
+        private int resizeEdges, hoverEdges;
+        private Vector2 dragStartMouse;
+        private Rect dragStartRect;
+        private Vector2 dragStart;
+        private int lastWidth, lastHeight;
+
+        internal bool Visible
+        {
+            get => open;
+            set
+            {
+                if (value)
+                {
+                    // `open` only clears when the closing animation finishes, so a press
+                    // during that animation used to hit this early return and do nothing.
+                    // If the animation then stalls (the window is minimised, so OnGUI is
+                    // not called), the panel stayed collapsed and no key press could
+                    // recover it. Reopening now cancels the close instead.
+                    if (open && !closing) return;
+                    bool midClose = closing;
+                    loverDraftLoaded = false;
+                    animFrom = midClose && shownRect.width > 1f ? shownRect : BadgeRect();
+                    animTo = ClampWindow();
+                    open = true;
+                    closing = false;
+                }
+                else
+                {
+                    if (!open || closing) return;
+                    map.EndDrag();
+                    animFrom = shownRect.width > 1f ? shownRect : ClampWindow();
+                    animTo = BadgeRect();
+                    closing = true;
+                }
+                animating = true;
+                progress = 0f;
+            }
+        }
+
+        // Opened by F2 so the comment editor is one keystroke away from the save
+        // list, matching the previous panel's shortcut.
+        internal void OpenSaveSettings()
+        {
+            page = 5;
+            commentSlot = null;
+            Visible = true;
+        }
+
+        internal MainPanel(Plugin plugin)
+        {
+            this.plugin = plugin;
+            windowRect = new Rect(plugin.Options.X.Value, plugin.Options.Y.Value,
+                Mathf.Max(MinWidth, plugin.Options.Width.Value), Mathf.Max(MinHeight, plugin.Options.Height.Value));
+            badgePosition = new Vector2(plugin.Options.BadgeX.Value, plugin.Options.BadgeY.Value);
+            opacity = Mathf.Clamp(Finite(plugin.Options.Opacity.Value, .85f), .4f, 1f);
+        }
+
+        // Runs outside OnGUI: applying state changes here keeps every frame's
+        // control count identical between the layout and repaint passes.
+        internal bool RecoveryOpen { get { return recoveryOpen; } set { recoveryOpen = value; } }
+
+        internal void SetView(int story, int battle, int growth)
+        {
+            storyView = Mathf.Clamp(story, 0, StoryViews.Length - 1);
+            battleView = Mathf.Clamp(battle, 0, BattleViews.Length - 1);
+            growthView = Mathf.Clamp(growth, 0, GrowthViews.Length - 1);
+        }
+
+        internal void ScrollToEnd(int target)
+        {
+            if (target < 0 || target >= scroll.Length) return;
+            scroll[target] = new Vector2(0f, 100000f);
+        }
+
+        private bool firstSection;
+
+        internal void TourJumpToSection(int section) { JumpToNumericSection(section); }
+
+        private void JumpToNumericSection(int section)
+        {
+            if (section < 0 || section > 2) return;
+            statsOpen = section == 0;
+            itemsOpen = section == 1;
+            worldOpen = section == 2;
+            scroll[3] = Vector2.zero;
+        }
+
+        internal float TourScrollY { get { return scroll[page].y; } }
+
+        internal void SetTourPosition(int y, int itemCategory = -1)
+        {
+            scroll[page] = new Vector2(0f, y);
+            if (itemCategory >= 0)
+            {
+                itemType = (GameItemType)(Mathf.Clamp(itemCategory, 0, 3) + 1);
+                showAllItems = true;
+            }
+        }
+
+        internal Action CaptureTourState()
+        {
+            int savedPage = page, savedLastPage = lastPage;
+            int savedStory = storyView, savedBattle = battleView, savedGrowth = growthView;
+            int savedLover = loverIndex;
+            int savedStatFamily = statFamily;
+            bool savedDraft = loverDraftLoaded, savedAll = showAllItems;
+            bool savedVisible = Visible, savedRecovery = recoveryOpen;
+            bool savedStats = statsOpen, savedItems = itemsOpen, savedWorld = worldOpen;
+            GameItemType savedCategory = itemType;
+            Vector2[] savedScroll = (Vector2[])scroll.Clone();
+            return () =>
+            {
+                Visible = savedVisible;
+                page = savedPage; lastPage = savedLastPage;
+                storyView = savedStory; battleView = savedBattle; growthView = savedGrowth;
+                itemType = savedCategory; showAllItems = savedAll;
+                recoveryOpen = savedRecovery;
+                statsOpen = savedStats; itemsOpen = savedItems; worldOpen = savedWorld;
+                statFamily = savedStatFamily;
+                loverIndex = savedLover; loverDraftLoaded = savedDraft;
+                Array.Copy(savedScroll, scroll, scroll.Length);
+            };
+        }
+
+        internal string Geo()
+        {
+            return "shown=" + shownRect.width.ToString("0.0") + "x" + shownRect.height.ToString("0.0")
+                + " window=" + windowRect.width.ToString("0.0")
+                + " content=" + ContentWidth().ToString("0.0")
+                + " scale=" + scale.ToString("0.00");
+        }
+
+        internal bool EditingTextField { get; private set; }
+        private string EditableTextField(string id, string value, int maxLength, params GUILayoutOption[] options)
+        {
+            string name = "mortal-helper-text:" + id;
+            GUI.SetNextControlName(name);
+            string result = GUILayout.TextField(value, maxLength, options);
+            if (GUI.GetNameOfFocusedControl() == name) EditingTextField = true;
+            return result;
+        }
+
+        internal int Page
+        {
+            get { return page; }
+            set { loverDraftLoaded = false; page = Mathf.Clamp(value, 0, Pages.Length - 1); scroll[page] = Vector2.zero; lastPage = page; }
+        }
+
+        internal void Drain()
+        {
+            while (deferred.Count > 0)
+            {
+                try { deferred.Dequeue()(); }
+                catch (Exception error) { plugin.Report(error); }
+            }
+            if (!string.Equals(search, searchEdit, StringComparison.Ordinal)) search = searchEdit;
+            if (!string.Equals(itemSearch, itemSearchEdit, StringComparison.Ordinal)) itemSearch = itemSearchEdit;
+        }
+
+        private void Defer(Action action) { if (action != null) deferred.Enqueue(action); }
+
+        private string Localize(string text) { return UiLanguage.Translate(text, plugin.Options.LanguageKind); }
+        private void UiLabel(string text, GUIStyle design, params GUILayoutOption[] options)
+        { GUILayout.Label(Localize(text), design, options); }
+        private void UiLabel(Rect rect, string text, GUIStyle design)
+        { GUI.Label(rect, Localize(text), design); }
+        private bool UiButton(string text, GUIStyle design, params GUILayoutOption[] options)
+        { return GUILayout.Button(Localize(text), design, options); }
+        private bool UiButton(Rect rect, string text, GUIStyle design)
+        { return GUI.Button(rect, Localize(text), design); }
+        private bool UiButton(Rect rect, GUIContent content, GUIStyle design)
+        { return GUI.Button(rect, content, design); }
+
+        internal void Draw()
+        {
+            if (!initialized)
+            {
+                style.Build();
+                style.SetOpacity(opacity);
+                initialized = true;
+            }
+            EnsureScale();
+            if (opacity != Mathf.Clamp(Finite(plugin.Options.Opacity.Value, .85f), .4f, 1f))
+            {
+                opacity = Mathf.Clamp(Finite(plugin.Options.Opacity.Value, .85f), .4f, 1f);
+                style.SetOpacity(opacity);
+            }
+            GUISkin previous = GUI.skin;
+            bool previousEnabled = GUI.enabled;
+            EditingTextField = false;
+            GUI.skin = style.Skin;
+            if (plugin.Options.AutoTour.Value) GUI.enabled = false;
+            try
+            {
+                if (open || closing) DrawPanel();
+                if (!open) DrawBadge();
+            }
+            finally { GUI.skin = previous; GUI.enabled = previousEnabled; }
+        }
+
+        private void EnsureScale()
+        {
+            float next = Mathf.Clamp(Mathf.Min(Screen.width / 1920f, Screen.height / 1080f), .85f, 1.35f);
+            if (style.UiFont == null)
+            {
+                style.UiFont = CreateBodyFont();
+                plugin.Log("Body font: " + (style.UiFont == null ? "game default" : style.UiFont.name));
+            }
+            if (Mathf.Abs(next - scale) < .001f && lastWidth == Screen.width && lastHeight == Screen.height &&
+                style.Skin != null) return;
+            scale = next; lastWidth = Screen.width; lastHeight = Screen.height;
+            style.Refresh(scale, style.UiFont);
+            if (plugin.Options.AutoTour.Value)
+            {
+                foreach (var pair in new[] { new KeyValuePair<string, GUIStyle>("description", style.Description),
+                    new KeyValuePair<string, GUIStyle>("entry", style.Entry),
+                    new KeyValuePair<string, GUIStyle>("label", style.Skin.label) })
+                {
+                    var st = pair.Value;
+                    plugin.Log("[TextMetrics] " + pair.Key + " size=" + st.fontSize + " line=" + st.lineHeight
+                        + " fixed=" + st.fixedHeight + " offset=" + st.contentOffset + " padding=" + st.padding
+                        + " measured=" + st.CalcHeight(new GUIContent("收起面板后悬停选项生效；关闭总开关不会清掉下面两项的选择。"), ContentWidth())
+                        + " clipping=" + st.clipping + " align=" + st.alignment);
+                }
+            }
+            style.SetOpacity(opacity);
+        }
+
+        // The game ships only a calligraphic CJK font plus Arial, and Unity does not
+        // fall back glyphs for dynamic fonts. Load a normal sans CJK face from the
+        // OS for panel text; the Kai font stays on the vertical badge title.
+        private Font CreateBodyFont()
+        {
+            try
+            {
+                var font = Font.CreateDynamicFontFromOSFont(BodyFontNames(plugin.Options.LanguageKind), 18);
+                if (font != null) { ownedBodyFont = font; return font; }
+            }
+            catch (Exception) { }
+            return FindGameFont();
+        }
+
+        // YaHei carries no Hangul, so a Korean panel built from the Chinese list renders tofu.
+        // Ask for the language own face first; the Chinese list stays as the fallback for
+        // machines where that face is missing.
+        private static string[] BodyFontNames(UiLang language)
+        {
+            if (language == UiLang.Ko)
+                return new[] { "Malgun Gothic", "맑은 고딕", "Gulim", "Noto Sans CJK KR", "NanumGothic",
+                    "Microsoft YaHei UI", "Microsoft YaHei", "SimHei" };
+            if (language == UiLang.Ja)
+                return new[] { "Yu Gothic UI", "Meiryo", "MS Gothic", "Noto Sans CJK JP",
+                    "Microsoft YaHei UI", "Microsoft YaHei", "SimHei" };
+            return new[] { "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑", "SimHei", "黑体",
+                "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Meiryo", "Yu Gothic UI" };
+        }
+
+        // Switching language must rebuild the face: the font is chosen once per language.
+        internal void LanguageChanged()
+        {
+            if (ownedBodyFont != null) { UnityEngine.Object.Destroy(ownedBodyFont); ownedBodyFont = null; }
+            style.UiFont = CreateBodyFont();
+            // Cloned styles keep a reference to the old face; the cover style already heals
+            // itself on font change, the active tab style did not.
+            tabActiveStyle = null;
+            style.Refresh(scale, style.UiFont);
+            tabColumns = 0;
+            plugin.Log("Body font: " + (style.UiFont == null ? "game default" : style.UiFont.name));
+        }
+
+        private static Font FindGameFont()
+        {
+            Font fallback = null;
+            foreach (var font in Resources.FindObjectsOfTypeAll<Font>())
+            {
+                if (font == null || !font.HasCharacter('天')) continue;
+                if (IsCalligraphic(font.name)) { if (fallback == null) fallback = font; continue; }
+                return font;
+            }
+            return fallback;
+        }
+
+        private static bool IsCalligraphic(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string lower = name.ToLowerInvariant();
+            return lower.Contains("kai") || lower.Contains("brush") || lower.Contains("callig") || name.Contains("楷") || name.Contains("行書") || name.Contains("行书");
+        }
+
+        private static float Finite(float value, float fallback)
+        {
+            return float.IsNaN(value) || float.IsInfinity(value) ? fallback : value;
+        }
+
+        private Rect BadgeRect()
+        {
+            float badgeScale = scale > 0f ? scale : 1f;
+            float width = Mathf.Min(BadgeWidth * badgeScale, Mathf.Max(1f, Screen.width - 16f));
+            float height = Mathf.Min(BadgeHeight * badgeScale, Mathf.Max(1f, Screen.height - 16f));
+            badgePosition.x = Mathf.Clamp(Finite(badgePosition.x, 12f), 8f, Mathf.Max(8f, Screen.width - width - 8f));
+            badgePosition.y = Mathf.Clamp(Finite(badgePosition.y, 12f), 8f, Mathf.Max(8f, Screen.height - height - 8f));
+            return new Rect(badgePosition.x, badgePosition.y, width, height);
+        }
+
+        private Rect ClampWindow() { return Clamp(windowRect); }
+        private Rect Clamp(Rect source)
+        {
+            float designScale = Mathf.Max(1f, scale);
+            float minWidth = Mathf.Min(MinWidth * designScale, Mathf.Max(1f, Screen.width - 24f));
+            float minHeight = Mathf.Min(MinHeight * designScale, Mathf.Max(1f, Screen.height - 24f));
+            Rect rect = new Rect(Finite(source.x, 36f), Finite(source.y, 64f),
+                Finite(source.width, 640f), Finite(source.height, MinHeight));
+            rect.width = Mathf.Clamp(rect.width, minWidth, Mathf.Max(minWidth, Screen.width - 24f));
+            rect.height = Mathf.Clamp(rect.height, minHeight, Mathf.Max(minHeight, Screen.height - 24f));
+            rect.x = Mathf.Clamp(rect.x, 8f, Mathf.Max(8f, Screen.width - rect.width - 8f));
+            rect.y = Mathf.Clamp(rect.y, 8f, Mathf.Max(8f, Screen.height - rect.height - 8f));
+            return rect;
+        }
+
+
+        private static float EaseOutCubic(float t) { float p = 1f - t; return 1f - p * p * p; }
+
+        // Four-edge and corner resizing plus header dragging, polled from real
+        // mouse input. IMGUI cannot reliably own these gestures across the
+        // Layout/Repaint passes, which is why the previous panel did the same.
+        private void PollWindowPointer()
+        {
+            Vector3 raw = Input.mousePosition;
+            Vector2 mouse = new Vector2(raw.x, Screen.height - raw.y);
+            Rect rect = windowRect;
+            float hit = 16f * scale;
+            if (Input.GetMouseButtonDown(0))
+            {
+                int edges = NearEdges(rect, mouse, hit);
+                if (edges != 0) { resizeEdges = edges; dragStartMouse = mouse; dragStartRect = rect; }
+                else if (new Rect(rect.x, rect.y, Mathf.Max(0f, rect.width - 44f * scale), 42f * scale).Contains(mouse) && !InMasterSwitch(mouse))
+                { draggingWindow = true; dragStartMouse = mouse; dragStartRect = rect; }
+            }
+            if (Input.GetMouseButton(0) && (resizeEdges != 0 || draggingWindow))
+            {
+                Vector2 delta = mouse - dragStartMouse;
+                Rect next = dragStartRect;
+                if (draggingWindow) { next.x += delta.x; next.y += delta.y; }
+                else
+                {
+                    if ((resizeEdges & 1) != 0) { next.x = dragStartRect.x + delta.x; next.width = dragStartRect.width - delta.x; }
+                    if ((resizeEdges & 2) != 0) next.width = dragStartRect.width + delta.x;
+                    if ((resizeEdges & 4) != 0) { next.y = dragStartRect.y + delta.y; next.height = dragStartRect.height - delta.y; }
+                    if ((resizeEdges & 8) != 0) next.height = dragStartRect.height + delta.y;
+                    next.width = Mathf.Max(MinWidth * scale, next.width);
+                    next.height = Mathf.Max(MinHeight * scale, next.height);
+                    if ((resizeEdges & 1) != 0 && next.x + next.width < dragStartRect.xMax)
+                        next.x = dragStartRect.xMax - next.width;
+                    if ((resizeEdges & 4) != 0 && next.y + next.height < dragStartRect.yMax)
+                        next.y = dragStartRect.yMax - next.height;
+                }
+                windowRect = Clamp(next);
+            }
+            if (Input.GetMouseButtonUp(0) && (resizeEdges != 0 || draggingWindow))
+            { resizeEdges = 0; draggingWindow = false; SaveGeometry(); }
+            hoverEdges = resizeEdges != 0 ? resizeEdges : NearEdges(rect, mouse, hit);
+        }
+
+        // Bit mask: 1 left, 2 right, 4 top, 8 bottom.
+        private static int NearEdges(Rect rect, Vector2 point, float hit)
+        {
+            if (!new Rect(rect.x - hit, rect.y - hit, rect.width + hit * 2f, rect.height + hit * 2f).Contains(point)) return 0;
+            int edges = 0;
+            if (Mathf.Abs(point.x - rect.xMin) <= hit) edges |= 1;
+            if (Mathf.Abs(point.x - rect.xMax) <= hit) edges |= 2;
+            if (Mathf.Abs(point.y - rect.yMin) <= hit) edges |= 4;
+            if (Mathf.Abs(point.y - rect.yMax) <= hit) edges |= 8;
+            return edges;
+        }
+        private static Rect Lerp(Rect a, Rect b, float t)
+        {
+            return new Rect(Mathf.Lerp(a.x, b.x, t), Mathf.Lerp(a.y, b.y, t),
+                Mathf.Lerp(a.width, b.width, t), Mathf.Lerp(a.height, b.height, t));
+        }
+
+        private void DrawPanel()
+        {
+            if (animating) progress += Time.unscaledDeltaTime / ExpandDuration;
+            else if (!plugin.Options.AutoTour.Value) PollWindowPointer();
+            if (progress >= 1f)
+            {
+                progress = 1f;
+                animating = false;
+                if (closing) { closing = false; open = false; HideBlocker(); SaveGeometry(); return; }
+            }
+            shownRect = animating ? Lerp(animFrom, animTo, EaseOutCubic(Mathf.Clamp01(progress))) : ClampWindow();
+            // windowRect is the user geometry: only a settled frame may refresh it.
+            if (!animating) windowRect = shownRect;
+            float fade = 1f;
+            Color previousColor = GUI.color;
+            bool previousEnabled = GUI.enabled;
+            if (animating)
+            {
+                fade = closing ? 1f - Mathf.Clamp01(Mathf.InverseLerp(.25f, .82f, progress))
+                    : Mathf.Clamp01(Mathf.InverseLerp(.12f, .68f, progress));
+                GUI.color = new Color(previousColor.r, previousColor.g, previousColor.b, previousColor.a * fade);
+                GUI.enabled = false;
+            }
+            try
+            {
+                EnsureBlocker(shownRect);
+                GUI.DrawTexture(shownRect, style.Panel, ScaleMode.StretchToFill, true);
+                DrawFrame(shownRect);
+                Rect used = GUILayout.Window(0x4C4F4D10, shownRect, DrawContents, "");
+                if (!animating) { windowRect = Clamp(used); shownRect = windowRect; }
+            }
+            finally { GUI.color = previousColor; GUI.enabled = previousEnabled; }
+            DrawEdgeHint(shownRect);
+            DrawResizeGrip(shownRect);
+        }
+
+        // Active-edge highlight, matching the previous panel's resize affordance.
+        private void DrawEdgeHint(Rect rect)
+        {
+            if (hoverEdges == 0 || Event.current.type != EventType.Repaint) return;
+            float thickness = Mathf.Max(2f, 2f * scale);
+            if ((hoverEdges & 1) != 0) GUI.DrawTexture(new Rect(rect.x, rect.y, thickness, rect.height), style.Accent);
+            if ((hoverEdges & 2) != 0) GUI.DrawTexture(new Rect(rect.xMax - thickness, rect.y, thickness, rect.height), style.Accent);
+            if ((hoverEdges & 4) != 0) GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, thickness), style.Accent);
+            if ((hoverEdges & 8) != 0) GUI.DrawTexture(new Rect(rect.x, rect.yMax - thickness, rect.width, thickness), style.Accent);
+        }
+
+        private void DrawFrame(Rect rect)
+        {
+            float w = rect.width, h = rect.height;
+            GUI.DrawTexture(new Rect(rect.x, rect.y, w, 1f), style.Border);
+            GUI.DrawTexture(new Rect(rect.x, rect.y + h - 1f, w, 1f), style.Border);
+            GUI.DrawTexture(new Rect(rect.x, rect.y, 1f, h), style.Border);
+            GUI.DrawTexture(new Rect(rect.x + w - 1f, rect.y, 1f, h), style.Border);
+            float c = 14f * scale;
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + 2f, c, 1f), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + 2f, 1f, c), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + w - 2f - c, rect.y + 2f, c, 1f), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + w - 3f, rect.y + 2f, 1f, c), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + h - 3f, c, 1f), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + h - 2f - c, 1f, c), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + w - 2f - c, rect.y + h - 3f, c, 1f), style.AccentSoft);
+            GUI.DrawTexture(new Rect(rect.x + w - 3f, rect.y + h - 2f - c, 1f, c), style.AccentSoft);
+            if (style.Ink != null)
+                GUI.DrawTexture(new Rect(rect.x + Mathf.Max(0, w - 238f * scale), rect.y + Mathf.Max(70f, h - 205f * scale),
+                    230f * scale, 175f * scale), style.Ink, ScaleMode.StretchToFill, true);
+            if (w > 90f * scale && h > 50f * scale)
+            {
+                float rollW = 10f * scale, rollH = 18f * scale;
+                GUI.DrawTexture(new Rect(rect.x + 4f * scale, rect.y + h - rollH + 2f * scale, rollW, rollH),
+                    style.ScrollRoll, ScaleMode.StretchToFill, true);
+                GUI.DrawTexture(new Rect(rect.x + w - 14f * scale, rect.y + h - rollH + 2f * scale, rollW, rollH),
+                    style.ScrollRoll, ScaleMode.StretchToFill, true);
+                GUI.DrawTexture(new Rect(rect.x + 12f * scale, rect.y + h - 2f * scale, w - 24f * scale, 2f * scale),
+                    style.AccentSoft, ScaleMode.StretchToFill, true);
+            }
+        }
+
+        private string statusForLayout;
+
+        private void DrawContents(int windowID)
+        {
+            // Buttons can change Status during MouseUp. Freeze the notice for the
+            // complete Layout/input/Repaint cycle so no group appears mid-cycle.
+            if (Event.current.type == EventType.Layout) statusForLayout = plugin.Status;
+            float s = scale;
+            float headerHeight = 42f * s;
+            UiLabel(new Rect(0, 0, shownRect.width, headerHeight), "活侠·万象录", style.Title);
+            if (UiButton(new Rect(shownRect.width - 40f * s, 4f * s, 32f * s, 30f * s), "×", style.IconButton))
+                Visible = false;
+            DrawMasterSwitch();
+            GUI.DrawTexture(new Rect(16f * s, headerHeight - 1f, Mathf.Max(0f, shownRect.width - 32f * s), 1f), style.Hairline);
+            GUILayout.Space(headerHeight);
+            DrawTabs();
+            GUILayout.Space(8f * s);
+
+            bool features = plugin.Options.Enabled.Value;
+            if (page != lastPage) { loverDraftLoaded = false; scroll[page] = Vector2.zero; lastPage = page; }
+
+            // Wide windows keep one fixed content column, centred. Stretching rows was
+            // the "wide panel looks empty" report; margins read as deliberate instead.
+            float contentWidth = ContentWidth();
+            float viewportWidth = ViewportWidth();
+            float horizontalPadding = style.Skin != null ? style.Skin.window.padding.horizontal : 32f;
+            if (page == 4) viewportWidth = Mathf.Max(120f * s, shownRect.width - horizontalPadding);
+            float sideMargin = Mathf.Max(0f, (shownRect.width - horizontalPadding - viewportWidth) * .5f);
+            GUILayout.BeginHorizontal(GUILayout.ExpandHeight(true));
+            if (sideMargin > .5f) GUILayout.Space(sideMargin);
+            GUILayout.BeginVertical(GUIStyle.none, GUILayout.Width(viewportWidth), GUILayout.ExpandHeight(true));
+
+            if (!features) UiLabel(AnytimeDuel.ApplyingRecordedAssists ?
+                "辅助已暂停；单挑当前行动按开始时设置完成，下次行动关闭辅助。" :
+                "万象录辅助功能已暂停。", style.Description);
+            if (page == 4) MapPage();
+            else
+            {
+                // Body width reserves the scrollbar gutter, keeping text wrapping stable.
+                scroll[page] = GUILayout.BeginScrollView(scroll[page], false, false, GUIStyle.none,
+                    GUI.skin.verticalScrollbar, GUIStyle.none, GUILayout.ExpandHeight(true));
+                GUILayout.BeginVertical(GUIStyle.none, GUILayout.Width(contentWidth), GUILayout.ExpandWidth(false));
+                firstSection = true;
+                if (features || page >= 5)
+                {
+                    switch (page)
+                    {
+                        case 0: StoryPage(); break;
+                        case 1: BattlePage(); break;
+                        case 2: GrowthPage(); break;
+                        case 3: NumericPage(); break;
+                        case 5: SavePage(); break;
+                        case 6: LanguagePage(); break;
+                    }
+                }
+                GUILayout.Space(16f * s);
+                GUILayout.EndVertical();
+                GUILayout.EndScrollView();
+            }
+            if (!string.IsNullOrEmpty(statusForLayout))
+            {
+                GUILayout.Space(6f * s);
+                GUILayout.BeginVertical(style.Notice);
+                Color before = GUI.color;
+                GUI.color = StatusLooksBad(statusForLayout) ? new Color(1f, .80f, .74f) : new Color(.98f, .90f, .70f);
+                UiLabel("提示：" + statusForLayout, style.Description);
+                GUI.color = before;
+                GUILayout.EndVertical();
+            }
+            GUILayout.EndVertical();
+            GUILayout.EndHorizontal();
+            DrawBottomBar();
+        }
+
+        private void MapPage()
+        {
+            GUILayout.BeginHorizontal(GUILayout.Height(RowH));
+            UiLabel("地图", style.SectionTitle);
+            GUILayout.FlexibleSpace();
+            if (UiButton("复位", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
+                map.ResetView();
+            GUILayout.EndHorizontal();
+            Rect area = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none,
+                GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true), GUILayout.MinHeight(120f * scale));
+            map.Draw(area, style, Localize);
+            GUILayout.Space(6f * scale);
+            int view = GUILayout.SelectionGrid(map.View, new[] { Localize("全天下舆图"), Localize("崆峒派") },
+                2, style.Segment, GUILayout.Height(RowH * 2f));
+            if (view != map.View) map.SetView(view);
+            GUILayout.Space(4f * scale);
+            UiLabel("滚轮缩放 · 拖动查看；放大地图可看清地名。", style.Description);
+        }
+
+        // The master switch lives in the title bar so every page keeps its full height.
+        private void DrawMasterSwitch()
+        {
+            float s = scale;
+            float gap = 8f * s;
+            float track = 52f * s, label = 26f * s;
+            float right = shownRect.width - 44f * s - gap;
+            masterRect = new Rect(right - track - gap - label, 6f * s, track + gap + label, 30f * s);
+            bool features = plugin.Options.Enabled.Value;
+            bool next = GUI.Toggle(new Rect(masterRect.x, masterRect.y + 2.5f * s, track, 25f * s),
+                features, GUIContent.none, style.SwitchTrack);
+            UiLabel(new Rect(masterRect.x + track + gap, masterRect.y + 2.5f * s, label, 25f * s),
+                next ? "开" : "关", style.SwitchState);
+            if (next != features)
+            {
+                plugin.Options.Enabled.Value = next;
+                if (next && !plugin.RepairPatches())
+                {
+                    // Enabling must not pretend to work when the earlier initialisation
+                    // failure left no patches installed.
+                    plugin.Options.Enabled.Value = false;
+                    plugin.Status = "上次初始化失败，补丁无法恢复；请先按日志处理原因再重启游戏。";
+                }
+                plugin.Options.Config.Save();
+            }
+        }
+
+        // Screen-space hit test so a click on the switch does not start a window drag.
+        private bool InMasterSwitch(Vector2 screenPoint)
+        {
+            if (masterRect.width <= 0f) return false;
+            var rect = windowRect;
+            return new Rect(rect.x + masterRect.x - 4f * scale, rect.y + masterRect.y,
+                masterRect.width + 8f * scale, masterRect.height).Contains(screenPoint);
+        }
+
+        private void DrawTabs()
+        {
+            float s = scale;
+            float rowHeight = 34f * s;
+            if (tabTransition < 1f) tabTransition = Mathf.MoveTowards(tabTransition, 1f, Time.unscaledDeltaTime / .22f);
+            float available = ViewportWidth();
+            // Opening from the badge briefly yields a narrow animated window. Never shrink the
+            // shared font here: it would stay small after expansion. The grid is measured
+            // during Layout only and reused for the rest of the frame: measuring again on
+            // Repaint yields a different column count while the window is animating, and two
+            // different row counts in one frame desynchronise IMGUI.
+            if (Event.current.type == EventType.Layout || tabColumns < 1)
+            {
+                float widest = 0f;
+                foreach (string caption in Pages)
+                    widest = Mathf.Max(widest, style.Tab.CalcSize(new GUIContent(Localize(caption))).x + 20f * s);
+                tabColumns = Pages.Length;
+                while (tabColumns > 1 && widest * tabColumns > available) tabColumns--;
+                tabSlotWidth = available / Mathf.Max(1, tabColumns);
+            }
+            int columns = Mathf.Max(1, tabColumns);
+            float slotWidth = tabSlotWidth > 0f ? tabSlotWidth : available;
+            int rows = (Pages.Length + columns - 1) / columns;
+            for (int row = 0; row < rows; row++)
+            {
+                GUILayout.BeginHorizontal(GUILayout.Height(rowHeight));
+                for (int column = 0; column < columns; column++)
+                {
+                    int i = row * columns + column;
+                    if (i >= Pages.Length) { GUILayout.Space(slotWidth * (columns - column)); break; }
+                    Rect r = GUILayoutUtility.GetRect(GUIContent.none, style.Tab, GUILayout.Width(slotWidth),
+                        GUILayout.ExpandWidth(false), GUILayout.Height(rowHeight));
+                    bool hover = r.Contains(Event.current.mousePosition);
+                    if (i == page)
+                    {
+                        float t = EaseOutCubic(Mathf.Clamp01(tabTransition));
+                        float paperWidth = Mathf.Lerp(12f * s, Mathf.Max(16f, r.width - 8f * s), t);
+                        Rect paper = new Rect(r.center.x - paperWidth / 2f, r.y + 3f * s, paperWidth, r.height - 6f * s);
+                        GUI.DrawTexture(paper, style.ScrollPaper, ScaleMode.StretchToFill, true);
+                        float rollW = Mathf.Min(10f * s, paper.width * .18f);
+                        GUI.DrawTexture(new Rect(paper.x - rollW * .35f, paper.y, rollW, paper.height),
+                            style.ScrollRoll, ScaleMode.StretchToFill, true);
+                        GUI.DrawTexture(new Rect(paper.xMax - rollW * .65f, paper.y, rollW, paper.height),
+                            style.ScrollRoll, ScaleMode.StretchToFill, true);
+                        GUI.DrawTexture(new Rect(paper.x, paper.y, paper.width, 1f), style.Accent);
+                        GUI.DrawTexture(new Rect(paper.x, paper.yMax - 1f, paper.width, 1f), style.Accent);
+                        if (tabActiveStyle == null || tabActiveScale != style.Scale)
+                        {
+                            tabActiveStyle = new GUIStyle(style.Tab);
+                            tabActiveScale = style.Scale;
+                        }
+                        tabActiveStyle.normal.textColor = new Color(.17f, .13f, .09f, Mathf.Clamp01(t * 1.6f));
+                        UiLabel(r, Pages[i], tabActiveStyle);
+                    }
+                    else
+                    {
+                        UiLabel(r, Pages[i], hover ? style.TabHover : style.Tab);
+                        if (hover) GUI.DrawTexture(new Rect(r.x + 8f * s, r.yMax - 2f * s, r.width - 16f * s, 1f), style.AccentSoft);
+                    }
+                    if (UiButton(r, GUIContent.none, style.TabHit) && i != page)
+                    { page = i; tabTransition = 0f; GUI.FocusControl(null); }
+                }
+                GUILayout.EndHorizontal();
+            }
+            Rect rule = GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true), GUILayout.Height(Mathf.Max(1f, s)));
+            if (Event.current.type == EventType.Repaint) GUI.DrawTexture(rule, style.AccentSoft);
+        }
+
+        private void StoryPage()
+        {
+            int view = ViewTabs(storyView, StoryViews);
+            if (view != storyView) { storyView = view; scroll[0] = Vector2.zero; }
+            if (storyView == 1) { Recall(); return; }
+
+            Section("选项提示");
+            int mode = (int)plugin.Options.HintMode.Value;
+            int nextMode = SegmentSetting("选项后果提示", mode,
+                new[] { Localize("关"), Localize("悬停") },
+                "把「选完会怎样」放进右侧提示框，原生选项文本保持原样。「悬停」需要先按 Tab 收起面板，再把鼠标停在选项上。");
+            if (nextMode != mode && nextMode >= 0 && nextMode <= 1)
+            {
+                plugin.Options.HintMode.Value = (OptionHintMode)nextMode;
+                plugin.Options.Config.Save();
+            }
+            int detail = (int)plugin.Options.HintDetail.Value;
+            int nextDetail = SegmentSetting("显示范围", detail,
+                new[] { Localize("简洁"), Localize("完整") },
+                "简洁只写数值与好感；完整另外写解锁条件、剧情标记与分支去向（含剧透）。");
+            if (nextDetail != detail && nextDetail >= 0 && nextDetail <= 1)
+            {
+                plugin.Options.HintDetail.Value = (OptionHintDetail)nextDetail;
+                plugin.Options.Config.Save();
+            }
+            Note(HintStatus());
+            Note("提示内容默认只读；「一键设为」会写入当前进度，不修改已保存的存档文件。面板打开时提示暂停显示。");
+
+            // A reader-facing key for the ids that show up under 去向. Collapsed by
+            // default: returning players never need it, and it is not a setting.
+            idGlossaryOpen = Fold("内部编号说明", idGlossaryOpen, () => idGlossaryOpen = !idGlossaryOpen);
+            if (!idGlossaryOpen) return;
+            IdRow("ch2_2_3_2", "剧本（「下一段」指向它）");
+            IdRow("D_2_2_3_2_006", "对白");
+            IdRow("O_2_2_3_2_001", "选项文本");
+            IdRow("N_2_2_3_2_001", "旁白 / 结果");
+            IdRow("Ch_2_2_3_2_004", "剧情节点（纪事 + 分支状态）");
+            IdRow("S0202_02_01", "场景 / 战斗（_01 后缀是该场景的剧本）");
+            IdRow("A00001/M20004", "开关 / 计数器");
+            GUILayout.Space(4f * scale);
+            Note("这些只是资源键，不影响游戏里显示的文字。");
+            Note("剧情标记 H00001 这类，游戏内有名称时会直接显示（如门派好感度）。");
+            Note("人物关系里的 brother2 这类是角色 id，会显示成角色名（如 唐錚）。");
+        }
+
+        private void IdRow(string id, string note)
+        {
+            // The id column is measured once per row so a narrow panel keeps the
+            // description readable instead of pushing it off the right edge.
+            float width = style.Tight.CalcSize(new GUIContent(id)).x + 10f * scale;
+            GUILayout.BeginHorizontal();
+            UiLabel(id, style.Tight, GUILayout.Width(width));
+            UiLabel(note, style.Description, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
+        }
+
+        // What the current script exposes, so an empty tooltip is never read as a
+        // broken plugin.
+        private static string HintStatus()
+        {
+            if (string.IsNullOrEmpty(HintAdapter.ScriptName))
+                return "尚未进入剧情：切换到剧本后，这里显示可解析的选项数。";
+            if (HintAdapter.Count == 0)
+                return "当前剧本 " + HintAdapter.ScriptName + "：没有可解析的选项。";
+            string text = "当前剧本 " + HintAdapter.ScriptName + " · 可解析 " + HintAdapter.Count
+                + " 个选项 · 有内容 " + HintAdapter.WithContent + " 个";
+            if (HintAdapter.WithContent == 0) text += "\n这些选项都是纯演出，没有可显示的数值变化。";
+            return text;
+        }
+
+        // Label above a segmented choice; the grid owns the full width so long labels
+        // never squeeze the control.
+        private int SegmentSetting(string label, int current, string[] options, string hint)
+        {
+            UiLabel(label, style.Entry);
+            int next = GUILayout.SelectionGrid(current, options, options.Length, style.Segment,
+                GUILayout.Height(RowH * 2f + 4f * scale));
+            if (!string.IsNullOrEmpty(hint))
+            {
+                GUILayout.Space(2f * scale);
+                Wrapped(hint, style.Description);
+            }
+            GUILayout.Space(6f * scale);
+            return next;
+        }
+
+        private void Recall()
+        {
+            if (DuelTools.Dialogue.Count == 0) { Note("本场还没有记录。回想最多保留 500 条，不暂停战斗。"); return; }
+            foreach (string line in DuelTools.Dialogue) UiLabel(line, style.Entry);
+            Note("回想最多保留 500 条；新单挑开始时清空。");
+        }
+
+        private void BattlePage()
+        {
+            int view = ViewTabs(battleView, BattleViews);
+            if (view != battleView) { battleView = view; scroll[1] = Vector2.zero; }
+            bool duel = battleView == 0;
+            // Small right-aligned actions: the view switcher above already owns the
+            // full-width bar look, so these must not compete with it.
+            GUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            if (UiButton("全部开启", style.SubtleStyle, GUILayout.Width(84f * scale), GUILayout.Height(24f * scale))) SetBattle(duel, true);
+            if (UiButton("全部关闭", style.SubtleStyle, GUILayout.Width(84f * scale), GUILayout.Height(24f * scale))) SetBattle(duel, false);
+            GUILayout.EndHorizontal();
+            if (duel) DuelSection(); else GroupSection();
+        }
+
+        private void SetBattle(bool duel, bool on)
+        {
+            if (duel)
+            {
+                plugin.Options.DuelHealth.Value = on;
+                plugin.Options.DuelStamina.Value = on;
+                plugin.Options.DuelDodge.Value = on;
+                plugin.Options.DuelAlwaysHit.Value = on;
+                plugin.Options.DuelFirstStrike.Value = on;
+                plugin.Options.DuelZeroDamage.Value = false;
+                plugin.Options.DuelDamage.Value = on;
+            }
+            else
+            {
+                plugin.Options.GroupHealth.Value = on;
+                plugin.Options.GroupAllyHealth.Value = on;
+                plugin.Options.GroupMana.Value = on;
+                plugin.Options.GroupCooldown.Value = on;
+                plugin.Options.GroupFreeze.Value = on;
+                plugin.Options.GroupDown.Value = on;
+            }
+            plugin.Options.Config.Save();
+            plugin.Status = (duel ? "单挑" : "群战") + (on ? (duel ? "辅助已开启（伤害模式选用一击必杀）。" : "辅助已全部开启。") : "辅助已全部关闭。");
+        }
+
+        private void DuelSection()
+        {
+            Note("单挑辅助（含总开关）从下一次行动生效；读取回合存档不会改动当前设置。");
+            plugin.Options.DuelHealth.Value = DrawSwitchRow("主角生命不减少", plugin.Options.DuelHealth.Value,
+                "回合扣血与持续伤害归零；剧情强制改值与胜负保留。");
+            plugin.Options.DuelStamina.Value = DrawSwitchRow("无限气力", plugin.Options.DuelStamina.Value,
+                "保持单挑行动气力；不改周目内力属性。");
+            plugin.Options.DuelDodge.Value = DrawSwitchRow("最高闪避率", plugin.Options.DuelDodge.Value,
+                "原生闪避拉满；必中特技与剧情结果仍生效。");
+            plugin.Options.DuelAlwaysHit.Value = DrawSwitchRow("必定命中", plugin.Options.DuelAlwaysHit.Value,
+                "攻击/兵器/绝招一律命中，不看命中率。");
+            plugin.Options.DuelFirstStrike.Value = DrawSwitchRow("必定先手", plugin.Options.DuelFirstStrike.Value,
+                "行动对比判你赢，敌方本回合行动失效。");
+            plugin.Options.DuelZeroDamage.Value = DrawSwitchRow("造成伤害为零", plugin.Options.DuelZeroDamage.Value,
+                "敌方所受伤害归零（含持续伤害），与一击必杀互斥。");
+            plugin.Options.DuelDamage.Value = DrawSwitchRow("一击必杀", plugin.Options.DuelDamage.Value,
+                "有效伤害直接清空敌方生命；自带必中与先手。");
+        }
+
+        private void GroupSection()
+        {
+            plugin.Options.GroupHealth.Value = DrawSwitchRow("主角生命不减少", plugin.Options.GroupHealth.Value,
+                "仍会硬直；友军与剧情退场按原生规则。");
+            plugin.Options.GroupAllyHealth.Value = DrawSwitchRow("友军生命不减少", plugin.Options.GroupAllyHealth.Value,
+                "仅保护友军；仍会硬直，剧情退场保留。");
+            plugin.Options.GroupMana.Value = DrawSwitchRow("气力保持充足", plugin.Options.GroupMana.Value,
+                "只影响群战气力条。");
+            plugin.Options.GroupCooldown.Value = DrawSwitchRow("技能无冷却", plugin.Options.GroupCooldown.Value,
+                "保留原生施放限制与演出。");
+            plugin.Options.GroupFreeze.Value = DrawSwitchRow("暂停战斗倒计时", plugin.Options.GroupFreeze.Value,
+                "按倒计时归零获胜的关卡请关闭。");
+            plugin.Options.GroupDown.Value = DrawSwitchRow("敌方受伤即倒地", plugin.Options.GroupDown.Value,
+                "含友军与持续伤害；敌闪避、剧情无敌保留。");
+        }
+
+        private void GrowthPage()
+        {
+            int view = ViewTabs(growthView, GrowthViews);
+            if (view != growthView) { growthView = view; loverDraftLoaded = false; scroll[2] = Vector2.zero; }
+            if (growthView == 1) { Relationships(); return; }
+            if (growthView == 2) { TitlesPage(); return; }
+            Note("以下选项只在自由活动场景空闲时生效；练功与锻造炼丹两组按操作前后恢复点数与金钱。");
+            Section("练功");
+            plugin.Options.PracticeLimit.Value = DrawSwitchRow("解除修炼点数消耗上限", plugin.Options.PracticeLimit.Value,
+                "练功不再限制单次消耗，按现有武学点数扣减。");
+            plugin.Options.SkillFree.Value = DrawSwitchRow("练功消耗不减", plugin.Options.SkillFree.Value,
+                "结束后把武学点数恢复原值；修炼条件仍须满足。");
+            plugin.Options.FastSkill.Value = DrawSwitchRow("快速练功", plugin.Options.FastSkill.Value,
+                "一次完成一级；升级奖励与条件照旧。");
+            Section("锻造与炼丹");
+            plugin.Options.ForgeFree.Value = DrawSwitchRow("锻造炼丹消耗不减", plugin.Options.ForgeFree.Value,
+                "结束后把点数与金钱恢复原值；不解锁研发条件。");
+            plugin.Options.FastForge.Value = DrawSwitchRow("快速锻造炼丹", plugin.Options.FastForge.Value,
+                "一次完成一级；保留等级上限与奖励。");
+            Section("日常行动");
+            plugin.Options.UnlimitedActions.Value = DrawSwitchRow("无限日常行动点", plugin.Options.UnlimitedActions.Value,
+                "行动点至少为 1 且不减；日期不会因点数用完前进。");
+        }
+
+        private void TitlesPage()
+        {
+            Section("称号");
+            if (!GameAccess.Loaded) { Note("请先开始游戏或读取存档。"); return; }
+            int selected = Titles.History.Selected;
+            Note("当前显示：" + Titles.DisplayName(selected >= 0 ? selected : Titles.Current));
+            Note("剧情称号：" + Titles.DisplayName(Titles.Current));
+            bool canChoose = GameAccess.CanEditValues;
+            bool enabled = GUI.enabled;
+            GUI.enabled = enabled && canChoose && selected >= 0;
+            if (UiButton(selected < 0 ? "已跟随剧情" : "跟随剧情", style.ButtonStyle, GUILayout.Height(RowH)))
+                deferred.Enqueue(() => plugin.Status = Titles.Choose(-1));
+            GUI.enabled = enabled;
+            showAllTitles = DrawSwitchRow("显示全部称号", showAllTitles, "包含未获得称号，可自由选择外观。");
+            Note("记录与选择随当前存档保存，新开游戏互不继承。旧档只能确认当前称号；从安装本功能后开始记录新获得的称号。");
+            if (!canChoose) Note("请在自由活动时，关闭游戏内菜单后修改。");
+            Section(showAllTitles ? "全部称号" : "已获得称号");
+            // Catalog IDs come from the native language table, never global history.
+            for (int id = 0; id <= 25; id++)
+            {
+                bool acquired = Titles.History.Contains(id);
+                if (!showAllTitles && !acquired) continue;
+                if (Titles.Name(id) == null) continue;
+                GUILayout.BeginHorizontal();
+                UiLabel(Titles.DisplayName(id) + (acquired ? "" : "（未获得）"), style.Entry,
+                    GUILayout.Width(Mathf.Max(120f * scale, ContentWidth() - 78f * scale)));
+                GUILayout.Space(8f * scale);
+                GUI.enabled = enabled && canChoose && selected != id;
+                if (UiButton(selected == id ? "使用中" : "使用", style.ButtonStyle, GUILayout.Width(70f * scale), GUILayout.Height(RowH)))
+                {
+                    int choice = id;
+                    deferred.Enqueue(() => plugin.Status = Titles.Choose(choice));
+                }
+                GUI.enabled = enabled;
+                GUILayout.EndHorizontal();
+                GUILayout.Space(6f * scale);
+            }
+            Note("仅替换显示称号；剧情判定与原生称号数值保持原样。选择后请正常存档。");
+        }
+
+        private void Relationships()
+        {
+            // 心上人 first: it is a single headline setting, and hiding it below the
+            // character list made it look like the feature was missing.
+            Section("心上人");
+            if (SyncLoverFromGame())
+            {
+                loverIndex = GUILayout.SelectionGrid(loverIndex, Lovers, 5, style.Segment);
+                GUILayout.Space(6f * scale);
+                if (UiButton("应用心上人", style.ButtonStyle, GUILayout.Height(RowH)))
+                {
+                    plugin.Status = ProgressionTools.SetLover(loverIndex);
+                    loverDraftLoaded = false;
+                }
+                Note("仅修改心上人，不补齐结缘剧情。");
+            }
+            else Note("请在自由活动时，关闭游戏内菜单后修改。");
+
+            Section("好感上限");
+            plugin.Options.MaxAffection.Value = DrawSwitchRow("已登场角色保持各自好感上限", plugin.Options.MaxAffection.Value,
+                "不解锁未登场角色；关闭后不会还原已写入的值。");
+
+            Section("角色好感");
+            if (!GameAccess.CanEditValues && !plugin.Options.PreviewEditable.Value)
+            {
+                Note("请在自由活动时，关闭游戏内菜单后修改。");
+                return;
+            }
+            var player = PlayerStatManagerData.Instance;
+            if (player == null || player.Relationships == null || player.Relationships.List == null)
+            { Note("角色数据尚未就绪。"); return; }
+            var list = player.Relationships.List;
+            float width = ContentWidth(), gap = 8f * scale;
+            bool stacked = width < 520f * scale;
+            float applyWidth = Mathf.Max(64f * scale, style.ButtonStyle.CalcSize(new GUIContent("应用")).x);
+            float inputWidth = GUI.skin.textField.CalcSize(new GUIContent("888888888")).x + 4f * scale;
+            int shown = 0;
+            foreach (var item in list)
+            {
+                if (item == null || !item.Active) continue;
+                shown++;
+                int maximum = GameAccess.Field<int>(item, "_max");
+                string key = item.Type.ToString();
+                string buffer;
+                if (!relationshipEdits.TryGetValue(key, out buffer)) { buffer = item.Value.ToString(); relationshipEdits[key] = buffer; }
+                string range = item.Value + " / " + maximum;
+                float rangeWidth = stacked ? (width - gap) * .42f : Mathf.Min(width * .26f,
+                    style.Tight.CalcSize(new GUIContent(range)).x + 4f * scale);
+                float nameWidth = stacked ? (width - gap) * .58f : width - rangeWidth - inputWidth - applyWidth - 3f * gap;
+                GUILayout.BeginHorizontal();
+                UiLabel(GameNames.CharacterName(key, plugin.Options.LanguageKind), style.Entry, GUILayout.Width(nameWidth));
+                GUILayout.Space(gap);
+                UiLabel(range, style.Tight, GUILayout.Width(rangeWidth));
+                if (stacked)
+                {
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(4f * scale);
+                    GUILayout.BeginHorizontal();
+                }
+                else GUILayout.Space(gap);
+                buffer = EditableTextField("relationship:" + key, buffer, 5, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
+                relationshipEdits[key] = buffer;
+                GUILayout.Space(gap);
+                if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
+                {
+                    int parsed;
+                    if (!item.Active) plugin.Status = "该角色已下场，请刷新后重试。";
+                    else if (!int.TryParse(buffer, out parsed) || parsed < 0 || parsed > maximum)
+                        plugin.Status = key + " 的好感必须在 0～" + maximum + " 之间。";
+                    else if (!GameAccess.CanEditValues) plugin.Status = "预览模式：只读，不写入。";
+                    else
+                    {
+                        try
+                        {
+                            plugin.Gate.NotifyMutation();
+                            item.SetValue(parsed);
+                            relationshipEdits[key] = item.Value.ToString();
+                            plugin.Status = key + " 好感已改为 " + item.Value + "；正常存档后保留。";
+                        }
+                        catch (Exception error) { plugin.Report(error); }
+                    }
+                }
+                GUILayout.EndHorizontal();
+                GUILayout.Space(8f * scale);
+            }
+            if (shown == 0) Note("当前周目还没有已登场角色。");
+            else Note("只列已登场角色；不会补齐恋爱事件或解锁未登场角色。");
+        }
+
+        // Initialize on entry; keep the user draft across Layout/Repaint events.
+        private bool SyncLoverFromGame()
+        {
+            if (!GameAccess.CanEditValues && !plugin.Options.PreviewEditable.Value) { loverDraftLoaded = false; return false; }
+            var stat = PlayerStatManagerData.Instance == null ? null : PlayerStatManagerData.Instance.Stats.Get(GameStatType.愛人);
+            if (stat == null) { loverDraftLoaded = false; return false; }
+            if (!loverDraftLoaded)
+            {
+                loverIndex = Array.IndexOf(ProgressionTools.LoverIds, stat.Value);
+                loverDraftLoaded = true;
+            }
+            return true;
+        }
+
+        private void NumericPage()
+        {
+            statsOpen = Fold("角色属性 · " + Editable.Count + " 项", statsOpen, () => statsOpen = !statsOpen);
+            if (statsOpen) StatsBody();
+            itemsOpen = Fold("物品数量（可能剧透）", itemsOpen, () => itemsOpen = !itemsOpen);
+            if (itemsOpen) ItemsBody();
+            worldOpen = Fold("世界与规则 · 速度 " + plugin.Options.Speed.Value.ToString("0.00") + "×", worldOpen, () => worldOpen = !worldOpen);
+            if (worldOpen)
+            {
+                bool wasEnabled = GUI.enabled;
+                GUI.enabled = wasEnabled && plugin.Gate.CanInteract;
+                GUILayout.BeginHorizontal();
+                float speedWidth = Mathf.Max(64f * scale, style.FooterValue.CalcSize(new GUIContent("5.00×")).x);
+                float speed = GUILayout.HorizontalSlider(plugin.Options.Speed.Value, 0.25f, 5f,
+                    GUILayout.Width(ContentWidth() - speedWidth - 8f * scale));
+                GUILayout.Space(8f * scale);
+                UiLabel(speed.ToString("0.00") + "×", style.FooterValue, GUILayout.Width(speedWidth));
+                GUILayout.EndHorizontal();
+                GUILayout.BeginHorizontal();
+                if (UiButton("0.5×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(0.5f);
+                if (UiButton("1×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(1f);
+                if (UiButton("1.5×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(1.5f);
+                if (UiButton("2×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(2f);
+                if (UiButton("3×", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH))) plugin.ApplySpeed(3f);
+                GUILayout.EndHorizontal();
+                if (Mathf.Abs(speed - plugin.Options.Speed.Value) > 0.02f) plugin.ApplySpeed(speed);
+                GUI.enabled = wasEnabled;
+                Note(plugin.Gate.CanInteract ? "仅调整时间倍率；暂停与慢动作仍由游戏控制。"
+                    : "恢复过程中速度控制已锁定。");
+            }
+            UndoSection();
+        }
+
+        private void StatsBody()
+        {
+            var player = PlayerStatManagerData.Instance;
+            if (player == null) { Note("尚未进入游戏进度；读档后这里会列出可改的属性。"); return; }
+            bool editable = GameAccess.CanEditNumbers ||
+                (plugin != null && plugin.Gate.CanInteract && plugin.Options.PreviewEditable.Value);
+            if (!editable) Note(GameAccess.NumericEditBlockReason + " 下面是只读预览。");
+            GUILayout.BeginHorizontal();
+            UiLabel("筛选", style.Description, GUILayout.Width(45f * scale));
+            searchEdit = EditableTextField("stat-search", searchEdit, 80, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
+            var familyLabels = new string[StatFamilies.Length];
+            for (int i = 0; i < familyLabels.Length; i++) familyLabels[i] = Localize(StatFamilies[i]);
+            int selectedFamily = GUILayout.SelectionGrid(statFamily, familyLabels, 3, style.Segment,
+                GUILayout.Height(RowH * 2f + 4f * scale));
+            if (selectedFamily != statFamily && selectedFamily >= 0 && selectedFamily < StatFamilies.Length)
+                Defer(() => statFamily = selectedFamily);
+            float width = ContentWidth(), gap = 8f * scale;
+            bool stacked = width < 520f * scale;
+            float applyWidth = Mathf.Max(64f * scale, style.ButtonStyle.CalcSize(new GUIContent("应用")).x);
+            float inputWidth = GUI.skin.textField.CalcSize(new GUIContent("888888888")).x + 4f * scale;
+            float editLabelWidth = style.Description.CalcSize(new GUIContent(Localize("修改值"))).x;
+            foreach (var stat in player.Stats.List)
+            {
+                if (stat == null || !Editable.Contains(stat.StatType.ToString())) continue;
+                string name = GameNames.StatName(stat);
+                if (!string.IsNullOrEmpty(search) && name.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                string key = stat.StatType.ToString();
+                string buffer;
+                int family;
+                if (statFamily != 0 && (!StatFamilyOf.TryGetValue(key, out family) || family != statFamily)) continue;
+                if (!statEdits.TryGetValue(key, out buffer)) { buffer = stat.Value.ToString(); statEdits[key] = buffer; }
+                string range = "范围 " + stat.Min + "～" + stat.Max;
+                float rangeWidth = stacked || !editable ? (width - gap) * .42f : Mathf.Min(width * .28f,
+                    style.Tight.CalcSize(new GUIContent(range)).x + 4f * scale);
+                float nameWidth = stacked || !editable ? (width - gap) * .58f
+                    : width - rangeWidth - inputWidth - applyWidth - editLabelWidth - 4f * gap;
+                GUILayout.BeginHorizontal();
+                Color statColor = GUI.color;
+                if (Flashing("stat:" + key)) GUI.color = new Color(1f, .90f, .66f);
+                UiLabel(name + "  <color=#B7AE98>当前值 " + stat.Value + "</color>", style.Entry, GUILayout.Width(nameWidth));
+                GUI.color = statColor;
+                GUILayout.Space(gap);
+                UiLabel(range, style.Tight, GUILayout.Width(rangeWidth));
+                if (!editable)
+                {
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(8f * scale);
+                    continue;
+                }
+                if (stacked)
+                {
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(4f * scale);
+                    GUILayout.BeginHorizontal();
+                }
+                else GUILayout.Space(gap);
+                UiLabel("修改值", style.Description, GUILayout.Width(editLabelWidth));
+                GUILayout.Space(gap);
+                buffer = EditableTextField("stat:" + key, buffer, 9,
+                    GUILayout.Width(stacked ? width - editLabelWidth - applyWidth - 2f * gap : inputWidth), GUILayout.Height(RowH));
+                statEdits[key] = buffer;
+                GUILayout.Space(gap);
+                if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
+                {
+                    int number;
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
+                    else if (!player.Stats.List.Contains(stat)) plugin.Status = "属性列表已变化，请重新打开本页。";
+                    else if (!int.TryParse(buffer, out number) || number < stat.Min || number > stat.Max)
+                        plugin.Status = name + " 必须在 " + stat.Min + "～" + stat.Max + " 之间。";
+                    else
+                    {
+                        try
+                        {
+                            int old = stat.Value;
+                            bool refreshed = NumericEdits.SetStat(stat, number);
+                            statEdits[key] = stat.Value.ToString();
+                            Record("属性 " + name + " " + old + "→" + stat.Value, () => NumericEdits.SetStat(stat, old));
+                            plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。" +
+                                (refreshed ? "" : "商店显示刷新失败，请重新打开商店。") + NumericEdits.SaveNote;
+                            Flash("stat:" + key);
+                        }
+                        catch (Exception error) { plugin.Report(error); }
+                    }
+                }
+                GUILayout.EndHorizontal();
+                GUILayout.Space(8f * scale);
+            }
+        }
+
+        private void ItemsBody()
+        {
+            bool editable = GameAccess.CanEditNumbers ||
+                (plugin != null && plugin.Gate.CanInteract && plugin.Options.PreviewEditable.Value);
+            if (!editable) Note(GameAccess.NumericEditBlockReason + " 下面是只读预览。");
+            var database = ItemDatabase.Instance;
+            if (database == null) { Note("物品数据库尚未就绪。"); return; }
+            int tab = ViewTabs((int)itemType - 1, ItemViews);
+            itemType = (GameItemType)(tab + 1);
+            showAllItems = DrawSwitchRow("显示未持有物品", showAllItems, "可直接设置数量，获得未持有物品。");
+            GUILayout.BeginHorizontal();
+            UiLabel("筛选", style.Description, GUILayout.Width(45f * scale));
+            itemSearchEdit = EditableTextField("item-search", itemSearchEdit, 80, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
+            Note("可按名称或物品 ID 搜索；每行右侧直接输入数量后点「应用」。");
+            ItemDataCollection collection = tab == 0 ? database.Books : tab == 1 ? database.Miscs
+                : tab == 2 ? database.Special : database.Consumables;
+            if (collection == null || collection.List == null) { Note("该分类物品列表尚未就绪。"); return; }
+            float width = ContentWidth(), gap = 8f * scale;
+            bool stacked = width < 520f * scale;
+            float applyWidth = Mathf.Max(64f * scale, style.ButtonStyle.CalcSize(new GUIContent("应用")).x);
+            float inputWidth = GUI.skin.textField.CalcSize(new GUIContent("888888888")).x + 4f * scale;
+            int shown = 0;
+            foreach (var item in collection.List)
+            {
+                if (item == null || (!showAllItems && item.CurrentCount <= 0)) continue;
+                string name = ItemName(item);
+                if (!string.IsNullOrEmpty(itemSearch)
+                    && name.IndexOf(itemSearch, StringComparison.OrdinalIgnoreCase) < 0
+                    && item.Id.IndexOf(itemSearch, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                shown++;
+                string key = itemType + ":" + item.Id;
+                string buffer;
+                if (!itemEdits.TryGetValue(key, out buffer)) { buffer = item.CurrentCount.ToString(); itemEdits[key] = buffer; }
+                string current = "×" + item.CurrentCount;
+                float countWidth = stacked ? (width - gap) * .42f : Mathf.Min(width * .24f,
+                    style.Tight.CalcSize(new GUIContent(current)).x + 4f * scale);
+                float nameWidth = stacked ? (width - gap) * .58f : width - countWidth - inputWidth - applyWidth - 3f * gap;
+                GUILayout.BeginHorizontal();
+                Color itemColor = GUI.color;
+                if (Flashing("item:" + key)) GUI.color = new Color(1f, .90f, .66f);
+                UiLabel(name, style.Entry, GUILayout.Width(nameWidth));
+                GUI.color = itemColor;
+                GUILayout.Space(gap);
+                UiLabel(current, style.Tight, GUILayout.Width(countWidth));
+                if (!editable)
+                {
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(8f * scale);
+                    continue;
+                }
+                if (stacked)
+                {
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(4f * scale);
+                    GUILayout.BeginHorizontal();
+                }
+                else GUILayout.Space(gap);
+                buffer = EditableTextField("item:" + key, buffer, 7, GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
+                itemEdits[key] = buffer;
+                GUILayout.Space(gap);
+                if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
+                {
+                    int number;
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
+                    else if (!int.TryParse(buffer, out number) || number < 0 || number > 999999)
+                        plugin.Status = name + " 的数量必须在 0～999999 之间。";
+                    else
+                    {
+                        try
+                        {
+                            int previous = item.CurrentCount;
+                            bool refreshed = NumericEdits.SetItem(itemType, item, number);
+                            itemEdits[key] = item.CurrentCount.ToString();
+                            GameItemType undoType = itemType;
+                            Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => NumericEdits.SetItem(undoType, item, previous));
+                            plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。" +
+                                (refreshed ? (NumericShopRefresh.Open ? "商店列表已刷新，待购／待售数量已重置。" : "") :
+                                "商店显示刷新失败，请重新打开商店。") + NumericEdits.SaveNote;
+                            Flash("item:" + key);
+                        }
+                        catch (Exception error) { plugin.Report(error); }
+                    }
+                }
+                GUILayout.EndHorizontal();
+                GUILayout.Space(8f * scale);
+            }
+            if (shown == 0) Note("没有匹配的物品；清空筛选或开启「显示未持有物品」。");
+        }
+
+
+
+        private void SavePage()
+        {
+            Section("通关故事栏位");
+            Note("先显示原生12格，存满后每次追加6格；可左右拖动或滚轮浏览。");
+            GUILayout.BeginHorizontal();
+            UiLabel("扩展上限", style.Entry, GUILayout.Width(90f * scale));
+            if (string.IsNullOrEmpty(legendSlotCountText)) legendSlotCountText = plugin.Options.LegendSlotCount.Value.ToString();
+            legendSlotCountText = EditableTextField("legend-slot-count", legendSlotCountText, 3,
+                GUILayout.Width(72f * scale), GUILayout.Height(RowH));
+            if (UiButton("保存上限", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                int count;
+                if (!int.TryParse(legendSlotCountText, out count) || count < 12 || count > 999)
+                    plugin.Status = "故事栏位上限必须是12～999的整数。";
+                else
+                {
+                    plugin.Options.LegendSlotCount.Value = count;
+                    plugin.Options.Config.Save();
+                    plugin.Status = "故事栏位上限已设为" + count + "格；重新打开故事列表后生效。";
+                }
+            }
+            GUILayout.EndHorizontal();
+            Note("已有故事不会删除；更高编号的已存故事仍会显示。");
+            Section("随时存档（实验）");
+            bool anytime = plugin.Options.AnytimeSave.Value;
+            bool nextAnytime = DrawSwitchRow("启用随时存档", anytime,
+                "通过游戏「系统→储存游戏」选择编号槽；骰子页也可点「存档」。剧情可存对话、选项与骰子等待页；单挑存的是开场状态，读档后从这场战斗开头重来；动画、群战与恢复期间不可用。");
+            if (nextAnytime != anytime)
+            {
+                plugin.Options.AnytimeSave.Value = nextAnytime;
+                plugin.Options.Config.Save();
+            }
+            Note("中途档含配套恢复记录；复制、备份或移动存档时需一并保留。");
+            string availability = AnytimeNative.Availability;
+            Note(availability == null ? "当前可用：可在游戏系统菜单选择编号槽。" : "当前不可用：" + availability);
+            Section("存档格数");
+            int configured = plugin.Options.SlotCount.Value;
+            bool custom = configured >= 2 && configured <= 999;
+            UiLabel(custom ? "当前生效：" + configured + " 格" : "当前生效：游戏默认", style.Entry);
+            GUILayout.BeginHorizontal();
+            if (string.IsNullOrEmpty(slotCountText)) slotCountText = configured.ToString();
+            slotCountText = EditableTextField("slot-count", slotCountText, 4, GUILayout.Width(72f * scale), GUILayout.Height(RowH));
+            if (UiButton("保存格数", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                int parsed;
+                if (!int.TryParse(slotCountText, out parsed) || (parsed != 0 && parsed < 2) || parsed > 999)
+                    plugin.Status = "格数必须是 2～999 的整数；0 表示使用游戏原值。";
+                else
+                {
+                    plugin.Options.SlotCount.Value = parsed;
+                    plugin.Options.Config.Save();
+                    plugin.Status = "格数已保存为 " + parsed + "；重新打开存档或读档界面后生效。";
+                }
+            }
+            GUILayout.EndHorizontal();
+            {
+                // Two-click confirm on one widget: the control count never changes, so
+                // the layout pass and the repaint pass always agree.
+                bool armed = confirmResetSlots;
+                if (UiButton(armed ? "确认恢复默认？" : ("恢复默认" + (custom ? "" : "（当前已是默认）")), style.DangerStyle,
+                        GUILayout.Width(Mathf.Min(ContentWidth(), Mathf.Max(168f * scale,
+                            style.DangerStyle.CalcSize(new GUIContent(Localize("恢复默认（当前已是默认）"))).x))), GUILayout.Height(RowH)))
+                {
+                    confirmResetSlots = false;
+                    if (armed) Defer(() =>
+                    {
+                        plugin.Options.SlotCount.Value = 0; slotCountText = "0";
+                        plugin.Options.Config.Save();
+                        plugin.Status = "已恢复游戏默认格数。";
+                    });
+                    else confirmResetSlots = true;
+                }
+            }
+            Note("只影响存档/读档列表里建多少个槽位，不改动已有存档文件。");
+
+            SubSection("存档备注");
+            string selected = SaveSlotComments.Selected;
+            if (string.IsNullOrEmpty(selected))
+                Note("当前选中槽位：无。在游戏存档列表点一个槽位即可选中。");
+            else
+            {
+                UiLabel("当前选中槽位：" + selected, style.Entry);
+                if (commentSlot != selected) { commentSlot = selected; slotComment = SaveSlotComments.Get(selected); }
+                slotComment = EditableTextField("slot-comment", slotComment, 60, GUILayout.Height(RowH));
+                GUILayout.BeginHorizontal();
+                if (UiButton("保存备注", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+                { string comment = slotComment; Defer(() => { SaveSlotComments.Set(selected, comment); plugin.Status = "备注已保存。"; }); }
+                if (UiButton("清空", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
+                { Defer(() => { SaveSlotComments.Set(selected, ""); slotComment = ""; plugin.Status = "备注已清空。"; }); }
+                GUILayout.EndHorizontal();
+            }
+            var comments = SaveSlotComments.All();
+            if (comments.Count > 0)
+            {
+                GUILayout.BeginHorizontal();
+                UiLabel("已有备注 " + comments.Count + " 条", style.Description, GUILayout.ExpandWidth(true));
+                bool armed = confirmClearComments;
+                if (UiButton(armed ? "确认清空？" : "全部清空", style.DangerStyle,
+                        GUILayout.Width(96f * scale), GUILayout.Height(RowH)))
+                {
+                    confirmClearComments = false;
+                    if (armed) Defer(() => { SaveSlotComments.Clear(); plugin.Status = "全部备注已清空。"; });
+                    else confirmClearComments = true;
+                }
+                GUILayout.EndHorizontal();
+                foreach (var pair in comments)
+                {
+                    GUILayout.BeginHorizontal();
+                    UiLabel(pair.Key, style.Entry, GUILayout.Width(44f * scale));
+                    GUILayout.Label(pair.Value, style.Description, GUILayout.ExpandWidth(true));
+                    if (UiButton("删除", style.DangerStyle, GUILayout.Width(52f * scale), GUILayout.Height(RowH)))
+                    { string slot = pair.Key; Defer(() => { SaveSlotComments.Set(slot, ""); plugin.Status = "已删除槽位 " + slot + " 的备注。"; }); }
+                    GUILayout.EndHorizontal();
+                }
+            }
+            else Note("还没有备注；按 F2 或在上方编辑框保存后会出现在这里。");
+
+            SubSection("排序");
+            bool recent = plugin.Options.SortRecent.Value;
+            bool nextRecent = DrawSwitchRow("按最近存档排序（F3 切换）", recent,
+                "只重排读档列表顺序；槽位编号与存档文件不变。");
+            if (nextRecent != recent) Defer(() =>
+            {
+                plugin.Options.SortRecent.Value = nextRecent;
+                plugin.Options.Config.Save();
+                SaveSlotSort.Refresh();
+            });
+
+            // Recorded checkpoints belong to saving, not to the story hints; they moved
+            // here unchanged and stay hidden unless the experimental switch is on.
+            if (!plugin.Options.ExperimentalRecovery.Value && !plugin.Options.AutoTour.Value) return;
+            Section("精确恢复（实验）");
+            Note("记录剧本事件并在读档后重放；属于存档功能，不是剧情提示。");
+            recoveryOpen = Fold("精确恢复（实验）", recoveryOpen, () => recoveryOpen = !recoveryOpen);
+            if (!recoveryOpen) return;
+            Note("记录中：" + (StoryRecovery.Recording ? "是" : "否") + " · 事件 " + StoryRecovery.Count
+                + " 个 · 槽位 " + recoverySlot);
+            GUILayout.BeginHorizontal();
+            if (UiButton(StoryRecovery.Recording ? "停止记录" : "开始记录", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                if (StoryRecovery.Recording) Defer(() => StoryRecovery.Stop());
+                else Defer(() => StoryRecovery.Begin());
+            }
+            if (UiButton("保存检查点", style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            { int slot = recoverySlot; Defer(() => StoryRecovery.Save(slot)); }
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            recoverySlot = Mathf.Clamp(recoverySlot, 1, 9);
+            if (UiButton("减少", style.SubtleStyle, GUILayout.Width(56f * scale)))
+            {
+                recoverySlot = Mathf.Max(1, recoverySlot - 1);
+                confirmRestoreMain = confirmRestoreBackup = false;
+            }
+            UiLabel("槽位 " + recoverySlot, style.Entry, GUILayout.Width(64f * scale));
+            if (UiButton("增加", style.SubtleStyle, GUILayout.Width(56f * scale)))
+            {
+                recoverySlot = Mathf.Min(9, recoverySlot + 1);
+                confirmRestoreMain = confirmRestoreBackup = false;
+            }
+            GUILayout.EndHorizontal();
+            string blocker = StoryReplay.Blocker(recoverySlot);
+            string backupBlocker = StoryReplay.Blocker(recoverySlot, true);
+            bool canRestore = GUI.enabled;
+            GUILayout.BeginHorizontal();
+            GUI.enabled = canRestore && blocker.Length == 0;
+            if (UiButton(confirmRestoreMain ? "确认恢复主检查点？" : "恢复检查点",
+                style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                bool armed = confirmRestoreMain;
+                confirmRestoreMain = false; confirmRestoreBackup = false;
+                if (armed) { int slot = recoverySlot; Defer(() => StoryReplay.Start(slot)); }
+                else confirmRestoreMain = true;
+            }
+            GUI.enabled = canRestore && backupBlocker.Length == 0;
+            if (UiButton(confirmRestoreBackup ? "确认恢复历史备份？" : "恢复历史备份",
+                style.SubtleStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+            {
+                bool armed = confirmRestoreBackup;
+                confirmRestoreMain = false; confirmRestoreBackup = false;
+                if (armed) { int slot = recoverySlot; Defer(() => StoryReplay.Start(slot, true)); }
+                else confirmRestoreBackup = true;
+            }
+            GUI.enabled = canRestore;
+            GUILayout.EndHorizontal();
+            if (blocker.Length > 0) Note("现在不能恢复：" + blocker);
+            if (!string.IsNullOrEmpty(StoryRecovery.Status)) Note(StoryRecovery.Status);
+            if (!string.IsNullOrEmpty(StoryReplay.Status)) Note(StoryReplay.Status);
+            // Position counts consumed events, so the one being replayed is Position + 1.
+            if (StoryReplay.Active) Note("重放中：第 " + (StoryReplay.Position + 1) + " 个事件");
+            Note("恢复需要二次确认，将覆盖当前未存档进度；历史备份是上一份检查点，不是原生存档。");
+        }
+
+        private void LanguagePage()
+        {
+            Section("语言");
+            UiLang[] kinds = { UiLang.Hans, UiLang.Hant, UiLang.Ja, UiLang.Ko };
+            string[] names = { "简体中文", "繁體中文", "日本語", "한국어" };
+            int current = System.Array.IndexOf(kinds, plugin.Options.LanguageKind);
+            if (current < 0) current = 0;
+            int next = GUILayout.SelectionGrid(current, names, 2, style.Segment,
+                GUILayout.Height(RowH * 4f + 8f * scale));
+            if (next != current && next >= 0 && next < kinds.Length)
+            {
+                plugin.Options.Language.Value = UiLanguage.Code(kinds[next]);
+                plugin.Options.Config.Save();
+                LanguageChanged();
+                plugin.Status = "面板语言：" + names[next];
+            }
+            Note("尚未翻译的条目会显示原文（简体中文）。");
+        }
+
+        private GUIStyle coverStyle, coverSubStyle;
+        private Font coverFont;
+
+        // A replay executes the real script; cover it so the skipped lines and the engine's
+        // own transitions do not read as the story fast-forwarding. Draw-only: input is
+        // already locked while the replay runs.
+        internal void DrawReplayCover()
+        {
+            bool replaying = AnytimeStory.Replaying;
+            bool failing = AnytimeStory.Failed && !AnytimeStory.InputReleased;
+            if ((!replaying && !failing) || Event.current.type != EventType.Repaint) return;
+            // While a failure still owns the game the input lock is held for up to eight
+            // seconds; without a cover that reads as a freeze with no explanation.
+            float fade = Mathf.Clamp01((replaying ? AnytimeStory.ReplayElapsed : AnytimeStory.FailureElapsed) * 8f);
+            Color before = GUI.color;
+            GUI.color = new Color(0f, 0f, 0f, .94f * fade);
+            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+            GUI.color = before;
+            float s = Mathf.Max(.5f, scale);
+            if (coverStyle == null || coverFont != style.Entry.font)
+            {
+                coverFont = style.Entry.font;
+                coverStyle = new GUIStyle(style.Entry)
+                {
+                    alignment = TextAnchor.MiddleCenter, wordWrap = false, richText = false,
+                    fontSize = Mathf.RoundToInt(22f * s)
+                };
+                coverSubStyle = new GUIStyle(coverStyle) { fontSize = Mathf.RoundToInt(16f * s) };
+            }
+            float width = Mathf.Max(120f, Screen.width - 80f);
+            float center = Screen.height * .5f;
+            GUI.Label(new Rect(40f, center - 34f, width, 30f),
+                Localize(replaying ? "正在恢复到存档点…" : "恢复失败，正在解除输入锁…"), coverStyle);
+            int done = AnytimeStory.ReplayDone, total = AnytimeStory.ReplayTotal;
+            if (replaying && total > 0)
+                GUI.Label(new Rect(40f, center + 2f, width, 24f),
+                    Localize("已重放 ") + done + " / " + total + Localize(" 个事件"), coverSubStyle);
+            else if (failing)
+                GUI.Label(new Rect(40f, center + 2f, width, 24f),
+                    Localize("若输入未恢复，请用游戏菜单自行读取原生存档。"), coverSubStyle);
+        }
+
+        private void DrawBottomBar()
+        {
+            float s = scale;
+            GUILayout.Space(12f * s);
+            Rule();
+            GUILayout.BeginHorizontal(GUILayout.Height(44f * s));
+            UiLabel("界面透明度", style.FooterLabel, GUILayout.Width(76f * s));
+            float inner = shownRect.width - (style.Skin != null ? style.Skin.window.padding.horizontal : 32f);
+            float sliderWidth = Mathf.Clamp(inner - (76f + 48f + 72f) * s - 30f * s, 40f * s, 300f * s);
+            Rect sliderRect = GUILayoutUtility.GetRect(sliderWidth, 30f * s, GUILayout.Width(sliderWidth), GUILayout.Height(30f * s));
+            float normalized = Mathf.InverseLerp(.4f, 1f, opacity);
+            float trackY = sliderRect.y + sliderRect.height * .5f - 3f * s;
+            Rect track = new Rect(sliderRect.x + 8f * s, trackY, sliderRect.width - 16f * s, 6f * s);
+            GUI.DrawTexture(track, style.SliderTrack, ScaleMode.StretchToFill, true);
+            GUI.DrawTexture(new Rect(track.x, track.y, track.width * normalized, track.height),
+                style.SliderFill, ScaleMode.StretchToFill, true);
+            float next = GUI.HorizontalSlider(sliderRect, opacity, .4f, 1f, GUI.skin.horizontalSlider, GUI.skin.horizontalSliderThumb);
+            if (Mathf.Abs(next - opacity) > .0001f)
+            {
+                opacity = Mathf.Clamp(next, .4f, 1f);
+                style.SetOpacity(opacity);
+                plugin.Options.Opacity.Value = opacity;
+            }
+            UiLabel(Mathf.RoundToInt(opacity * 100f) + "%", style.FooterValue, GUILayout.Width(48f * s));
+            GUILayout.FlexibleSpace();
+            UiLabel(plugin.Options.Toggle.Value + " 收起", style.FooterLabel, GUILayout.Width(72f * s));
+            GUILayout.EndHorizontal();
+        }
+
+        private void DrawResizeGrip(Rect rect)
+        {
+            if (Event.current.type != EventType.Repaint) return;
+            float s = scale;
+            float x = rect.xMax, y = rect.yMax;
+            for (int i = 0; i < 3; i++)
+            {
+                float inset = (6f + i * 5f) * s;
+                float length = (5f + i * 3f) * s;
+                GUI.DrawTexture(new Rect(x - inset - length, y - inset, Mathf.Max(2f, 2f * s), Mathf.Max(2f, 2f * s)), style.AccentSoft);
+                GUI.DrawTexture(new Rect(x - inset, y - inset - length, Mathf.Max(2f, 2f * s), Mathf.Max(2f, 2f * s)), style.AccentSoft);
+            }
+        }
+
+        private void DrawBadge()
+        {
+            Rect badge = BadgeRect();
+            if (!loggedBadge) { loggedBadge = true; plugin.Log("Badge: " + Describe()); }
+            bool hover = badge.Contains(Event.current.mousePosition);
+            GUI.DrawTexture(badge, draggingBadge ? style.BadgeActive : hover ? style.BadgeHover : style.Badge, ScaleMode.StretchToFill, true);
+            float s = scale;
+            float line = Mathf.Max(1f, s);
+            Texture2D edge = hover || draggingBadge ? style.Accent : style.Border;
+            GUI.DrawTexture(new Rect(badge.x, badge.y, badge.width, line), edge);
+            GUI.DrawTexture(new Rect(badge.x, badge.yMax - line, badge.width, line), edge);
+            GUI.DrawTexture(new Rect(badge.x, badge.y, line, badge.height), edge);
+            GUI.DrawTexture(new Rect(badge.xMax - line, badge.y, line, badge.height), edge);
+            float inset = Mathf.Min(5f * s, badge.height * .06f);
+            float rollH = Mathf.Min(8f * s, badge.height * .10f);
+            float rollW = Mathf.Max(1f, badge.width - 10f * s);
+            float rollX = badge.x + (badge.width - rollW) * .5f;
+            GUI.DrawTexture(new Rect(rollX, badge.y + inset, rollW, rollH), style.ScrollRoll, ScaleMode.StretchToFill, true);
+            // The hanging-scroll design caps both ends. The layout already reserved the
+            // space below (the footer subtracts inset + rollH), only the draw call was
+            // missing, which left the collapsed badge looking cut off at the bottom.
+            GUI.DrawTexture(new Rect(rollX, badge.yMax - inset - rollH, rollW, rollH), style.ScrollRoll,
+                ScaleMode.StretchToFill, true);
+            float footerH = Mathf.Min(22f * s, badge.height * .17f);
+            float footerY = badge.yMax - inset - rollH - footerH - 5f * s;
+            float titleY = badge.y + inset + rollH + 8f * s;
+            float titleH = Mathf.Max(1f, footerY - titleY - 6f * s);
+            float sideInset = Mathf.Min(7f * s, badge.width * .18f);
+            GUI.DrawTexture(new Rect(badge.x + sideInset, titleY, line, titleH), style.AccentSoft);
+            if (badgeTitleStyle == null)
+                badgeTitleStyle = new GUIStyle(GUI.skin.label)
+                {
+                    alignment = TextAnchor.MiddleCenter,
+                    wordWrap = false,
+                    clipping = TextClipping.Overflow
+                };
+            badgeTitleStyle.font = style.BadgeFont ?? style.UiFont;
+            badgeTitleStyle.fontSize = Mathf.Clamp(Mathf.FloorToInt(titleH / 4f), 10, 20);
+            badgeTitleStyle.normal.textColor = new Color(.92f, .88f, .79f, 1f);
+            // The badge is the fixed brand scroll: it always reads 萬象錄 in traditional
+            // characters, independent of the panel language toggle. Routing it through
+            // UiLabel converted 萬/錄 to 万/录 and turned the scroll into simplified text.
+            GUI.Label(new Rect(badge.x + 2f * s, titleY, badge.width - 4f * s, titleH), "萬\n象\n錄", badgeTitleStyle);
+            float tagWidth = Mathf.Max(1f, badge.width - 14f * s);
+            Rect tagRect = new Rect(badge.x + (badge.width - tagWidth) * .5f, footerY, tagWidth, footerH);
+            GUI.DrawTexture(new Rect(badge.x + 10f * s, footerY - 3f * s, Mathf.Max(1f, badge.width - 20f * s), line), style.AccentSoft);
+            if (badgeKeyStyle == null)
+                badgeKeyStyle = new GUIStyle(GUI.skin.label)
+                {
+                    alignment = TextAnchor.MiddleCenter,
+                    wordWrap = false,
+                    clipping = TextClipping.Overflow
+                };
+            badgeKeyStyle.font = style.UiFont;
+            badgeKeyStyle.fontSize = Mathf.Clamp(Mathf.FloorToInt(footerH * .62f), 10, 18);
+            badgeKeyStyle.normal.textColor = new Color(.90f, .76f, .48f, 1f);
+            UiLabel(new Rect(tagRect.x, tagRect.y - 1f, tagRect.width, tagRect.height + 2f),
+                plugin.Options.Toggle.Value.ToString(), badgeKeyStyle);
+
+            Vector2 mouse = Event.current.mousePosition;
+            if (GUI.enabled && Event.current.type == EventType.MouseDown && badge.Contains(mouse))
+            { draggingBadge = true; badgeMoved = false; dragStart = GUIUtility.GUIToScreenPoint(mouse); Event.current.Use(); }
+            if (GUI.enabled && draggingBadge && Event.current.type == EventType.MouseDrag)
+            {
+                Vector2 delta = GUIUtility.GUIToScreenPoint(Event.current.mousePosition) - dragStart;
+                if (Mathf.Abs(delta.x) + Mathf.Abs(delta.y) > 6f) badgeMoved = true;
+                if (badgeMoved)
+                {
+                    badgePosition += delta; dragStart = GUIUtility.GUIToScreenPoint(Event.current.mousePosition);
+                    badgePosition.x = Mathf.Clamp(badgePosition.x, 8f, Mathf.Max(8f, Screen.width - badge.width - 8f));
+                    badgePosition.y = Mathf.Clamp(badgePosition.y, 8f, Mathf.Max(8f, Screen.height - badge.height - 8f));
+                }
+                Event.current.Use();
+            }
+            if (GUI.enabled && draggingBadge && Event.current.type == EventType.MouseUp)
+            {
+                draggingBadge = false;
+                SaveBadge();
+                if (!badgeMoved) Visible = true;
+                Event.current.Use();
+            }
+        }
+
+        // Clicks on the panel itself must not fall through to the game UI. A
+        // full-screen shield also swallowed every click outside the panel (duels
+        // became unplayable), so it now covers exactly the open panel.
+
+        private void EnsureBlocker(Rect shown)
+        {
+            if (blocker == null)
+            {
+                blocker = new GameObject("MortalHelper.PointerShield", typeof(Canvas), typeof(GraphicRaycaster));
+                UnityEngine.Object.DontDestroyOnLoad(blocker);
+                var canvas = blocker.GetComponent<Canvas>();
+                canvas.renderMode = RenderMode.ScreenSpaceOverlay; canvas.sortingOrder = 32760;
+                var child = new GameObject("Block", typeof(RectTransform), typeof(Image));
+                child.transform.SetParent(blocker.transform, false);
+                blockerRect = (RectTransform)child.transform;
+                blockerRect.anchorMin = Vector2.zero; blockerRect.anchorMax = Vector2.zero;
+                blockerRect.pivot = Vector2.zero;
+                child.GetComponent<Image>().color = Color.clear;
+            }
+            if (!blocker.activeSelf) blocker.SetActive(true);
+            blockerRect.anchoredPosition = new Vector2(shown.x, Screen.height - shown.yMax);
+            blockerRect.sizeDelta = new Vector2(Mathf.Max(0f, shown.width), Mathf.Max(0f, shown.height));
+        }
+
+        private void HideBlocker()
+        {
+            if (blocker != null && blocker.activeSelf) blocker.SetActive(false);
+        }
+
+        // A clickable section header so long blocks can be folded away.
+        // Lighter heading for secondary blocks so the page keeps a clear hierarchy.
+        private void SubSection(string title)
+        {
+            GUILayout.Space(16f * scale);
+            UiLabel("· " + title, style.Description);
+            Rule();
+            GUILayout.Space(4f * scale);
+        }
+
+
+        private bool Fold(string title, bool open, Action toggle)
+        {
+            GUILayout.Space(12f * scale);
+            if (UiButton((open ? "▾ " : "▸ ") + title, style.Entry, GUILayout.ExpandWidth(true)))
+                Defer(toggle);
+            Rule();
+            if (open) GUILayout.Space(6f * scale);
+            return open;
+        }
+
+
+        private void Section(string title)
+        {
+            GUILayout.Space((firstSection ? 6f : 24f) * scale);
+            firstSection = false;
+            // The accent bar and the title used to be laid out independently, so the
+            // bar sat on the row top while the glyph block sat lower. Reserve one row
+            // from the measured text height and centre both inside it.
+            float width = Mathf.Max(60f, ContentWidth());
+            float textHeight = style.SectionTitle.CalcHeight(new GUIContent(Localize(title)), width);
+            float rowHeight = Mathf.Max(RowH, Mathf.Ceil(textHeight));
+            Rect row = GUILayoutUtility.GetRect(1f, rowHeight, GUILayout.ExpandWidth(true), GUILayout.Height(rowHeight));
+            float barWidth = Mathf.Max(2f, Mathf.Round(2f * scale));
+            // Measured at scale 1: the glyph ink is 16px tall and sits 3px below the
+            // line-box centre, so a bar matched to the line box reads as too high and
+            // too long next to the title.
+            float barHeight = Mathf.Clamp(textHeight - 4f * scale, 10f * scale, 18f * scale);
+            float barY = row.y + Mathf.Round((rowHeight - barHeight) * .5f) + Mathf.Round(3f * scale);
+            GUI.DrawTexture(new Rect(row.x, barY, barWidth, barHeight), style.Accent);
+            float textX = row.x + barWidth + Mathf.Round(8f * scale);
+            UiLabel(new Rect(textX, row.y, Mathf.Max(10f, row.xMax - textX), rowHeight), title, style.SectionTitle);
+            GUILayout.Space(2f * scale);
+            Rule();
+            GUILayout.Space(12f * scale);
+        }
+
+        // View switcher drawn as underlined text tabs. GUI.Toolbar fills the whole
+        // width with solid bars, which read like the action buttons right below it.
+        private int ViewTabs(int current, string[] labels)
+        {
+            int chosen = current;
+            GUILayout.BeginHorizontal();
+            float height = 30f * scale;
+            for (int i = 0; i < labels.Length; i++)
+            {
+                bool active = i == current;
+                Rect rect = GUILayoutUtility.GetRect(1f, height, GUILayout.Width(Mathf.Min(96f * scale, ContentWidth() / labels.Length)), GUILayout.Height(height));
+                bool hover = rect.Contains(Event.current.mousePosition);
+                if (GUI.enabled && Event.current.type == EventType.MouseDown && hover) { chosen = i; Event.current.Use(); }
+                if (Event.current.type == EventType.Repaint)
+                {
+                    Color before = GUI.color;
+                    GUI.color = active ? new Color(.95f, .91f, .82f)
+                        : hover ? new Color(.86f, .81f, .70f) : new Color(.68f, .64f, .56f);
+                    UiLabel(rect, labels[i], style.Tab);
+                    GUI.color = before;
+                    if (active)
+                        GUI.DrawTexture(new Rect(rect.x + 10f * scale, rect.yMax - 2f * scale,
+                            Mathf.Max(1f, rect.width - 20f * scale), Mathf.Max(2f, 2f * scale)), style.Accent);
+                }
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            GUILayout.Space(6f * scale);
+            return chosen;
+        }
+
+        private void Rule()
+        {
+            Rect r = GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true), GUILayout.Height(1f));
+            GUI.DrawTexture(r, style.Hairline);
+        }
+        private bool DrawSwitchRow(string label, bool value, string hint = null)
+        {
+            GUILayout.BeginHorizontal(GUILayout.MinHeight(Mathf.Round(24f * scale)));
+            float controls = 52f * scale + 22f * scale + 16f * scale;
+            UiLabel(label, style.Entry, GUILayout.Width(Mathf.Max(120f, ContentWidth() - controls)));
+            GUILayout.Space(8f * scale);
+            bool next = GUILayout.Toggle(value, GUIContent.none, style.SwitchTrack,
+                GUILayout.Width(52f * scale), GUILayout.Height(Mathf.Round(24f * scale)));
+            GUILayout.Space(8f * scale);
+            UiLabel(next ? "开" : "关", next ? style.SwitchOnLabel : style.SwitchOffLabel,
+                GUILayout.Width(22f * scale));
+            GUILayout.EndHorizontal();
+            if (!string.IsNullOrEmpty(hint))
+            {
+                GUILayout.Space(1f * scale);
+                Wrapped(hint, style.Description);
+            }
+            GUILayout.Space(6f * scale);
+            return next;
+        }
+
+
+        // IMGUI sizes a wrapped label from the width it saw during Layout, which is
+        // unreliable inside a scroll view; a 2-line note then overflows onto the next
+        // widget. Measure and reserve the height explicitly.
+        // Every value edit keeps an undo closure so a mistyped number is one click
+        // away from being put back.
+        private void Record(string label, Action undo)
+        {
+            editLog.Insert(0, new EditRecord { Label = label, Undo = undo });
+            if (editLog.Count > 8) editLog.RemoveAt(editLog.Count - 1);
+        }
+
+        private void UndoSection()
+        {
+            if (editLog.Count == 0) return;
+            editOpen = Fold("修改记录 · " + editLog.Count + " 条", editOpen, () => editOpen = !editOpen);
+            if (!editOpen) return;
+            for (int i = 0; i < editLog.Count; i++)
+            {
+                var record = editLog[i];
+                GUILayout.BeginHorizontal();
+                if (UiButton("撤销", style.SubtleStyle, GUILayout.Width(Col(.16f))))
+                {
+                    var item = record;
+                    if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
+                    else Defer(() =>
+                    {
+                        if (!GameAccess.CanEditNumbers)
+                        {
+                            plugin.Status = "恢复或加载已开始，撤销请求已取消。";
+                            return;
+                        }
+                        try
+                        {
+                            item.Undo(); editLog.Remove(item); plugin.Status = "已撤销：" + item.Label + "。" + NumericEdits.SaveNote;
+                        }
+                        catch (Exception error) { plugin.Status = "撤销失败：" + error.Message; }
+                    });
+                }
+                GUILayout.EndHorizontal();
+            }
+        }
+
+
+        // Keep the status line honest: success reads warm, a refusal reads red.
+        private static bool StatusLooksBad(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            foreach (string bad in new[] { "失败", "不能", "必须", "错误", "超出", "不允许", "尚未", "无法", "不可" })
+                if (text.IndexOf(bad, StringComparison.Ordinal) >= 0) return true;
+            return false;
+        }
+
+
+        private void Note(string text)
+        {
+            Wrapped(text, style.Description);
+        }
+
+        private void Wrapped(string text, GUIStyle style)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            // Explicit width: IMGUI measures and draws with the same value, so a wrapped
+            // line can never exceed the space that was reserved for it.
+            UiLabel(text, style, GUILayout.Width(ContentWidth()));
+        }
+
+        // A control must be tall enough for its glyph plus style padding, otherwise the
+        private float RowH => Mathf.Max(24f, Mathf.Round(27f * scale));
+
+        private float Col(float fraction) { return ContentWidth() * fraction; }
+
+        // Brief row highlight after a successful write, so the eye lands on the row
+        // that changed instead of only noticing the status line.
+        // Cached style copies: allocating them per repaint churned the GC. They are
+        // rebuilt only when the panel scale changes (font sizes live in PanelStyle).
+        private GUIStyle tabActiveStyle, badgeTitleStyle, badgeKeyStyle;
+        private float tabActiveScale = -1f;
+
+        private string flashKey;
+        private float flashUntil;
+        private void Flash(string key) { flashKey = key; flashUntil = Time.unscaledTime + .3f; }
+        private bool Flashing(string key) { return key != null && key == flashKey && Time.unscaledTime < flashUntil; }
+
+        private float ViewportWidth()
+        {
+            float pad = style.Skin != null ? style.Skin.window.padding.horizontal : 32f;
+            float cap = Mathf.Round(720f * Mathf.Max(1f, scale));
+            return Mathf.Max(60f, Mathf.Min(shownRect.width - pad, cap + ScrollbarWidth()));
+        }
+
+        private float ScrollbarWidth()
+        {
+            return style.Skin == null ? 12f : style.Skin.verticalScrollbar.fixedWidth
+                + style.Skin.verticalScrollbar.margin.horizontal;
+        }
+
+        private float ContentWidth() { return Mathf.Max(48f, ViewportWidth() - ScrollbarWidth()); }
+
+
+        private static string ItemName(ItemData item)
+        {
+            try
+            {
+                var manager = LocalizationManager.Instance;
+                if (manager != null && manager.LocaleResolver != null)
+                {
+                    string text = manager.LocaleResolver.GetString(item.GetNameKey());
+                    if (!string.IsNullOrEmpty(text)) return text;
+                }
+            }
+            catch (Exception) { }
+            return item.Id;
+        }
+
+        internal string Describe()
+        {
+            return "open=" + open + " window=" + windowRect.x.ToString("0") + "," + windowRect.y.ToString("0") +
+                " " + windowRect.width.ToString("0") + "x" + windowRect.height.ToString("0") +
+                " badge=" + badgePosition.x.ToString("0") + "," + badgePosition.y.ToString("0") +
+                " screen=" + Screen.width + "x" + Screen.height;
+        }
+
+        private void SaveGeometry()
+        {
+            var rect = ClampWindow();
+            windowRect = rect;
+            plugin.Options.X.Value = rect.x; plugin.Options.Y.Value = rect.y;
+            plugin.Options.Width.Value = rect.width; plugin.Options.Height.Value = rect.height;
+            plugin.Options.Config.Save();
+        }
+
+        private void SaveBadge()
+        {
+            plugin.Options.BadgeX.Value = badgePosition.x;
+            plugin.Options.BadgeY.Value = badgePosition.y;
+            plugin.Options.Config.Save();
+        }
+        // The face the panel is currently drawing with; game-facing overlays reuse it so a
+        // Korean/Japanese panel does not fall back to the game's CJK-only option font.
+        internal Font BodyFont => style == null ? null : style.UiFont;
+
+        internal void ClearSelection()
+        {
+            statEdits.Clear(); itemEdits.Clear(); relationshipEdits.Clear();
+            editLog.Clear(); loverDraftLoaded = false;
+            SaveSlotComments.Selected = null; commentSlot = null;
+        }
+        internal void Dispose()
+        {
+            map.Dispose();
+            if (blocker != null) UnityEngine.Object.Destroy(blocker);
+            style.Dispose();
+            if (ownedBodyFont != null) UnityEngine.Object.Destroy(ownedBodyFont);
+        }
+    }
+}
+
+

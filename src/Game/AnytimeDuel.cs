@@ -1,0 +1,1088 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
+using System.Runtime.Serialization.Formatters.Binary;
+using System.Security.Cryptography;
+using System.Text;
+using HarmonyLib;
+using Mortal.Combat;
+using Mortal.Core;
+using MortalHelper.Core;
+using UnityEngine;
+using UnityEngine.EventSystems;
+using Draw = MortalHelper.Game.DuelDraw;
+using Point = MortalHelper.Game.DuelPoint;
+using Journal = MortalHelper.Game.DuelJournal;
+
+namespace MortalHelper.Game
+{
+    // A numbered native slot contains the start of the fight. The matching
+    // .mhduel document describes how to replay to a verified action point.
+    // Neither file is usable as an in-combat save without the other one.
+    internal static class AnytimeDuel
+    {
+        private const int MaxActions = DuelJournalCodec.MaxActions;
+        private const int MaxDraws = DuelJournalCodec.MaxDraws;
+        private static readonly MethodInfo GetSlotFile = AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile");
+        private static readonly MethodInfo CreateNative = AccessTools.Method(typeof(SaveSystem), "CreateSaveData");
+        private static CombatManager manager;
+        private static Journal journal;
+        private static Journal pending;
+        private static byte[] opening, stagedOpening;
+        private static string stagedSceneKey;
+        private static int pointIndex, drawIndex, roundAssists;
+        private static float lastProgress;
+        private static bool waiting, injecting, replaying, failed, sceneReady, finalVerified, returningTitle;
+        // Same rule as the story replay: the mutation gate may stay failed, but the input
+        // lock it takes must always be given back, or the game becomes unusable.
+        private static float failedAt;
+        private static bool inputReleased;
+        private static float loadStartedAt;
+        private static bool speedPending;
+        private static string invalid;
+
+        internal static bool Replaying => replaying || pending != null || finalVerified;
+        internal static bool Failed => failed;
+        internal static string BlockReason
+        {
+            get
+            {
+                if (failed) return "单挑恢复未通过核验，请重新读取存档。";
+                if (Replaying) return "单挑存档正在恢复。";
+                if (!AnytimeDuelRandomPatch.Covered) return "当前游戏版本的单挑随机调用尚未通过覆盖检查。";
+                if (manager == null || journal == null) return "请进入一场新单挑。";
+                if (invalid != null) return invalid;
+                if (opening == null) return "尚未取得单挑开场原生存档。";
+                if (!waiting) return "请在双方结算结束且行动按钮出现后保存。";
+                if (SceneController.Instance == null || SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+                    return "场景仍在切换。";
+                return null;
+            }
+        }
+
+        internal static string NumericEditBlockReason
+        {
+            get
+            {
+                if (failed) return "单挑恢复失败，请重新读取存档。";
+                if (Replaying) return "单挑存档正在恢复，请稍候。";
+                if (!HasCurrentManager || invalid != null) return invalid ?? "请在单挑行动按钮出现后修改。";
+                if (!waiting || journal.Points.Count != journal.Actions.Count + 1)
+                    return "请在双方结算结束、行动按钮出现后修改。";
+                if (journal.Edits.Count >= DuelJournalCodec.MaxEdits) return "本场数值修改记录已达上限。";
+                if (SceneController.Instance == null || SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+                    return "场景仍在切换。";
+                return null;
+            }
+        }
+
+        internal static void RecordNumericEdit(string key, int before, int after)
+        {
+            if (before == after) return;
+            string reason = NumericEditBlockReason;
+            if (reason != null) throw new InvalidOperationException(reason);
+            if (string.IsNullOrEmpty(key) || key.Length > 128) throw new InvalidDataException("单挑数值目标无效。");
+            journal.Edits.Add(new DuelEdit { PointIndex = journal.Actions.Count, Key = key, Before = before, After = after });
+            string state = DuelAudit.Capture(manager);
+            journal.Points[journal.Actions.Count].Digest = Hash(Encoding.UTF8.GetBytes(state));
+            journal.FinalState = state;
+        }
+
+        private static int ConfiguredAssists
+        {
+            get
+            {
+                var o = Plugin.Instance?.Options;
+                if (o == null || !Plugin.Active) return 0;
+                return (o.DuelHealth.Value ? (int)DuelAssist.Health : 0) |
+                    (o.DuelStamina.Value ? (int)DuelAssist.Stamina : 0) |
+                    (o.DuelDodge.Value ? (int)DuelAssist.Dodge : 0) |
+                    (o.DuelDamage.Value ? (int)DuelAssist.Damage : 0) |
+                    (o.DuelZeroDamage.Value ? (int)DuelAssist.ZeroDamage : 0) |
+                    (o.DuelAlwaysHit.Value ? (int)DuelAssist.AlwaysHit : 0) |
+                    (o.DuelFirstStrike.Value ? (int)DuelAssist.FirstStrike : 0);
+            }
+        }
+
+        private static bool HasCurrentManager => manager != null && manager == CombatManager.Instance && journal != null &&
+            manager.gameObject.scene.name == "Combat" &&
+            PlayerStatManagerData.Instance != null && journal.SceneKey == PlayerStatManagerData.Instance.CurrentSceneKey;
+
+        // Recorded assists are the only mutations admitted through the recovery
+        // gate, and only for this verified duel instance. Never change preferences.
+        internal static bool ApplyingRecordedAssists => !failed && invalid == null && HasCurrentManager &&
+            Plugin.Instance != null && (Plugin.Instance.Gate.CanInteract ||
+                ((replaying || finalVerified) && Plugin.Instance.Gate.AwaitingNativeLoad));
+        internal static DuelAssist EffectiveAssists => failed ? DuelAssist.None :
+            (DuelAssist)(HasCurrentManager && invalid == null ? roundAssists : ConfiguredAssists);
+
+        internal static void CaptureStart(string saveFile, object saved)
+        {
+            if (Path.GetFileName(saveFile) != "Save_auto_battle.dat" || !(saved is AutoGameSave auto) ||
+                auto.GameSave == null || auto.GameSave.CurrentScene != "Combat") return;
+            try
+            {
+                if (!File.Exists(saveFile) || Hash(File.ReadAllBytes(saveFile)) != Hash(NativeObjectBytes(saved)))
+                    throw new IOException("自动战前档尚未完成原生写入。");
+                stagedOpening = NativeBytes(auto.GameSave);
+                stagedSceneKey = auto.GameSave.CurrentSceneKey;
+                if (manager != null && !replaying && pending == null && invalid == null &&
+                    stagedSceneKey == journal?.SceneKey) opening = stagedOpening;
+            }
+            catch (Exception e) { Invalidate("无法记录开场：" + e.GetBaseException().Message); }
+        }
+
+        // A duel save is the fight's opening snapshot, not its current round: the game only
+        // rebuilds a battle from the entry state (no round/HP/action survives in a save), so
+        // loading one restarts this fight. No action journal, therefore no replay and none
+        // of its failure modes.
+        internal static bool SaveToSlot(string slot)
+        {
+            string reason = BlockReason;
+            if (reason != null) { AnytimeNative.SaveFailed(reason); return false; }
+            try
+            {
+                if (!Numbered(slot)) throw new InvalidDataException("请选择游戏系统菜单中的编号槽位。");
+                if (opening == null || opening.Length == 0)
+                    throw new InvalidDataException("本场战斗的开场快照尚未捕获，等战斗初始化完成后再保存。");
+                var baseSave = ReadNative(opening);
+                baseSave.TimeTick = DateTime.Now.Ticks;
+                byte[] native = NativeBytes(baseSave);
+                string startMarker = DuelStartCodec.Encode(new DuelStartRecord
+                {
+                    Client = Application.version,
+                    SceneKey = journal?.SceneKey ?? stagedSceneKey ?? "",
+                    NativeHash = Hash(native),
+                    SavedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture)
+                });
+                string path = SlotFile(slot);
+                AnytimeNative.SettleSlot(slot, path);
+                if (SlotTransaction.Exists(SlotTransaction.JournalFor(path)))
+                    throw new IOException("此槽位有尚未处理的存档事务，请先读取该槽位让插件自动恢复。");
+                if (!File.Exists(path)) AnytimeNative.QuarantineOrphans(path);
+                if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mha-rollback") ||
+                    File.Exists(path + ".mha.rollback") || File.Exists(path + ".mhduel-pending") ||
+                    (File.Exists(path + ".mha-required") && !File.Exists(path + ".mha")) ||
+                    (File.Exists(path + ".mhduel-required") && !File.Exists(path + ".mhduel")))
+                    throw new IOException("此槽位有尚未处理的存档恢复材料，请先核对该槽位。");
+                WriteStartPair(path, native, startMarker);
+                string message = "单挑档已写入编号槽 " + slot + "：读档后从这场战斗开头继续。";
+                try
+                {
+                    SaveSystem.Instance.SetSlot(slot);
+                    SaveSystem.Instance.SaveUniverseData();
+                }
+                catch (Exception e) { message = "编号槽 " + slot + " 已保存，但最近槽位未更新：" + e.GetBaseException().Message; }
+                Report(message);
+                return true;
+            }
+            catch (Exception e)
+            {
+                AnytimeNative.SaveFailed("单挑保存失败：" + e.GetBaseException().Message);
+                return false;
+            }
+        }
+
+        // Call before ExecuteLoadGameData replaces manager state, and only for
+        // the manual numbered LoadGameData route. A Combat GameSave without a
+        // matching document is refused rather than treated as a fresh fight.
+        internal static bool PrepareLoad(string slot, ref GameSave gameSave)
+        {
+            Reset();
+            if (gameSave == null || gameSave.CurrentScene != "Combat") return false;
+            try
+            {
+                // Ordinary native Combat saves have no replay sidecar. A persistent
+                // requirement marker distinguishes NEW replay-dependent saves.
+                // Legacy unmarked companions remain readable when still present.
+                if (!Numbered(slot)) return false;
+                string path = SlotFile(slot);
+                if (File.Exists(path + ".mhstart") &&
+                    (File.Exists(path + ".mhduel-required") || File.Exists(path + ".mhduel-pending") ||
+                     File.Exists(path + ".mha-required") || File.Exists(path + ".mha-pending")))
+                    throw new InvalidDataException("战斗开场标记与必需中途档或未完成存档同时存在，无法确认槽位状态。");
+                // A battle-start save needs nothing from us: the native file already restarts
+                // the fight, so it loads exactly like the game's own battle autosave. The
+                // marker is only a label and a fingerprint, and a stale one is set aside.
+                if (File.Exists(path + ".mhstart"))
+                {
+                    try
+                    {
+                        // Stat before read, like every other sidecar.
+                        var marker = new FileInfo(path + ".mhstart");
+                        if (!marker.Exists || marker.Length <= 0 || marker.Length > 4096)
+                            throw new InvalidDataException("战斗开场标记大小无效。");
+                        DuelStartRecord start = DuelStartCodec.Decode(File.ReadAllText(path + ".mhstart"));
+                        bool current = start.SceneKey == gameSave.CurrentSceneKey &&
+                            start.NativeHash == Hash(File.ReadAllBytes(path));
+                        if (current)
+                            Report("此档是战斗开场档：读档后从这场战斗开头继续。");
+                        else
+                        {
+                            Quarantine(path + ".mhstart");
+                            Report("该槽位的战斗开场标记与存档不匹配，已保留为 .mhstart.stale 并按原生存档载入。");
+                        }
+                    }
+                    catch (Exception error)
+                    {
+                        Quarantine(path + ".mhstart");
+                        Report("该槽位的战斗开场标记无法读取，已保留为 .mhstart.stale 并按原生存档载入：" +
+                            error.GetBaseException().Message);
+                    }
+                    return false;
+                }
+                if (File.Exists(path + ".mhduel-pending"))
+                    throw new InvalidDataException("单挑存档提交曾中断；请核对 .dat/.mhduel 与备份后再读取。");
+                if (!File.Exists(path + ".mhduel"))
+                {
+                    if (File.Exists(path + ".mhduel-required"))
+                        throw new InvalidDataException("单挑中途档缺少必需的 .mhduel 附档；请恢复完整备份。");
+                    return false;
+                }
+                string companion = path + ".mhduel";
+                long size = new FileInfo(companion).Length;
+                byte[] bytes = size > DuelJournalCodec.MaxFile ? null : File.ReadAllBytes(companion);
+                Journal loaded;
+                try
+                {
+                    if (bytes == null) throw new InvalidDataException("单挑附档超过 32 MB。");
+                    loaded = DuelJournalCodec.Decode(bytes);
+                }
+                catch (Exception error) when (error is InvalidDataException || error is IOException ||
+                    error is DecoderFallbackException || error is FormatException)
+                {
+                    if (File.Exists(path + ".mhduel-required"))
+                        throw new InvalidDataException("此槽位的单挑附档为必需文件且无法校验，不能按原生档继续：" +
+                            error.Message, error);
+                    Quarantine(companion);
+                    Report((File.Exists(companion) ? "该槽位的旧单挑附档无法校验，移开失败；" :
+                        "该槽位的旧单挑附档无法校验，已保留为 .mhduel.stale；") + "按原生存档载入：" +
+                        error.GetBaseException().Message);
+                    return false;
+                }
+                if (loaded.NativeHash != Hash(File.ReadAllBytes(path)))
+                {
+                    // The document does not describe this file, so an ordinary
+                    // native save has taken the slot over. Keep the document and
+                    // let the player load the complete native save they have.
+                    if (File.Exists(path + ".mhduel-required"))
+                        throw new InvalidDataException("此槽位的单挑附档与原生档不匹配（附档必需标记仍在），" +
+                            "不能确认哪一个才是完整存档。请从完整备份恢复后再读取。");
+                    Quarantine(path + ".mhduel");
+                    Report("该槽位的单挑附档属于更早的存档，已保留为 .mhduel.stale 并按原生存档载入。");
+                    return false;
+                }
+                if (!AnytimeDuelRandomPatch.Covered || loaded.Client != Application.version ||
+                    loaded.SceneKey != gameSave.CurrentSceneKey)
+                {
+                    // The document is intact but this build cannot replay it (game update, or a
+                    // scene mismatch). The native file restarts the fight, so keep it usable
+                    // unless the requirement marker says the pair must stay together.
+                    if (File.Exists(path + ".mhduel-required"))
+                        throw new InvalidDataException("客户端或战斗关卡与单挑记录不匹配，且附档必需标记仍在；" +
+                            "请保留 " + Path.GetFileName(path) + ".mhduel 与 .mhduel-required，从完整备份恢复后再读取。");
+                    Quarantine(path + ".mhduel");
+                    Report("该槽位的单挑附档与当前游戏版本或关卡不匹配，已保留为 .mhduel.stale 并按原生存档载入。");
+                    return false;
+                }
+                // Preserve the verified opening for a subsequent save after replay.
+                // CaptureStart deliberately does not replace it during recovery.
+                stagedOpening = File.ReadAllBytes(path);
+                stagedSceneKey = loaded.SceneKey;
+                pending = loaded;
+                lastProgress = Time.unscaledTime;
+                loadStartedAt = Time.unscaledTime;
+                return true;
+            }
+            catch (Exception e)
+            {
+                failed = true;
+                Plugin.Instance?.Gate.Fail("单挑存档核验失败：" + e.GetBaseException().Message);
+                throw new InvalidDataException("拒绝读取不完整的单挑档：" + e.GetBaseException().Message, e);
+            }
+        }
+
+        internal static void AfterNativeLoadScene()
+        {
+            sceneReady = true;
+            if (finalVerified) CompleteReplay();
+        }
+
+        internal static void Tick()
+        {
+            // A deferred speed restore (scene was still loading when the attempt ended).
+            if (speedPending) RestoreSpeed();
+            if (failed)
+            {
+                if (manager == null) { UnlockInput(); return; }
+                float waited = Time.unscaledTime - failedAt;
+                if (!inputReleased) LockInput();
+                var scene = SceneController.Instance;
+                bool loading = scene == null || scene.IsLoading || scene.IsPrepare;
+                if (FailureExit.ShouldRequestTitle(loading, returningTitle, waited))
+                {
+                    // Latched only after the call returns: a throwing request must be retried.
+                    try { scene.LoadTitle(); returningTitle = true; }
+                    catch (Exception error)
+                    {
+                        ReleaseFailureInput("单挑恢复失败且无法回到标题：" + error.Message);
+                        return;
+                    }
+                }
+                if (FailureExit.ShouldReleaseInput(waited)) ReleaseFailureInput("单挑恢复失败");
+                return;
+            }
+            if (!Replaying) { UnlockInput(); return; }
+            LockInput();
+            // A stall, not total elapsed time: a long replay that keeps reaching
+            // action points is still making progress.
+            if (FailureExit.ShouldAbortForMissingScene(sceneReady, Time.unscaledTime - loadStartedAt))
+            {
+                Fail("单挑场景在 " + (int)FailureExit.SceneReadyLimit + " 秒内没有就绪。");
+                return;
+            }
+            if (Time.unscaledTime - lastProgress > 120f)
+            { Fail("单挑回放超过两分钟没有出现下一个行动点（停点 " + pointIndex + "/" +
+                (journal == null ? 0 : journal.Points.Count) + "）。"); return; }
+            if (manager != null && Time.timeScale != 1f) Time.timeScale = 1f;
+        }
+
+        internal static void Reset()
+        {
+            manager = null; journal = null; pending = null; opening = null;
+            stagedOpening = null; stagedSceneKey = null;
+            pointIndex = drawIndex = roundAssists = 0; waiting = injecting = replaying = failed = sceneReady = finalVerified = returningTitle = false;
+            lastProgress = 0f;
+            invalid = null;
+            failedAt = 0f; inputReleased = false; loadStartedAt = 0f;
+            RestoreSpeed();
+            UnlockInput();
+        }
+
+        private static void Begin(CombatManager current)
+        {
+            manager = current;
+            opening = stagedSceneKey == PlayerStatManagerData.Instance.CurrentSceneKey ? stagedOpening : null;
+            stagedOpening = null; stagedSceneKey = null;
+            waiting = false;
+            Plugin.Instance?.Log("[Anytime] duel begin scene=" + PlayerStatManagerData.Instance.CurrentSceneKey + " replay=" + (pending != null));
+            pointIndex = drawIndex = 0;
+            if (pending == null)
+            {
+                failed = false;
+                replaying = false;
+                // A plain native load still owns the mutation gate during Start.
+                // Record what was actually permitted, not merely the preference.
+                roundAssists = Plugin.CanModifyProgress ? ConfiguredAssists : 0;
+                journal = new Journal { SceneKey = PlayerStatManagerData.Instance.CurrentSceneKey, OpeningAssists = roundAssists };
+                return;
+            }
+            journal = pending;
+            pending = null;
+            replaying = true;
+            roundAssists = journal.OpeningAssists;
+            Plugin.Instance?.Log("[Anytime] duel replay opening assists=" + roundAssists + "; object scene=" + manager.gameObject.scene.name);
+            if (journal.SceneKey != PlayerStatManagerData.Instance.CurrentSceneKey)
+            { Fail("战斗关卡与单挑存档不同。"); return; }
+            RestoreOpeningFlags();
+        }
+
+        private static void RestoreOpeningFlags()
+        {
+            // Native Load applies flags before Unity loads Combat's scene assets.
+            // Scene deserialization may overwrite asset-backed flag states. Apply
+            // the verified opening again before the combat coroutine executes,
+            // never the desired replay target or a hard-coded flag value.
+            if (opening == null) throw new InvalidDataException("单挑开场原生档缺失。");
+            var saved = ReadNative(opening);
+            var missions = MissionManagerData.Instance;
+            if (missions?.FlagsCollection == null || saved.EventFlags == null || saved.EventFlags.Count > 10000)
+                throw new InvalidDataException("单挑开场旗标集合缺失或超限。");
+            var live = new List<FlagData>();
+            foreach (var collection in missions.FlagsCollection)
+            {
+                if (collection?.List == null) throw new InvalidDataException("单挑开场含空旗标集合。");
+                live.AddRange(collection.List);
+            }
+            var identities = new Dictionary<FlagData, int>();
+            var names = new string[live.Count]; var aliases = new int[live.Count];
+            for (int i = 0; i < live.Count; i++)
+            {
+                var flag = live[i];
+                if (flag == null) throw new InvalidDataException("单挑开场含空旗标：" + i);
+                if (!identities.TryGetValue(flag, out int alias)) { alias = identities.Count; identities.Add(flag, alias); }
+                names[i] = flag.name; aliases[i] = alias;
+            }
+            var expectedNames = new string[saved.EventFlags.Count];
+            var values = new int[saved.EventFlags.Count];
+            for (int i = 0; i < saved.EventFlags.Count; i++)
+            {
+                var value = saved.EventFlags[i];
+                if (value == null) throw new InvalidDataException("单挑开场含空旗标记录：" + i);
+                expectedNames[i] = value.Name; values[i] = value.State;
+            }
+            DuelFlagRestorePlan.Validate(names, aliases, expectedNames, values);
+            for (int i = 0; i < live.Count; i++) live[i].State = values[i];
+            Plugin.Instance?.Log("[Anytime] duel opening flags restored count=" + live.Count);
+        }
+
+        private static void ActionPointCompleted()
+        {
+            try { ArriveAtActionPoint(); }
+            catch (Exception e)
+            {
+                if (replaying) Fail(e.GetBaseException().Message);
+                else Invalidate("无法记录单挑状态：" + e.GetBaseException().Message);
+            }
+        }
+
+        private static void ArriveAtActionPoint()
+        {
+                if (manager == null || failed || invalid != null) return;
+                lastProgress = Time.unscaledTime;
+                if (replaying)
+                    foreach (var edit in journal.Edits.Where(edit => edit.PointIndex == pointIndex))
+                        NumericEdits.ApplyRecorded(edit.Key, edit.Before, edit.After);
+                string state = DuelAudit.Capture(manager);
+                string digest = Hash(Encoding.UTF8.GetBytes(state));
+                int round = manager.CurrentRounds;
+                if (!replaying)
+                {
+                    if (journal.Points.Count != journal.Actions.Count)
+                        throw new InvalidDataException("单挑行动日志失去同步。");
+                    journal.FinalState = state;
+                    journal.Points.Add(new Point { Round = round, DrawCount = journal.Draws.Count, Digest = digest });
+                    waiting = true;
+                    Plugin.Instance?.Log("[Anytime] duel checkpoint round=" + round + " draws=" + journal.Draws.Count + " actions=" + journal.Actions.Count + " assists=" + roundAssists);
+                    if (journal.Points.Count > MaxActions + 1) Invalidate("本场行动日志达到上限。");
+                    return;
+                }
+                if (pointIndex >= journal.Points.Count) throw new InvalidDataException("出现额外行动点。");
+                Point expected = journal.Points[pointIndex];
+                if (expected.Round != round || expected.DrawCount != drawIndex || expected.Digest != digest)
+                {
+                    DiagnoseState(state, expected.Digest);
+                    throw new InvalidDataException("单挑第 " + round + " 回合状态或随机序列不一致。");
+                }
+                if (pointIndex == journal.Actions.Count)
+                {
+                    if (drawIndex != journal.Draws.Count || state != journal.FinalState)
+                        throw new InvalidDataException("最终行动点没有通过详细状态核验。");
+                    var random = JsonUtility.FromJson<UnityEngine.Random.State>(journal.RandomState);
+                    if (JsonUtility.ToJson(random) != journal.RandomState)
+                        throw new InvalidDataException("保存的随机状态无法恢复。");
+                    UnityEngine.Random.state = random;
+                    replaying = false;
+                    finalVerified = true;
+                    if (sceneReady) CompleteReplay();
+                }
+                else
+                {
+                    int action = journal.Actions[pointIndex];
+                    roundAssists = journal.ActionAssists[pointIndex++];
+                    injecting = true;
+                    try { manager.Action((CombatActionType)action); }
+                    finally { injecting = false; }
+                }
+        }
+
+        private static void DiagnoseState(string actual, string expectedDigest)
+        {
+            try
+            {
+                string directory = Path.Combine(BepInEx.Paths.BepInExRootPath, "MortalHelperDiagnostics",
+                    "duel-" + DateTime.UtcNow.ToString("yyyyMMddTHHmmssfff", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, "actual.txt"), actual, new UTF8Encoding(false));
+                bool target = pointIndex == journal.Actions.Count;
+                string difference;
+                if (target)
+                {
+                    File.WriteAllText(Path.Combine(directory, "expected.txt"), journal.FinalState, new UTF8Encoding(false));
+                    difference = DuelStateDifference.Compare(journal.FinalState, actual);
+                }
+                else difference = "Intermediate point has a digest only; full expected state is available at the saved target. Expected digest=" + expectedDigest;
+                File.WriteAllText(Path.Combine(directory, "difference.txt"), difference, new UTF8Encoding(false));
+                Plugin.Instance?.Log("[Anytime] duel state diagnostics=" + directory + "; " +
+                    (difference.Length > 1800 ? difference.Substring(0, 1800) : difference));
+            }
+            catch (Exception error) { Plugin.Instance?.Log("[Anytime] duel diagnostics failed: " + error.GetBaseException().Message); }
+        }
+
+        private static void CompleteReplay()
+        {
+            if (!finalVerified || failed) return;
+            finalVerified = false;
+            waiting = true;
+            RestoreSpeed();
+            UnlockInput();
+            StoryReplay.OnNativeLoadCompleted();
+            Report("单挑第 " + manager.CurrentRounds + " 回合恢复完成，状态已核验。");
+        }
+
+        private static bool BeforeAction(CombatActionType action)
+        {
+            // After the failure exit released input the battle must be playable again; the
+            // journal is no longer written, so the action simply goes through.
+            if (failed) return inputReleased;
+            if (replaying) return injecting;
+            if (finalVerified) return false;
+            if (manager == null) return true;
+            if (invalid != null) return true;
+            if (!waiting || journal.Points.Count != journal.Actions.Count + 1) return false;
+            try
+            {
+                if (DuelAudit.Capture(manager) != journal.FinalState)
+                    Invalidate("等待期间战斗数据已改变。");
+                if (journal.Actions.Count >= MaxActions) Invalidate("本场行动日志达到上限。");
+                if (invalid == null)
+                {
+                    int configured = ConfiguredAssists;
+                    journal.Actions.Add((int)action);
+                    journal.ActionAssists.Add(configured);
+                    roundAssists = configured;
+                }
+            }
+            catch (Exception e) { Invalidate("无法核验行动前状态：" + e.GetBaseException().Message); }
+            waiting = false;
+            return true;
+        }
+
+        private static void End(CombatManager current)
+        {
+            if (manager != current) return;
+            if (Replaying) Fail("到达目标回合前战斗已结束。");
+            else Reset();
+        }
+
+        private static void Invalidate(string reason)
+        {
+            if (manager == null || replaying || invalid != null) return;
+            invalid = "本场回合保存已停用：" + reason;
+            Plugin.Instance?.Log("[Anytime] " + invalid);
+            waiting = false;
+        }
+
+        private static void Fail(string reason)
+        {
+            if (failed) return;
+            string detail = Describe(reason);
+            failed = true;
+            replaying = false;
+            pending = null;
+            waiting = false;
+            try { manager?.StopAllCoroutines(); manager?.PlayerAction?.StopAllCoroutines(); manager?.EnemyAction?.StopAllCoroutines(); }
+            catch (Exception) { }
+            Time.timeScale = 1f;
+            LockInput();
+            failedAt = Time.unscaledTime; inputReleased = false;
+            Plugin.Instance?.Gate.Fail("单挑恢复中止：" + reason);
+            Report("单挑恢复中止：" + reason + "。请重新读取存档。");
+            try { Plugin.Instance?.Log("[Anytime] " + detail); } catch (Exception) { }
+        }
+        // The native load watchdog gave up: stop waiting for a scene that is not coming.
+        internal static void NativeLoadAborted(string reason)
+        {
+            if (Replaying) Fail(reason);
+        }
+
+        // The duel path pins timeScale to 1 for deterministic ordering; once the attempt is
+        // over the player's own speed setting must come back.
+        private static void RestoreSpeed()
+        {
+            var options = Plugin.Instance == null ? null : Plugin.Instance.Options;
+            if (options == null || SceneController.Instance == null) return;
+            // A scene that is still loading owns timeScale; retry from the next tick instead of
+            // dropping the player's speed setting for the rest of the session.
+            if (SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+            { speedPending = true; return; }
+            // timeScale 0 means the game paused itself (menu, cutscene). Resuming it here would
+            // unpause the game behind the player's back, so keep the restore pending instead.
+            if (Time.timeScale <= 0f) { speedPending = true; return; }
+            speedPending = false;
+            float speed = options.ValidSpeed;
+            if (Mathf.Abs(Time.timeScale - speed) > 0.001f) Time.timeScale = speed;
+        }
+
+        // Failure is over: the gate stays closed, but the player keeps control.
+        private static void ReleaseFailureInput(string reason)
+        {
+            if (inputReleased) return;
+            inputReleased = true;
+            UnlockInput();
+            string message = FailureExit.FailReason(reason) + "：已解除输入锁，请自行回到标题后重新读取原生存档。";
+            if (Plugin.Instance != null)
+            {
+                Plugin.Instance.Status = message;
+                try { Plugin.Instance.Log("[Anytime] duel failure exit released input; reason=" + reason); }
+                catch (Exception) { }
+            }
+        }
+
+        // Names the round, the action and random tape positions, and whether the
+        // live state differed from the recorded digest. Missing data is reported
+        // as absent rather than defaulted into a value that could look valid.
+        private static string Describe(string reason)
+        {
+            var text = new StringBuilder("duel recovery failed: reason=").Append(reason);
+            text.Append("; scene-key=").Append(PlayerStatManagerData.Instance?.CurrentSceneKey ?? "<none>");
+            text.Append("; round=").Append(manager == null ? "<none>" : manager.CurrentRounds.ToString());
+            text.Append("; recorded-scene-key=").Append(journal == null ? "<none>" : journal.SceneKey ?? "<none>");
+            text.Append("; points=").Append(pointIndex).Append('/').Append(journal == null ? -1 : journal.Points.Count);
+            text.Append("; actions=").Append(journal == null ? -1 : journal.Actions.Count);
+            text.Append("; draws=").Append(drawIndex).Append('/').Append(journal == null ? -1 : journal.Draws.Count);
+            text.Append("; last-action=").Append(journal != null && pointIndex > 0 && pointIndex - 1 < journal.Actions.Count
+                ? ((CombatActionType)journal.Actions[pointIndex - 1]).ToString() : "<none>");
+            text.Append("; waiting=").Append(waiting);
+            text.Append("; injecting=").Append(injecting);
+            text.Append("; locked-inputs=").Append(InteractionLock.Held ? "held" : "free");
+            return text.ToString();
+        }
+
+        // One implementation per helper: these used to be private copies that had
+        // already drifted (no log guard, no "[Anytime]" prefix here).
+        private static void Report(string message) => AnytimeNative.Report(message);
+
+        private static void LockInput() { InteractionLock.Set(InteractionHold.Duel, true); }
+
+        private static void UnlockInput() { InteractionLock.Set(InteractionHold.Duel, false); }
+
+        private static bool Numbered(string slot) => AnytimeNative.Numbered(slot);
+        private static string SlotFile(string slot) => (string)GetSlotFile.Invoke(SaveSystem.Instance, new object[] { slot });
+
+        private static byte[] NativeBytes(GameSave save)
+        { return NativeObjectBytes(save); }
+
+        private static byte[] NativeObjectBytes(object save)
+        {
+            using (var stream = new MemoryStream())
+            {
+                new BinaryFormatter().Serialize(stream, save);
+                return stream.ToArray();
+            }
+        }
+
+        private static GameSave ReadNative(byte[] bytes)
+        {
+            using (var stream = new MemoryStream(bytes)) return (GameSave)new BinaryFormatter().Deserialize(stream);
+        }
+
+        private static string Hash(byte[] bytes)
+        {
+            using (var sha = SHA256.Create()) return Convert.ToBase64String(sha.ComputeHash(bytes));
+        }
+
+        private static byte[] Encode(Journal value) => DuelJournalCodec.Encode(value);
+
+        private static Journal Decode(string path)
+        {
+            if (new FileInfo(path).Length > DuelJournalCodec.MaxFile)
+                throw new InvalidDataException("单挑附档超过 32 MB。");
+            return DuelJournalCodec.Decode(File.ReadAllBytes(path));
+        }
+
+        private static void Validate(Journal value) => DuelJournalCodec.Validate(value);
+
+        private static void Stage(string path, byte[] bytes)
+        {
+            using (var file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+            { file.Write(bytes, 0, bytes.Length); file.Flush(true); }
+        }
+
+        private static void Replace(string staged, string destination)
+        {
+            if (File.Exists(destination)) File.Replace(staged, destination, null);
+            else File.Move(staged, destination);
+        }
+
+        // The native file and the journal must become valid together. The pair is
+        // staged, both members are re-read and verified, and only then does the
+        // transaction claim a commit; a crash before that point restores the exact
+        // pre-save combination recorded in the journal.
+        // Same transaction discipline as the action-journal pair, for a battle-start save:
+        // the native file plus its marker, with every earlier companion retired in the same
+        // commit so a slot never carries two meanings.
+        private static void WriteStartPair(string path, byte[] native, string marker)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string extra = path + ".mhstart";
+            string first = path + ".mhstart-native-stage", second = extra + ".stage";
+            byte[] sidecar = new UTF8Encoding(false).GetBytes(marker);
+            var transaction = SlotTransaction.Begin(SlotTransaction.JournalFor(path), "duel", new[] {
+                path, extra, path + ".mhduel", path + ".mhduel-required",
+                path + ".mha", path + ".mha-required"
+            });
+            try
+            {
+                Stage(first, native); Stage(second, sidecar);
+                if (Hash(File.ReadAllBytes(first)) != Hash(native)) throw new IOException("原生档暂存校验失败。");
+                Replace(first, path);
+                Replace(second, extra);
+                if (Hash(File.ReadAllBytes(path)) != Hash(native) ||
+                    DuelStartCodec.Decode(File.ReadAllText(extra)).NativeHash != Hash(native))
+                    throw new IOException("双文件提交校验失败。");
+                DeleteIfExists(path + ".mhduel");
+                DeleteIfExists(path + ".mhduel-required");
+                DeleteIfExists(path + ".mhduel-pending");
+                DeleteIfExists(path + ".mha");
+                DeleteIfExists(path + ".mha-required");
+                transaction.RecordReplacement(SlotTransaction.HashFile(path));
+                transaction.Commit();
+                transaction.Complete();
+            }
+            catch (Exception original)
+            {
+                var report = transaction.Rollback();
+                if (!report.Complete)
+                    throw new IOException("战斗开场档保存失败且回退未完成；事务日志与备份已保留。",
+                        new AggregateException(original, new InvalidOperationException(report.Detail)));
+                throw;
+            }
+            finally
+            {
+                try { if (File.Exists(first)) File.Delete(first); } catch (Exception) { }
+                try { if (File.Exists(second)) File.Delete(second); } catch (Exception) { }
+            }
+        }
+
+        private static void WritePair(string path, byte[] native, byte[] sidecar)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string extra = path + ".mhduel", first = path + ".mhduel-native-stage", second = extra + ".stage";
+            string required = path + ".mhduel-required";
+            var transaction = SlotTransaction.Begin(SlotTransaction.JournalFor(path), "duel", new[] {
+                path, extra, required, path + ".mha", path + ".mha-required"
+            });
+            try
+            {
+                Stage(first, native); Stage(second, sidecar);
+                if (Hash(File.ReadAllBytes(first)) != Hash(native)) throw new IOException("原生档暂存校验失败。");
+                Replace(first, path);
+                Replace(second, extra);
+                if (Hash(File.ReadAllBytes(path)) != Hash(native) ||
+                    Decode(extra).NativeHash != Hash(native)) throw new IOException("双文件提交校验失败。");
+                // A duel save owns the slot, so a stale story companion is retired
+                // inside the same transaction rather than after it.
+                Stage(required, Encoding.ASCII.GetBytes("1"));
+                DeleteIfExists(path + ".mha");
+                DeleteIfExists(path + ".mha-required");
+                transaction.RecordReplacement(SlotTransaction.HashFile(path));
+                transaction.Commit();
+                transaction.Complete();
+            }
+            catch (Exception original)
+            {
+                var report = transaction.Rollback();
+                if (!report.Complete)
+                    throw new IOException("双文件保存失败且回退未完成；事务日志与备份已保留。",
+                        new AggregateException(original, new InvalidOperationException(report.Detail)));
+                throw;
+            }
+            finally
+            {
+                try { if (File.Exists(first)) File.Delete(first); } catch (Exception) { }
+                try { if (File.Exists(second)) File.Delete(second); } catch (Exception) { }
+            }
+        }
+
+        private static void DeleteIfExists(string path) => AnytimeNative.DeleteIfExists(path);
+
+        // Never delete a companion the player might still need; the shared
+        // implementation renames it aside and never overwrites an earlier quarantine.
+        private static void Quarantine(string path) => AnytimeNative.Quarantine(path);
+
+        private static Draw DrawRandom(Draw requested, Func<Draw> fresh)
+        {
+            if (manager == null || journal == null || invalid != null || failed) return fresh();
+            if (!replaying)
+            {
+                Draw item = fresh();
+                if (journal.Draws.Count == MaxDraws) Invalidate("本场随机日志达到上限。");
+                else journal.Draws.Add(item);
+                return item;
+            }
+            // These run inside native combat routines through the transpiler: throwing here
+            // unwinds the game's own action code. Answer with a natural draw instead.
+            if (drawIndex >= journal.Draws.Count) { Fail("随机调用超过已保存记录。"); return fresh(); }
+            Draw saved = journal.Draws[drawIndex++];
+            if (saved.Site != requested.Site || saved.Kind != requested.Kind || saved.A != requested.A ||
+                saved.B != requested.B || saved.X != requested.X || saved.Y != requested.Y)
+            { Fail("随机调用顺序或参数变化。"); return saved; }
+            return saved;
+        }
+
+        internal static float RandomValue(string site) => DrawRandom(new Draw { Site = site, Kind = 0 },
+            () => new Draw { Site = site, Kind = 0, Floating = UnityEngine.Random.value }).Floating;
+        internal static int RandomInteger(int low, int high, string site) => DrawRandom(
+            new Draw { Site = site, Kind = 1, A = low, B = high },
+            () => new Draw { Site = site, Kind = 1, A = low, B = high, Integer = UnityEngine.Random.Range(low, high) }).Integer;
+        internal static float RandomFloating(float low, float high, string site) => DrawRandom(
+            new Draw { Site = site, Kind = 2, X = low, Y = high },
+            () => new Draw { Site = site, Kind = 2, X = low, Y = high, Floating = UnityEngine.Random.Range(low, high) }).Floating;
+
+        [HarmonyPatch(typeof(CombatManager), "Start")]
+        private static class BattleBeginPatch
+        {
+            private static void Postfix(CombatManager __instance, ref IEnumerator __result)
+            {
+                bool ready = false;
+                try { Begin(__instance); ready = !failed; }
+                catch (Exception e) { Fail("单挑初始化失败：" + e.GetBaseException().Message); }
+                finally
+                {
+                    // Unity has not started this iterator yet, so stopping live
+                    // coroutines cannot prevent its initialization/autosave.
+                    if (!ready) __result = null;
+                }
+            }
+        }
+
+        [HarmonyPatch]
+        private static class ActionPointPatch
+        {
+            // Patch execution of the coroutine rather than its tiny factory.
+            // Mono may inline the factory before Harmony replaces its result.
+            private static MethodBase TargetMethod() =>
+                AccessTools.EnumeratorMoveNext(AccessTools.Method(typeof(CombatUIManager), "ShowAction"));
+            private static void Postfix(bool __result)
+            { if (!__result) ActionPointCompleted(); }
+            private static Exception Finalizer(Exception __exception)
+            {
+                if (__exception != null)
+                {
+                    string reason = "行动点协程异常：" + __exception.GetBaseException().Message;
+                    if (replaying) Fail(reason); else Invalidate(reason);
+                }
+                return __exception;
+            }
+        }
+
+        [HarmonyPatch(typeof(CombatManager), "Action")]
+        private static class PlayerActionPatch
+        {
+            private static bool Prefix(CombatActionType __0) => BeforeAction(__0);
+        }
+
+        [HarmonyPatch(typeof(CombatManager), "GetNextInput")]
+        private static class InputPollPatch
+        {
+            private static void Postfix(ref bool __result) { if (replaying || finalVerified) __result = true; }
+        }
+
+        [HarmonyPatch(typeof(CombatManager), "NextInputAction")]
+        private static class DialogueInputPatch
+        {
+            private static bool Prefix() => !Replaying && !failed;
+        }
+
+        [HarmonyPatch(typeof(CombatManager), "OnDisable")]
+        private static class BattleEndPatch
+        {
+            private static void Prefix(CombatManager __instance) { End(__instance); }
+        }
+    }
+
+    [HarmonyPatch]
+    internal static class AnytimeDuelRandomPatch
+    {
+        private static List<MethodBase> targets;
+        internal static bool Covered
+        {
+            get
+            {
+                if (targets == null || targets.Count != 67) return false;
+                foreach (var method in targets)
+                {
+                    var info = Harmony.GetPatchInfo(method);
+                    if (info == null || !info.Owners.Contains("cerveth.mortal.helper")) return false;
+                }
+                return true;
+            }
+        }
+
+        private static MethodInfo Substitute(MethodInfo original)
+        {
+            if (original.DeclaringType != typeof(UnityEngine.Random)) return null;
+            if (original.Name == "get_value") return AccessTools.Method(typeof(AnytimeDuel), "RandomValue");
+            if (original.Name != "Range") return null;
+            var args = original.GetParameters();
+            if (args.Length != 2) return null;
+            return AccessTools.Method(typeof(AnytimeDuel), args[0].ParameterType == typeof(int) ? "RandomInteger" : "RandomFloating");
+        }
+
+        private static IEnumerable<MethodBase> TargetMethods()
+        {
+            targets = new List<MethodBase>();
+            var types = typeof(CombatManager).Assembly.GetTypes().Concat(new[] { typeof(DiceUtils), typeof(StatValueReference) });
+            foreach (var type in types)
+                foreach (var method in type.GetMethods(BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic |
+                    BindingFlags.Instance | BindingFlags.Static))
+                {
+                    if (method.ContainsGenericParameters || method.GetMethodBody() == null) continue;
+                    if (PatchProcessor.GetOriginalInstructions(method).Any(c => c.operand is MethodInfo m && Substitute(m) != null))
+                        targets.Add(method);
+                }
+            return targets;
+        }
+
+        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> input, MethodBase __originalMethod)
+        {
+            int index = 0;
+            foreach (var instruction in input)
+            {
+                MethodInfo replacement = instruction.operand is MethodInfo method ? Substitute(method) : null;
+                if (replacement != null)
+                {
+                    var site = new CodeInstruction(OpCodes.Ldstr,
+                        __originalMethod.Module.Name + ":" + __originalMethod.MetadataToken + ":" + index++);
+                    site.labels.AddRange(instruction.labels);
+                    site.blocks.AddRange(instruction.blocks.Where(b => b.blockType != ExceptionBlockType.EndExceptionBlock));
+                    var call = new CodeInstruction(OpCodes.Call, replacement);
+                    call.blocks.AddRange(instruction.blocks.Where(b => b.blockType == ExceptionBlockType.EndExceptionBlock));
+                    yield return site;
+                    yield return call;
+                }
+                else yield return instruction;
+            }
+        }
+    }
+
+    // A deterministic, read-only fingerprint of the live battle. It intentionally
+    // records gameplay data while treating Unity view components as references.
+    internal sealed class DuelAudit
+    {
+        private readonly StringBuilder text = new StringBuilder();
+        private readonly HashSet<object> visited = new HashSet<object>(ReferenceIdentity.Instance);
+        private static readonly MethodInfo CreateNative = AccessTools.Method(typeof(SaveSystem), "CreateSaveData");
+        private readonly CombatManager battle;
+        private readonly List<CombatStateEffect> activeEffects = new List<CombatStateEffect>();
+
+        private DuelAudit(CombatManager battle)
+        {
+            this.battle = battle;
+            var field = AccessTools.Field(typeof(CombatActionController), "_effects");
+            if (field == null) throw new InvalidDataException("单挑效果集合字段缺失。");
+            foreach (var actor in new[] { battle.PlayerAction, battle.EnemyAction })
+            {
+                if (actor == null || !(field.GetValue(actor) is IList list))
+                    throw new InvalidDataException("单挑效果集合无法读取。");
+                foreach (var effect in list) if (effect is CombatStateEffect combatEffect) activeEffects.Add(combatEffect);
+            }
+        }
+
+        internal static string Capture(CombatManager battle)
+        {
+            var audit = new DuelAudit(battle);
+            audit.Write("round", battle.CurrentRounds);
+            audit.Write("scene-key", PlayerStatManagerData.Instance.CurrentSceneKey);
+            audit.Walk("player", battle.PlayerAction, true, 0);
+            audit.Walk("player-stat", battle.PlayerAction?.Stat, true, 0);
+            audit.Walk("enemy", battle.EnemyAction, true, 0);
+            audit.Walk("enemy-stat", battle.EnemyAction?.Stat, true, 0);
+            audit.Effects("player-effect", battle.PlayerAction);
+            audit.Effects("enemy-effect", battle.EnemyAction);
+            audit.Walk("level", battle.CombatLevel, true, 0);
+            audit.Walk("enemy-intent", AccessTools.Field(typeof(CombatManager), "_enemyActionResult")?.GetValue(battle), true, 0);
+            var save = (GameSave)CreateNative.Invoke(SaveSystem.Instance, null);
+            // Only this comparison-owned snapshot is normalized, including its restore data.
+            Titles.StripMetadata(save);
+            string restore = save.RestoreData;
+            save.RestoreData = null;
+            audit.Walk("campaign", save, true, 0);
+            if (!string.IsNullOrEmpty(restore)) audit.Walk("restore", JsonUtility.FromJson<GameSave>(restore), true, 0);
+            return audit.text.ToString();
+        }
+
+        private void Effects(string path, CombatActionController actor)
+        {
+            var field = AccessTools.Field(typeof(CombatActionController), "_effects");
+            if (actor == null || field == null || !(field.GetValue(actor) is IList list))
+                throw new InvalidDataException("单挑效果集合无法读取。");
+            for (int i = 0; i < list.Count; i++) Walk(path + "[" + i + "]", list[i], true, 0);
+            Write(path + ".count", list.Count);
+        }
+
+        private void Write(string key, object value)
+        {
+            string data = value == null ? "<null>" : value is float f ? f.ToString("R", CultureInfo.InvariantCulture)
+                : value is double d ? d.ToString("R", CultureInfo.InvariantCulture)
+                : Convert.ToString(value, CultureInfo.InvariantCulture);
+            text.Append(key.Length).Append(':').Append(key).Append(data.Length).Append(':').Append(data);
+            if (text.Length > 4000000) throw new InvalidDataException("单挑现场状态超出校验上限。");
+        }
+
+        private void Walk(string path, object value, bool root, int depth)
+        {
+            if (depth > 40) throw new InvalidDataException("单挑状态嵌套过深。");
+            if (value == null) { Write(path, null); return; }
+            Type type = value.GetType();
+            if (type.IsPrimitive || type.IsEnum || value is decimal || value is string)
+            {
+                Write(path, value); return;
+            }
+            if (value is Delegate || value is IEnumerator || (!root && value is Component) ||
+                (!root && value is UnityEngine.Object)) { Write(path, type.FullName); return; }
+            if (type.Namespace != null && type.Namespace.StartsWith("UnityEngine", StringComparison.Ordinal))
+            { Write(path, type.FullName); return; }
+            if (value is ConditionalWeakTable<CombatManager, StrongBox<int>> managerCache)
+            {
+                Write(path, managerCache.TryGetValue(battle, out var entry) ? entry.Value : 0);
+                return;
+            }
+            if (value is ConditionalWeakTable<CombatStateEffect, StrongBox<int>> effectCache)
+            {
+                for (int i = 0; i < activeEffects.Count; i++)
+                    Write(path + "[" + i + "]", effectCache.TryGetValue(activeEffects[i], out var entry) ? entry.Value : 0);
+                return;
+            }
+            if (value is IDictionary<CombatStateEffect, int> effectCounts)
+            {
+                for (int i = 0; i < activeEffects.Count; i++)
+                    Write(path + "[" + i + "]", effectCounts.TryGetValue(activeEffects[i], out var count) ? count : 0);
+                return;
+            }
+            if (value is HashSet<CombatStateEffect> effectSet)
+            {
+                for (int i = 0; i < activeEffects.Count; i++) Write(path + "[" + i + "]", effectSet.Contains(activeEffects[i]));
+                return;
+            }
+            if (!type.IsValueType && !visited.Add(value)) { Write(path, "<seen>"); return; }
+            Write(path + ".type", type.FullName);
+            if (value is IDictionary dictionary)
+            {
+                var entries = new List<DictionaryEntry>();
+                foreach (DictionaryEntry entry in dictionary) entries.Add(entry);
+                foreach (var entry in entries.OrderBy(e => Convert.ToString(e.Key, CultureInfo.InvariantCulture), StringComparer.Ordinal))
+                    Walk(path + "[" + Convert.ToString(entry.Key, CultureInfo.InvariantCulture) + "]", entry.Value, false, depth + 1);
+                Write(path + ".count", entries.Count); return;
+            }
+            if (value is IEnumerable sequence)
+            {
+                int index = 0;
+                foreach (var item in sequence) Walk(path + "[" + index++ + "]", item, false, depth + 1);
+                Write(path + ".count", index); return;
+            }
+            for (Type cursor = type; cursor != null && cursor != typeof(object) &&
+                cursor.Namespace != "UnityEngine"; cursor = cursor.BaseType)
+                foreach (var field in cursor.GetFields(BindingFlags.Instance | BindingFlags.Public |
+                    BindingFlags.NonPublic | BindingFlags.DeclaredOnly).OrderBy(f => f.Name, StringComparer.Ordinal))
+                {
+                    if (field.Name == "TimeTick" || field.Name == "FreeRandomState" || field.Name == "RestoreData") continue;
+                    Walk(path + "." + cursor.Name + "." + field.Name, field.GetValue(value), false, depth + 1);
+                }
+        }
+
+        private sealed class ReferenceIdentity : IEqualityComparer<object>
+        {
+            internal static readonly ReferenceIdentity Instance = new ReferenceIdentity();
+            public new bool Equals(object x, object y) => ReferenceEquals(x, y);
+            public int GetHashCode(object value) => RuntimeHelpers.GetHashCode(value);
+        }
+    }
+}
