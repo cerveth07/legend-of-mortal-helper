@@ -41,6 +41,21 @@ internal static class StoryContracts
             catch (Exception e) { rejected = e is InvalidDataException || e is IOException || e is ArgumentException; }
             Check(rejected, "corrupt/truncated/legacy sidecar rejected");
         }
+        // v4 appends the recorded language after the event list. Replay keys are digests
+        // of the localised text, so a checkpoint is only replayable in that language.
+        var localised = new AnytimeStoryRecord { Version = 4, Language = 1, Client = "c", NativeHash = "h",
+            Baseline = "b", Expected = "e", Script = "s", Scene = "Story", WaitKind = "Say", WaitKey = "k",
+            BaselineRandomState = "r0", RandomState = "r1", BaselineLuaRandomState = "l0", LuaRandomState = "l1",
+            BaselineGlobals = new AnytimeLuaValue[0], ExpectedGlobals = new AnytimeLuaValue[0],
+            Events = new[] { new AnytimeStoryEvent { Kind = "Say", Key = "digest" } } };
+        var v4 = AnytimeStoryCodec.Read(AnytimeStoryCodec.Write(localised));
+        Check(v4.Version == 4 && v4.Language == 1, "recorded language survives the round trip");
+        Check(v4.Events.Length == 1 && v4.Events[0].Key == "digest", "v4 event list still parses");
+        // A v3 body has no language field: it must read back as unknown, never as 0,
+        // or an old traditional-only checkpoint would be silently forced to language 0.
+        localised.Version = 3; localised.Language = 0;
+        Check(AnytimeStoryCodec.Read(AnytimeStoryCodec.Write(localised)).Language == -1,
+            "v3 sidecar reports an unknown language instead of a wrong one");
         Console.WriteLine("PASS: " + checks + " story codec behavior checks");
         return checks;
     }

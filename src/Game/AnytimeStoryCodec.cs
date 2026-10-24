@@ -67,6 +67,10 @@ namespace MortalHelper.Game
         public string RandomState;
         public string BaselineLuaRandomState;
         public string LuaRandomState;
+        // Language the checkpoint was recorded in; -1 for records written before v4.
+        // Replay keys are digests of the localised text, so this decides whether the
+        // recorded dialogue can be matched at all.
+        public int Language = -1;
         public AnytimeLuaValue[] BaselineGlobals;
         public AnytimeLuaValue[] ExpectedGlobals;
         public AnytimeStoryEvent[] Events;
@@ -103,6 +107,7 @@ namespace MortalHelper.Game
                 total += value == null ? 1 : Encoding.UTF8.GetByteCount(value) + 4L;
             total += ValuesSize(record.BaselineGlobals);
             total += ValuesSize(record.ExpectedGlobals);
+            if (record.Version >= 4) total += 4;
             if (record.Events != null)
                 foreach (var entry in record.Events)
                 {
@@ -163,6 +168,8 @@ namespace MortalHelper.Game
                     if (entry == null) throw new InvalidDataException("剧情事件为空。");
                     Text(writer, entry.Kind); Text(writer, entry.Key); writer.Write(entry.Choice); writer.Write(entry.Number);
                 }
+                // Appended after the event list so a v3 body still parses byte for byte.
+                if (record.Version >= 4) writer.Write(record.Language);
                 writer.Flush();
                 if (stream.Length > Limit) throw new InvalidDataException("剧情附加记录过大。");
                 return "MHA3\n" + Convert.ToBase64String(stream.ToArray());
@@ -190,6 +197,7 @@ namespace MortalHelper.Game
                     record.Events = new AnytimeStoryEvent[Count(reader, 20000)];
                     for (int i = 0; i < record.Events.Length; i++)
                         record.Events[i] = new AnytimeStoryEvent { Kind = Text(reader), Key = Text(reader), Choice = reader.ReadInt32(), Number = reader.ReadDouble() };
+                    record.Language = record.Version >= 4 ? reader.ReadInt32() : -1;
                     if (stream.Position != stream.Length) throw new InvalidDataException("剧情附档含多余数据。");
                     return record;
                 }

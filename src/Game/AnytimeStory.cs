@@ -250,6 +250,7 @@ namespace MortalHelper.Game
                 // so committing here would create a slot this plugin can never load again.
                 if (string.IsNullOrEmpty(script)) throw new InvalidDataException("当前剧情尚未建立可重放的脚本起点。");
                 var record = new AnytimeStoryRecord {
+                    Version = 4, Language = AnytimeLanguage.Current,
                     Client = Application.version, Baseline = baseline, Script = script, Scene = scene,
                     WaitKind = AnytimeDice.Active ? "Dice" : WaitKinds[0],
                     WaitKey = AnytimeDice.Active ? AnytimeDice.SaveKey : WaitKeys[0],
@@ -428,6 +429,17 @@ namespace MortalHelper.Game
             // or the lines just read come back unread.
             try { SaveSystem.Instance?.SaveUniverseData(); }
             catch (Exception error) { Plugin.Instance?.Report(error); }
+            // A checkpoint recorded in another language cannot match a single line:
+            // switch to that language for the replay instead of failing at event 0.
+            int recordedLanguage = AnytimeLanguage.ForRecord(record);
+            if (record.Language == AnytimeLanguage.Unknown && recordedLanguage != AnytimeLanguage.Unknown)
+            {
+                record.Language = recordedLanguage;
+                try { Plugin.Instance?.Log("[Anytime] record has no language field; inferred " +
+                    AnytimeLanguage.Describe(recordedLanguage) + " from the captured string table"); }
+                catch (Exception) { }
+            }
+            AnytimeLanguage.EnterReplay(recordedLanguage);
             playback = record; save = opening; cursor = 0;
             sceneReady = false; targetReached = false; targetAt = 0f;
             replayDice = null;
@@ -504,6 +516,7 @@ namespace MortalHelper.Game
                 Events.Clear(); Events.AddRange(playback.Events);
                 playback = null; Verified = true; invalid = null; UnlockInput();
                 RestoreReplaySpeed();
+                AnytimeLanguage.LeaveReplay();
                 StoryReplay.OnNativeLoadCompleted();
                 if (Plugin.Instance != null)
                 {
@@ -525,6 +538,7 @@ namespace MortalHelper.Game
             lua = null; script = scene = baseline = baselineRandomState = baselineLuaRandomState = invalid = null; baselineGlobals = null;
             Events.Clear(); WaitTokens.Clear(); WaitKinds.Clear(); WaitKeys.Clear();
             replayDice = null; sceneReady = targetReached = false; UnlockInput();
+            AnytimeLanguage.LeaveReplay();
             returningTitle = false;
             RestoreReplaySpeed();
             replayStartAt = 0f;
@@ -543,6 +557,7 @@ namespace MortalHelper.Game
             Failure = null;
             invalid = reason;
             inputReleased = true;
+            AnytimeLanguage.LeaveReplay();
             UnlockInput();
             StoryReplay.OnNativeLoadCompleted();
             if (Plugin.Instance != null)
@@ -656,7 +671,8 @@ namespace MortalHelper.Game
             ReplayNumericEdits("Say", key);
             if (cursor == playback.Events.Length) { Reach("Say", key); return false; }
             var next = playback.Events[cursor];
-            if (next.Kind != "Say" || next.Key != key) { AbortReplay("剧情对话顺序与存档不同。"); return false; }
+            if (next.Kind != "Say" || next.Key != key)
+            { AbortReplay("剧情对话顺序与存档不同。" + AnytimeLanguage.Hint(playback.Language)); return false; }
             cursor++; lastProgress = Time.unscaledTime; return true;
         }
         internal static void SayDone(string text) { Record(new AnytimeStoryEvent { Kind = "Say", Key = Digest(text) }); }
@@ -820,6 +836,7 @@ namespace MortalHelper.Game
             Failed = true; Failure = reason; playback = null; LockInput();
             failedAt = Time.unscaledTime; inputReleased = false;
             RestoreReplaySpeed();
+            AnytimeLanguage.LeaveReplay();
             replayStartAt = 0f;
             Plugin.Instance?.Gate.Fail("剧情存档恢复失败：" + reason);
             if (Plugin.Instance != null) Plugin.Instance.Status = "剧情恢复失败：" + reason + "；请重新读取原生存档。";

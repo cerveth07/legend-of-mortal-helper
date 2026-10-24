@@ -55,6 +55,9 @@ namespace MortalHelper.Game
                 catch (Exception error) { Logger.LogWarning("插件目录扫描失败，已跳过旧插件检测：" + error.Message); }
                 patches = new Harmony("cerveth.mortal.helper");
                 patches.PatchAll(typeof(Plugin).Assembly);
+                // Resolved by name at runtime: the intro panel is presentation only, but
+                // its coroutine throws during replays and the story waits on it forever.
+                AnytimeIntroSkip.Install(patches);
                 SceneManager.activeSceneChanged += SceneChanged;
                 Logger.LogInfo("Mortal helper 0.1.1 initialized; experimental build.");
                 Logger.LogInfo("Display: " + Panel.Describe());
@@ -81,6 +84,7 @@ namespace MortalHelper.Game
             {
                 patches = new Harmony("cerveth.mortal.helper");
                 patches.PatchAll(typeof(Plugin).Assembly);
+                AnytimeIntroSkip.Install(patches);
                 InteractionLock.Reset();
             SceneManager.activeSceneChanged -= SceneChanged;
                 SceneManager.activeSceneChanged += SceneChanged;
