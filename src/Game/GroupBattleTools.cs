@@ -54,10 +54,11 @@ namespace MortalHelper.Game
     {
         private static void Prefix(CharacterHealth __instance, ref int __0)
         {
-            if (__0 >= 0 || __instance.CurrentHealth <= 0 || !Plugin.CanModifyProgress ||
-                !Plugin.Instance.Options.GroupAllyHealth.Value) return;
+            if (__0 >= 0 || __instance.CurrentHealth <= 0 || !Plugin.CanModifyProgress) return;
             var character = __instance.GetComponent<Character>();
-            if (GroupBattleTools.Is(character, EntityType.Friend)) __0 = 0;
+            if ((GroupBattleTools.Is(character, EntityType.Player) && Plugin.Instance.Options.GroupHealth.Value) ||
+                (GroupBattleTools.Is(character, EntityType.Friend) && Plugin.Instance.Options.GroupAllyHealth.Value))
+                __0 = 0;
         }
     }
 

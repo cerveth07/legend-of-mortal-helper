@@ -18,6 +18,22 @@ def between(text, start, end):
 
 
 class SafetyWiringTests(unittest.TestCase):
+    def test_f3_restores_numbered_slot_order(self):
+        slots = read("src/Game/SaveSlotComments.cs")
+        apply = between(slots, "internal static void Apply(LoadGamePanel panel)", "private static long Tick(")
+        self.assertIn('GameAccess.Field<LoadSlotPanel[]>(panel, "_saveSlots")', apply)
+        self.assertIn("if (Enabled) ordered.Sort(", apply)
+        self.assertLess(apply.index("if (Enabled) ordered.Sort("),
+                        apply.index("ordered[i].transform.SetSiblingIndex(i)"))
+        self.assertNotIn("if (!Enabled", apply)
+        hotkey = read("src/Game/Plugin.cs")
+        self.assertLess(hotkey.index("Options.SortRecent.Value = !Options.SortRecent.Value;"),
+                        hotkey.index("SaveSlotSort.Refresh();"))
+        panel = read("src/Game/MainPanel.cs")
+        ui = between(panel, 'SubSection("排序");', '// Recorded checkpoints belong to saving')
+        self.assertIn("if (nextRecent != recent) Defer(", ui)
+        self.assertIn("SaveSlotSort.Refresh();", ui)
+
     def test_story_target_rng_restored_before_native_snapshot(self):
         story = read("src/Game/AnytimeStory.cs")
         target = between(story, 'throw new InvalidDataException("对话等待点与记录不同。")',
@@ -39,7 +55,19 @@ class SafetyWiringTests(unittest.TestCase):
         self.assertIn('if (File.Exists(path + ".mhduel-required"))', load)
         self.assertIn("return false;", load)
         self.assertLess(load.index('if (!File.Exists(path + ".mhduel"))'),
-                        load.index('var loaded = Decode(path + ".mhduel");'))
+                        load.index('loaded = DuelJournalCodec.Decode(bytes);'))
+        self.assertLess(load.index('File.Exists(path + ".mhstart") &&'),
+                        load.index('if (File.Exists(path + ".mhstart"))'))
+        self.assertIn('File.Exists(path + ".mhduel-required") || File.Exists(path + ".mhduel-pending")', load)
+
+    def test_corrupt_optional_legacy_duel_companion_keeps_native_load_available(self):
+        duel = read("src/Game/AnytimeDuel.cs")
+        load = between(duel, "internal static bool PrepareLoad(", "internal static void AfterNativeLoadScene()")
+        parse = between(load, 'loaded = DuelJournalCodec.Decode(bytes);', 'if (loaded.NativeHash !=')
+        self.assertIn('error is InvalidDataException || error is IOException', parse)
+        self.assertLess(parse.index('if (File.Exists(path + ".mhduel-required"))'),
+                        parse.index('Quarantine(companion);'))
+        self.assertLess(parse.index('Quarantine(companion);'), parse.index('return false;'))
 
     def test_rollback_is_never_derived_from_backup_existence(self):
         story = read("src/Game/AnytimeStory.cs")
@@ -103,8 +131,26 @@ class SafetyWiringTests(unittest.TestCase):
         settle = between(native, "internal static void SettleSlot(", "internal static void QuarantineOrphans(")
         self.assertIn("transaction.ReplacementHash", settle)
         self.assertIn("SlotTransaction.HashFile(path) == transaction.ReplacementHash", settle)
-        self.assertLess(settle.index("if (forward)"), settle.index("transaction.Rollback()"))
+        self.assertLess(settle.index("if (forward)"), settle.rindex("transaction.Rollback()"))
         self.assertIn("SlotTransactionState.Broken", settle)
+
+    def test_failed_quarantine_never_reaches_rollback(self):
+        native = read("src/Game/AnytimeNative.cs")
+        settle = between(native, "internal static void SettleSlot(", "internal static void Report(")
+        conflict = settle.split("bool newerSavePreserved = false;", 1)[1]
+        self.assertLess(conflict.index("Quarantine(path);"), conflict.index("if (File.Exists(path))"))
+        self.assertLess(conflict.index("if (File.Exists(path))"), conflict.index("transaction.Rollback()"))
+        self.assertLess(conflict.index("transaction.Rollback()"), conflict.index("if (newerSavePreserved)"))
+
+    def test_committed_cleanup_exception_cannot_be_reported_as_rollback(self):
+        native = read("src/Game/AnytimeNative.cs")
+        saved = between(native, "internal static void SavedData(", "internal static void EndSave(")
+        committed = saved.index("transaction.State == SlotTransactionState.Committed")
+        self.assertLess(committed, saved.index("transaction.Rollback()"))
+        story = read("src/Game/AnytimeStory.cs")
+        saved = between(story, "internal static void AfterNativeSave(", "internal static void AbortNativeSave()")
+        self.assertLess(saved.index("pendingTransaction.State == SlotTransactionState.Committed"),
+                        saved.index("bool restored = RollBack()"))
 
     def test_slot_delete_never_destroys_an_unsettled_transaction(self):
         native = read("src/Game/AnytimeNative.cs")
@@ -123,11 +169,14 @@ class SafetyWiringTests(unittest.TestCase):
         load = between(story, "internal static void PrepareLoad(string slot", "internal static void AfterNativeLoadScene()")
         self.assertIn("ReadSidecarHeader(path)", load)
         self.assertLess(load.index("if (recorded != null && recorded != nativeHash)"),
-                        load.index("var record = ReadRecord(path, save);"))
+                        load.index("record = ReadRecord(path, save);"))
         self.assertIn("Quarantine(path + \".mha\")", load)
         # A sidecar that is still marked required is a genuine ambiguity and must
         # keep refusing instead of silently downgrading to the native checkpoint.
         self.assertIn('if (File.Exists(path + ".mha-required"))', load)
+        invalid_record = load.split('catch (Exception error) when (error is InvalidDataException || error is FormatException)', 1)[1]
+        self.assertLess(invalid_record.index('if (File.Exists(path + ".mha-required"))'),
+                        invalid_record.index('Quarantine(path + ".mha")'))
         duel = read("src/Game/AnytimeDuel.cs")
         self.assertIn('Quarantine(path + ".mhduel")', duel)
 
@@ -151,6 +200,24 @@ class SafetyWiringTests(unittest.TestCase):
         preserve = between(native, "private static void Preserve(", "private static string QuarantineFolder(")
         self.assertIn("File.Move(", preserve)
         self.assertNotIn("File.Delete", preserve)
+
+    def test_language_sidecar_acceptance_and_cleanup_are_wired(self):
+        story = read("src/Game/AnytimeStory.cs")
+        read_record = between(story, "private static AnytimeStoryRecord ReadRecord(", "private static bool RollBack()")
+        self.assertIn("record.Version != 3 && record.Version != 4", read_record)
+        prepare = between(story, "internal static void PrepareLoad(string slot", "internal static void AfterNativeLoadScene()")
+        self.assertIn("record.Version >= 4 && !AnytimeLanguage.Supported(record.Language)", prepare)
+        load = between(story, "internal static void BeforeNativeLoad()", "internal static void PrepareLoad(")
+        self.assertIn("AnytimeLanguage.LeaveReplay()", load)
+        self.assertLess(load.index("AnytimeLanguage.LeaveReplay()"), load.index("playback = null"))
+
+    def test_hotkey_reset_uses_the_same_conflict_validation(self):
+        hotkeys = read("src/Game/Hotkeys.cs")
+        reset = between(hotkeys, "internal static string Reset(", "internal static string Default(")
+        self.assertIn("Check(options, action, candidate)", reset)
+        self.assertLess(reset.index("Check(options, action, candidate)"), reset.index("Write(options, action, candidate)"))
+        panel = read("src/Game/MainPanel.cs")
+        self.assertIn("未恢复默认", panel)
 
     def test_replay_keys_never_share_an_unknown_placeholder(self):
         recovery = read("src/Game/StoryRecovery.cs")
@@ -190,7 +257,7 @@ class SafetyWiringTests(unittest.TestCase):
         lock_source = read("src/Game/InteractionLock.cs")
         self.assertIn("internal static void Refresh()", lock_source)
         self.assertIn("ReferenceEquals(system, lockedSystem)", lock_source)
-        self.assertIn("InteractionLock.Refresh();", read("src/Game/Plugin.cs"))
+        self.assertIn('Step("lock", InteractionLock.Refresh)', read("src/Game/Plugin.cs"))
 
     def test_manual_speed_change_is_gated(self):
         plugin = read("src/Game/Plugin.cs")

@@ -42,9 +42,24 @@ namespace MortalHelper.Game
             return string.IsNullOrWhiteSpace(name) ? "无称号" : name;
         }
 
+        // Cosmetic metadata does not touch gameplay stats or native menu state.
+        // FreeManager.EnableHotKey is false in activity lists and other menus,
+        // so the numeric-edit gate incorrectly disabled every title button there.
+        internal static string SelectionBlockReason
+        {
+            get
+            {
+                if (loading != 0 || !GameAccess.Loaded) return "请先开始游戏或读取存档。";
+                if (Plugin.Instance == null || !Plugin.Instance.Gate.CanInteract || AnytimeStory.Replaying || AnytimeDuel.Replaying)
+                    return "存档恢复尚未完成，请等待恢复或重新读取有效存档。";
+                return null;
+            }
+        }
+
         internal static string Choose(int id)
         {
-            if (!GameAccess.CanEditValues) return "请在自由活动时，关闭游戏内菜单后修改。";
+            string blocked = SelectionBlockReason;
+            if (blocked != null) return blocked;
             if (id != -1 && (id > 999 || id < 0 || Name(id) == null)) return "该称号不存在。";
             History.Select(id);
             Refresh();

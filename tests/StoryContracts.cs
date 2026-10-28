@@ -51,6 +51,17 @@ internal static class StoryContracts
         var v4 = AnytimeStoryCodec.Read(AnytimeStoryCodec.Write(localised));
         Check(v4.Version == 4 && v4.Language == 1, "recorded language survives the round trip");
         Check(v4.Events.Length == 1 && v4.Events[0].Key == "digest", "v4 event list still parses");
+        localised.Version = 5; localised.ScriptSource = "say('旧剧情')\nwait(1)"; localised.ScriptHash = "checksum";
+        var v5 = AnytimeStoryCodec.Read(AnytimeStoryCodec.Write(localised));
+        Check(v5.ScriptSource == localised.ScriptSource && v5.ScriptHash == "checksum" && v5.Language == 1, "v5 preserves archived script with old globals and events");
+        Check(AnytimeStoryCodec.Measure(localised) >= System.Text.Encoding.UTF8.GetByteCount(localised.ScriptSource), "archive participates in pre-write size budget");
+        string futureVersion = Convert.ToBase64String(System.BitConverter.GetBytes(6)) +
+            encoded.Substring(encoded.StartsWith("MHA3\n", StringComparison.Ordinal) ? 13 : 8);
+        var unsupported = "MHA3\n" + futureVersion;
+        bool futureRejected = false;
+        try { AnytimeStoryCodec.Read(unsupported); }
+        catch (InvalidDataException) { futureRejected = true; }
+        Check(futureRejected, "future sidecar versions rejected explicitly");
         // A v3 body has no language field: it must read back as unknown, never as 0,
         // or an old traditional-only checkpoint would be silently forced to language 0.
         localised.Version = 3; localised.Language = 0;

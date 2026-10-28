@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems><ImplicitUsings>disable</ImplicitUsings><Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="HintNameBehavior.cs" />
+    <Compile Include="../src/Core/ScriptHints.cs" /><Compile Include="../src/Core/ScriptOptions.cs" />
+    <Compile Include="../src/Game/HintNames.cs" /><Compile Include="../src/Game/HintText.cs" />
+    <Compile Include="../src/Game/OptionConditions.cs" /><Compile Include="../src/Game/GameNames.cs" />
+    <Compile Include="../src/Game/UiLanguage.cs" /><Compile Include="../src/Game/UiText.cs" />
+  </ItemGroup>
+</Project>

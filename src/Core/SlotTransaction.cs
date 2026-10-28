@@ -47,7 +47,7 @@ namespace MortalHelper.Core
     public sealed class SlotTransaction
     {
         public const string Suffix = ".mhtx";
-        private const string Header = "slot-transaction 1";
+        private const string Header = "slot-transaction 2";
         private const int MaximumEntries = 24;
         private const int MaximumFile = 65536;
 
@@ -150,12 +150,20 @@ namespace MortalHelper.Core
                 string line;
                 while ((line = reader.ReadLine()) != null) lines.Add(line);
             }
-            if (lines.Count < 5 || lines[0] != Header) throw new InvalidDataException("存档事务日志头无效。");
+            if (lines.Count < 6 || lines[0] != Header)
+                throw new InvalidDataException("存档事务日志格式不兼容或文件不完整；请保留备份并人工核对。");
             string operation = Unescape(Value(lines[1], "op"));
+            if (operation != "story" && operation != "duel" && operation != "supersede")
+                throw new InvalidDataException("存档事务操作无效。");
             var state = ParseState(Value(lines[2], "state"));
             string replacement = Value(lines[3], "new");
             int count = ParseCount(Value(lines[4], "n"));
-            if (lines.Count != 5 + count) throw new InvalidDataException("存档事务日志条目数量不符。");
+            if (lines.Count != 6 + count) throw new InvalidDataException("存档事务日志条目数量不符。");
+            var body = new StringBuilder();
+            for (int index = 0; index < 5 + count; index++) body.Append(lines[index]).Append('\n');
+            string expectedSum = Value(lines[5 + count], "sum");
+            if (expectedSum != HashText(body.ToString()))
+                throw new InvalidDataException("存档事务日志校验失败；禁止按损坏的历史记录回滚：" + journalPath);
             var transaction = new SlotTransaction(journalPath, operation, state)
             {
                 ReplacementHash = replacement == "-" ? null : replacement
@@ -176,6 +184,8 @@ namespace MortalHelper.Core
                 if (string.IsNullOrEmpty(entry.Path)) throw new InvalidDataException("存档事务日志条目路径为空。");
                 if (entry.Existed && (string.IsNullOrEmpty(entry.OriginalHash) || string.IsNullOrEmpty(entry.BackupPath)))
                     throw new InvalidDataException("存档事务日志缺少原始哈希或备份路径。");
+                if (!entry.Existed && (entry.OriginalHash != null || entry.BackupPath != null))
+                    throw new InvalidDataException("存档事务日志的原始文件状态与备份记录矛盾。");
                 RequireOwned(journalPath, index, entry);
                 transaction.entries.Add(entry);
             }
@@ -376,6 +386,8 @@ namespace MortalHelper.Core
                     .Append(Escape(entry.Path)).Append('|')
                     .Append(string.IsNullOrEmpty(entry.BackupPath) ? "-" : Escape(entry.BackupPath)).Append('\n');
             }
+            string checksum = HashText(text.ToString());
+            text.Append("sum=").Append(checksum).Append('\n');
             byte[] bytes = new UTF8Encoding(false).GetBytes(text.ToString());
             string temporary = JournalPath + ".tmp";
             try
@@ -459,6 +471,12 @@ namespace MortalHelper.Core
         private static string Escape(string value)
         {
             return Convert.ToBase64String(Encoding.UTF8.GetBytes(value ?? ""));
+        }
+
+        private static string HashText(string value)
+        {
+            using (var sha = SHA256.Create())
+                return Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(value)));
         }
 
         private static string Unescape(string value)

@@ -71,6 +71,8 @@ namespace MortalHelper.Game
         // Replay keys are digests of the localised text, so this decides whether the
         // recorded dialogue can be matched at all.
         public int Language = -1;
+        public string ScriptSource;
+        public string ScriptHash;
         public AnytimeLuaValue[] BaselineGlobals;
         public AnytimeLuaValue[] ExpectedGlobals;
         public AnytimeStoryEvent[] Events;
@@ -108,6 +110,7 @@ namespace MortalHelper.Game
             total += ValuesSize(record.BaselineGlobals);
             total += ValuesSize(record.ExpectedGlobals);
             if (record.Version >= 4) total += 4;
+            if (record.Version >= 5) total += Bytes(record.ScriptSource) + Bytes(record.ScriptHash);
             if (record.Events != null)
                 foreach (var entry in record.Events)
                 {
@@ -170,6 +173,7 @@ namespace MortalHelper.Game
                 }
                 // Appended after the event list so a v3 body still parses byte for byte.
                 if (record.Version >= 4) writer.Write(record.Language);
+                if (record.Version >= 5) { Text(writer, record.ScriptSource); Text(writer, record.ScriptHash); }
                 writer.Flush();
                 if (stream.Length > Limit) throw new InvalidDataException("剧情附加记录过大。");
                 return "MHA3\n" + Convert.ToBase64String(stream.ToArray());
@@ -188,7 +192,10 @@ namespace MortalHelper.Game
             {
                 try
                 {
-                    var record = new AnytimeStoryRecord { Version = reader.ReadInt32(),
+                    int version = reader.ReadInt32();
+                    if (version != 3 && version != 4 && version != 5)
+                        throw new InvalidDataException("剧情附档版本不受支持。");
+                    var record = new AnytimeStoryRecord { Version = version,
                         Client = Text(reader), NativeHash = Text(reader), Baseline = Text(reader), Expected = Text(reader),
                         Script = Text(reader), Scene = Text(reader), WaitKind = Text(reader), WaitKey = Text(reader),
                         BaselineRandomState = Text(reader), RandomState = Text(reader),
@@ -198,6 +205,7 @@ namespace MortalHelper.Game
                     for (int i = 0; i < record.Events.Length; i++)
                         record.Events[i] = new AnytimeStoryEvent { Kind = Text(reader), Key = Text(reader), Choice = reader.ReadInt32(), Number = reader.ReadDouble() };
                     record.Language = record.Version >= 4 ? reader.ReadInt32() : -1;
+                    if (record.Version >= 5) { record.ScriptSource = Text(reader); record.ScriptHash = Text(reader); }
                     if (stream.Position != stream.Length) throw new InvalidDataException("剧情附档含多余数据。");
                     return record;
                 }

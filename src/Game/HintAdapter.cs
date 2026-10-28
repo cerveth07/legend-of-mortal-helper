@@ -39,11 +39,13 @@ namespace MortalHelper.Game
             requirements.Clear();
             cachedKey = null;
             applyNote = null;
+            armedApply = null;
             // Both parsers run inside a native script load, i.e. inside a scene transition.
             // A substring test costs microseconds and skips the work for scripts that cannot
             // produce hints at all; the feature switch skips it for players who turned it off.
             var options = Plugin.Instance == null ? null : Plugin.Instance.Options;
             bool wanted = Plugin.Active && options != null && options.HintMode.Value != OptionHintMode.Off;
+            if (wanted) HintNames.RegisterScript(name, source);
             if (wanted && source != null && source.IndexOf("--index:", StringComparison.Ordinal) >= 0)
             {
                 long started = DateTime.UtcNow.Ticks;
@@ -59,7 +61,9 @@ namespace MortalHelper.Game
                 }
                 try
                 {
-                    if (source.IndexOf("checkpointmanager.Condition(", StringComparison.Ordinal) >= 0)
+                    if (source.IndexOf("checkpointmanager.Condition(", StringComparison.Ordinal) >= 0 ||
+                        source.IndexOf("checkpointmanager.Switch(", StringComparison.Ordinal) >= 0 ||
+                        source.IndexOf("checkpointmanager.Position(", StringComparison.Ordinal) >= 0)
                         requirements = ScriptOptions.Read(source);
                 }
                 catch (Exception error) { Plugin.Instance?.Report(error); }
@@ -72,14 +76,15 @@ namespace MortalHelper.Game
             foreach (var pair in branches) if (HasContent(pair.Value)) content++;
             WithContent = content;
             if (Plugin.Instance != null && Plugin.Active && Plugin.Instance.Options.DiagnoseScript.Value)
-                Plugin.Instance.Status = "剧情脚本：" + (string.IsNullOrEmpty(ScriptName) ? "(未命名)" : ScriptName) +
+                Plugin.Instance.Status = "剧情脚本：" + (string.IsNullOrEmpty(ScriptName) ? "(未命名)" : HintNames.Natural(HintNames.Script(ScriptName), Plugin.Instance.Options.LanguageKind)) +
                     " · 可对应分支 " + branches.Count + " · 条件选项 " + requirements.Count;
         }
 
         internal static void Clear()
         {
+            HintNames.Clear();
             Revision++; hovered = null; branches.Clear(); requirements.Clear(); ScriptName = ""; WithContent = 0;
-            cachedKey = null; applyNote = null;
+            cachedKey = null; applyNote = null; armedApply = null;
         }
 
         private static bool HasContent(BranchHint hint) => hint != null && (hint.Effects.Count > 0 || hint.Consequences.Count > 0);
@@ -100,7 +105,11 @@ namespace MortalHelper.Game
             pointer.Source = source; pointer.Condition = condition; pointer.Revision = Revision;
         }
 
-        internal static void Enter(HintPointer pointer) { hovered = pointer; leaving = null; }
+        internal static void Enter(HintPointer pointer)
+        {
+            if (hovered != pointer) armedApply = null;
+            hovered = pointer; leaving = null;
+        }
         // The tooltip has to survive the pointer travelling to its own button, so leaving
         // a row only marks it; Draw clears it once the pointer is genuinely away.
         internal static void Leave(HintPointer pointer) { if (hovered == pointer) leaving = pointer; }
@@ -163,8 +172,8 @@ namespace MortalHelper.Game
             var parts = new List<string>();
             foreach (EffectCall effect in hint.Effects)
             {
-                if (!PlainKinds.Contains(effect.Kind)) continue;
-                string line = EffectText(effect, false, UiLang.Hans);
+                if (!PlainKinds.Contains(effect.Kind) || effect.Condition != null) continue;
+                string line = HintNames.Natural(EffectText(effect, false, UiLang.Hans), UiLang.Hans);
                 if (line.Length == 0) continue;
                 parts.Add(line);
                 if (parts.Count >= 2) break;
@@ -202,28 +211,49 @@ namespace MortalHelper.Game
             if (requirement != null && report != null && (locked || detail == OptionHintDetail.Full))
             {
                 output.Append(L(language, locked ? "解锁条件（未满足）" : "解锁条件（已满足）")).Append('\n');
-                if (report.Lines.Count == 0) output.Append(L(language, "条件 ")).Append(requirement.Name).Append('\n');
-                foreach (string line in report.Lines) output.Append(line).Append('\n');
+                if (report.Lines.Count == 0) output.Append(HintNames.Natural(HintNames.Checkpoint(requirement.Name, requirement.Kind.ToString()), language)).Append('\n');
+                foreach (string line in report.Lines) output.Append(HintNames.Natural(line, language)).Append('\n');
                 if (report.Block.Length > 0 && !report.CanApply) output.Append("（").Append(report.Block).Append("）\n");
                 else if (locked) output.Append(L(language, "（满足后需重新打开选项才生效）\n"));
             }
             if (hint == null) return Trim(output);
-            var effects = new List<string>();
+            var plain = new List<string>();
+            var groups = new List<KeyValuePair<string, List<string>>>();
             foreach (EffectCall effect in hint.Effects)
             {
                 if (detail == OptionHintDetail.Simple && !PlainKinds.Contains(effect.Kind)) continue;
-                string line = EffectText(effect, true, language);
-                if (line.Length > 0) effects.Add(line);
+                string line = HintNames.Natural(EffectText(effect, true, language), language);
+                if (line.Length == 0) continue;
+                if (effect.Condition == null) { plain.Add(line); continue; }
+                int at = groups.FindIndex(g => g.Key == effect.Condition);
+                if (at < 0) groups.Add(new KeyValuePair<string, List<string>>(effect.Condition, new List<string> { line }));
+                else groups[at].Value.Add(line);
             }
-            if (effects.Count > 0)
+            if (plain.Count > 0)
             {
                 if (output.Length > 0) output.Append('\n');
-                output.Append(L(language, "选择效果\n")).Append(string.Join("\n", effects.ToArray()));
+                output.Append(L(language, "选择效果\n")).Append(string.Join("\n", plain.ToArray()));
+            }
+            if (groups.Count > 0)
+            {
+                if (output.Length > 0) output.Append("\n\n");
+                output.Append(L(language, "条件效果（满足时才生效）"));
+                foreach (var group in groups)
+                {
+                    output.Append('\n')
+                        .Append(HintText.Condition(group.Key, language))
+                        .Append("：").Append(string.Join(" · ", group.Value.ToArray()));
+                }
             }
             if (detail == OptionHintDetail.Full && hint.Consequences.Count > 0)
             {
                 if (output.Length > 0) output.Append("\n\n");
-                output.Append(L(language, "去向\n")).Append(string.Join("\n", hint.Consequences.ToArray()));
+                output.Append(L(language, "去向\n"));
+                for (int i = 0; i < hint.Consequences.Count; i++)
+                {
+                    if (i > 0) output.Append('\n');
+                    output.Append(HintNames.Consequence(hint.Consequences[i], language));
+                }
                 if (hint.Incomplete) output.Append(L(language, "\n（另有按条件执行的部分未列出）"));
             }
             return Trim(output);
@@ -234,63 +264,7 @@ namespace MortalHelper.Game
             return output.ToString().TrimEnd('\n');
         }
 
-        // One effect, in the words a player reads. Traditional names come from the game;
-        // the overlay converts to the panel language, the inline summary to the game's.
-        private static string EffectText(EffectCall effect, bool rich, UiLang language)
-        {
-            string[] a = effect.Arguments;
-            if (a.Length == 0) return "";
-            switch (effect.Method)
-            {
-                case "Player":
-                    return Signed(GameNames.StatName(a[0]), a.Length > 1 ? a[1] : "", rich);
-                case "SetPlayer":
-                    return GameNames.StatName(a[0]) + " = " + (a.Length > 1 ? a[1] : "?");
-                case "Character":
-                    return Signed(L(language, "人物关系 ") + a[0], a.Length > 1 ? a[1] : "", rich);
-                case "SetCharacter":
-                    return L(language, "人物关系 ") + a[0] + " = " + (a.Length > 1 ? a[1] : "?");
-                case "AddBook":
-                    return L(language, "获得书籍：") + GameNames.ItemName(1, a[0]) + AmountText(a);
-                case "AddMisc":
-                    return L(language, "获得物品：") + GameNames.ItemName(2, a[0]) + AmountText(a);
-                case "AddSpecial":
-                    return L(language, "获得特殊物品：") + GameNames.ItemName(3, a[0]) + AmountText(a);
-                case "RemoveBook":
-                    return L(language, "失去书籍：") + GameNames.ItemName(1, a[0]);
-                case "RemoveMisc":
-                    return L(language, "失去物品：") + GameNames.ItemName(2, a[0]);
-                case "RemoveSpecial":
-                    return L(language, "失去特殊物品：") + GameNames.ItemName(3, a[0]);
-                case "SetFlag":
-                    return L(language, "剧情标记 ") + a[0] + " = " + (a.Length > 1 ? a[1] : "?");
-                case "AddFlag":
-                    return L(language, "剧情标记 ") + a[0] + " " + (a.Length > 1 ? "+" + a[1] : L(language, "变化"));
-                case "Mission":
-                    return L(language, "任务：") + a[0] + (a.Length > 1 ? " → " + a[1] : "");
-                case "AddTalent":
-                    return L(language, "天赋 ") + a[0] + (a.Length > 1 ? " +" + a[1] : "");
-                default:
-                    return "";
-            }
-        }
-
-        private static string AmountText(string[] a)
-        {
-            int value;
-            if (a.Length < 2 || !int.TryParse(a[1], out value) || value == 1) return "";
-            return " ×" + value;
-        }
-
-        private static string Signed(string name, string value, bool rich)
-        {
-            int number;
-            if (!int.TryParse(value, out number) || number == 0) return name + " 不变";
-            string sign = number > 0 ? "+" + number : number.ToString();
-            if (!rich) return name + " " + sign;
-            string color = number > 0 ? "#7FD08A" : "#E8837C";
-            return name + " <color=" + color + ">" + sign + "</color>";
-        }
+        private static string EffectText(EffectCall effect, bool rich, UiLang language) => HintText.Effect(effect, rich, language);
 
         // ---- drawing ------------------------------------------------------------
 

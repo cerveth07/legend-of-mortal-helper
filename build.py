@@ -45,12 +45,19 @@ def run_suite(dotnet, compiler, base, framework, exe_name, response_name, source
         output = ROOT / 'artifacts'
         exe = output / exe_name
         exe.unlink(missing_ok=True)
+        net8 = (framework / 'System.Runtime.dll').is_file()
+        references = sorted(framework.glob('*.dll')) if net8 else [framework / n for n in ['mscorlib.dll', 'System.dll', 'System.Core.dll']]
         run_compiler(dotnet, compiler, base + ['-target:exe', '-out:' + str(exe)] +
-                     ['-r:' + str(framework / n) for n in ['mscorlib.dll', 'System.dll', 'System.Core.dll']] +
+                     ['-r:' + str(path) for path in references] +
                      sources, output / response_name)
         if os.name != 'nt' and dotnet.lower().endswith('.exe'):
             exe.chmod(exe.stat().st_mode | 0o111)
-        command = [str(exe)] if os.name == 'nt' or dotnet.lower().endswith('.exe') else ['mono', str(exe)]
+        if net8:
+            exe.with_suffix('.runtimeconfig.json').write_text(json.dumps({'runtimeOptions': {
+                'tfm': 'net8.0', 'framework': {'name': 'Microsoft.NETCore.App', 'version': '8.0.0'}}}), encoding='utf-8')
+            command = [dotnet, str(exe)]
+        else:
+            command = [str(exe)] if os.name == 'nt' or dotnet.lower().endswith('.exe') else ['mono', str(exe)]
     else:
         command = [dotnet, 'run', '--project', native_path(project, dotnet.lower().endswith('.exe')),
                    '--configuration', 'Release']
@@ -68,7 +75,7 @@ def run_tests(dotnet, compiler=None, base=None, framework=None):
         ROOT / 'src' / 'Game' / name for name in
         ['UiLanguage.cs', 'AnytimeStoryCodec.cs', 'AnytimeDuelJournal.cs', 'DuelSaveMenuState.cs', 'AnytimeDuelStart.cs', 'UiText.cs']]
     suites = [ROOT / 'tests' / name for name in
-              ['Contracts.cs', 'TitleContracts.cs', 'NumericEditContracts.cs', 'StoryContracts.cs',
+              ['Contracts.cs', 'CheckpointCompatibilityContracts.cs', 'TitleContracts.cs', 'NumericEditContracts.cs', 'StoryContracts.cs',
                'DuelJournalTests.cs', 'DuelSaveMenuStateTests.cs']]
     return run_suite(dotnet, compiler, base, framework, 'ContractTests.exe', 'tests.rsp', pure + suites,
                      ROOT / 'tests' / 'Contracts.csproj',
@@ -85,13 +92,45 @@ def run_ally_tests(dotnet, compiler=None, base=None, framework=None):
                      r'^PASS: ([1-9][0-9]*) production ally-health routing checks', 'Group ally-health checks')
 
 
+def run_title_tests(dotnet, compiler=None, base=None, framework=None):
+    return run_suite(dotnet, compiler, base, framework, 'TitleSelectionTests.exe', 'title-selection.rsp',
+                     [ROOT / 'src' / 'Core' / 'OperationGate.cs', ROOT / 'src' / 'Core' / 'TitleHistory.cs',
+                      ROOT / 'src' / 'Game' / 'Titles.cs', ROOT / 'tests' / 'TitleSelectionBehavior.cs'],
+                     ROOT / 'tests' / 'TitleSelection.csproj',
+                     r'^PASS: ([1-9][0-9]*) production title-selection checks', 'Title-selection checks')
+
+
+def run_relationship_tests(dotnet, compiler=None, base=None, framework=None):
+    return run_suite(dotnet, compiler, base, framework, 'RelationshipEditingTests.exe', 'relationship-editing.rsp',
+                     [ROOT / 'src' / 'Core' / 'OperationGate.cs', ROOT / 'src' / 'Game' / 'NumericEdits.cs',
+                      ROOT / 'src' / 'Game' / 'AnytimeStoryCodec.cs', ROOT / 'tests' / 'RelationshipEditingBehavior.cs'],
+                     ROOT / 'tests' / 'RelationshipEditing.csproj',
+                     r'^PASS: ([1-9][0-9]*) production relationship-edit checks', 'Relationship-edit checks')
+
+
+def run_comment_tests(dotnet, compiler=None, base=None, framework=None):
+    return run_suite(dotnet, compiler, base, framework, 'SlotCommentsTests.exe', 'slot-comments.rsp',
+                     [ROOT / 'src' / 'Game' / 'SaveSlotComments.cs', ROOT / 'tests' / 'SlotCommentsBehavior.cs'],
+                     ROOT / 'tests' / 'SlotComments.csproj',
+                     r'^PASS: ([1-9][0-9]*) production slot-comment checks', 'Slot-comment checks')
+
+
+def run_hint_name_tests(dotnet, compiler=None, base=None, framework=None):
+    sources = [ROOT / 'src' / 'Core' / n for n in ['ScriptHints.cs', 'ScriptOptions.cs']]
+    sources += [ROOT / 'src' / 'Game' / n for n in
+                ['HintNames.cs', 'HintText.cs', 'OptionConditions.cs', 'GameNames.cs', 'UiLanguage.cs', 'UiText.cs']]
+    return run_suite(dotnet, compiler, base, framework, 'HintNamesTests.exe', 'hint-names.rsp',
+                     sources + [ROOT / 'tests' / 'HintNameBehavior.cs'], ROOT / 'tests' / 'HintNames.csproj',
+                     r'^PASS: ([1-9][0-9]*) production hint-name checks', 'Hint-name checks')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game', type=Path)
     parser.add_argument('--loader', type=Path, help='BepInEx/core folder')
     parser.add_argument('--compiler', type=Path, help='Roslyn csc.dll')
     parser.add_argument('--dotnet', default=shutil.which('dotnet') or shutil.which('dotnet.exe') or 'dotnet')
-    parser.add_argument('--framework', type=Path, help='local .NET Framework reference folder for --test')
+    parser.add_argument('--framework', type=Path, help='local .NET Framework or .NET 8 reference folder for --test')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--test-only', action='store_true', help='run .NET 8 tests without game, loader or Roslyn')
     parser.add_argument('--diagnostics', action='store_true', help='development probe; cannot be packaged')
@@ -99,6 +138,10 @@ def main():
     if args.test_only:
         run_tests(args.dotnet)
         run_ally_tests(args.dotnet)
+        run_title_tests(args.dotnet)
+        run_relationship_tests(args.dotnet)
+        run_comment_tests(args.dotnet)
+        run_hint_name_tests(args.dotnet)
         return
     if not all((args.game, args.loader, args.compiler)):
         parser.error('--game, --loader and --compiler are required for a plugin build')
@@ -131,6 +174,10 @@ def main():
         framework = args.framework or Path('C:/Windows/Microsoft.NET/Framework64/v4.0.30319' if os.name == 'nt' else '/mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319')
         count = run_tests(args.dotnet, compiler, base, framework)
         ally_count = run_ally_tests(args.dotnet, compiler, base, framework)
+        run_title_tests(args.dotnet, compiler, base, framework)
+        run_relationship_tests(args.dotnet, compiler, base, framework)
+        run_comment_tests(args.dotnet, compiler, base, framework)
+        run_hint_name_tests(args.dotnet, compiler, base, framework)
     # No 'references' hash table: nothing ever read it. tools/package.py used to strip
     # it from the shipped copy, which only hid the fact that the hashes had no consumer.
     manifest = {'plugin_sha256': sha256(plugin), 'diagnostics': args.diagnostics, 'contract_checks': count,

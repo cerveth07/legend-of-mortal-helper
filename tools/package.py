@@ -8,7 +8,7 @@ import shutil
 import zipfile
 from pathlib import Path
 
-VERSION = "0.1.1"
+VERSION = "1.1.0"
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "mortal-helper"  # ASCII on purpose: the zip name ends up in URLs
 
@@ -36,7 +36,12 @@ USAGE = """活侠·万象录 {version} —— 使用说明
   旧档只能确认当前称号；新增称号功能由用户实机验收。选择后请正常存档。
 - 通关故事书脊保留原生12格，存满每次追加6格，默认上限30；支持横向拖动及滚轮。
   可在「存档设置」调整上限；新增故事栏位待用户实机验收。
-- 「地图」页可查看崆峒派原图，滚轮缩放、按住拖动，点击「复位」恢复全图。
+- 「地图」页可查看全天下舆图与崆峒派原图，滚轮缩放、按住拖动，点击「复位」恢复全图。
+- 「养成辅助」新增门派好感（16 项）和天赋等级（6 项）编辑；等级仅自由活动空闲时可改。
+- 剧情提示使用游戏名称和说明；条件效果单独列出，不当作必定发生的结果。
+- 回放跳过交互时让出一帧，避免长对白耗尽动画池；兼容新旧创建存档快照接口。
+- 剧情中途档支持跨版本校验恢复并先备份原件；新档保存本段脚本。恢复失败可在
+  存档设置明确选择从本段开头重走。未知大版本仍可能需要适配，旧单挑档不放宽。
 - 控骰条可按住「基础点数」或空白处拖动，松手自动记住位置。
 - 「存档设置→随时存档」为默认关闭的实验功能；剧情可在任意台词、对话选项、
   骰子掷骰前/结果页存档；单挑存的是该场战斗的开头，读档后从这场战斗重来；
@@ -108,10 +113,14 @@ def main() -> int:
     shutil.copy2(plugin, plugin_root / "BepInEx" / "plugins" / "cerveth.mortal.helper" / "MortalHelper.dll")
     (plugin_root / "使用说明.txt").write_text(USAGE.format(version=args.version), encoding="utf-8")
     shutil.copy2(ROOT / "LICENSE", plugin_root / "LICENSE")
+    shutil.copy2(ROOT / "OPENCC-APACHE-2.0.txt", plugin_root / "OPENCC-APACHE-2.0.txt")
     shutil.copy2(ROOT / "THIRD_PARTY.md", plugin_root / "THIRD_PARTY.md")
-    shutil.copy2(ROOT / "PROVENANCE.md", plugin_root / "PROVENANCE.md")
     shutil.copy2(ROOT / "README.md", plugin_root / "README.md")
-    shutil.copy2(ROOT / "docs" / "ANYTIME-SAVE-ACCEPTANCE.md", plugin_root / "随时存档验收.md")
+    (plugin_root / "docs").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "docs" / "CROSS-VERSION-SAVES.md", plugin_root / "docs" / "CROSS-VERSION-SAVES.md")
+    acceptance = (ROOT / "docs" / "ANYTIME-SAVE-ACCEPTANCE.md").read_text(encoding="utf-8")
+    (plugin_root / "随时存档验收.md").write_text(acceptance.replace(
+        "](CROSS-VERSION-SAVES.md)", "](docs/CROSS-VERSION-SAVES.md)"), encoding="utf-8")
     shutil.copy2(manifest_path, plugin_root / "build-manifest.json")
     make_sums(plugin_root)
     write_zip(plugin_root, out / ("%s-%s-plugin.zip" % (NAME, args.version)))

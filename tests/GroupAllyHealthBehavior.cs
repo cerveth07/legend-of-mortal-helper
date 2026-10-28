@@ -39,21 +39,26 @@ class GroupAllyHealthBehavior {
  static void Main() {
   var patch=typeof(MortalHelper.Game.GroupAllyHealthPatch).GetMethod("Prefix",BindingFlags.Static|BindingFlags.NonPublic);
   foreach(Mortal.Battle.EntityType team in Enum.GetValues(typeof(Mortal.Battle.EntityType)))
-  foreach(bool gate in new[]{false,true}) foreach(bool enabled in new[]{false,true})
+  foreach(bool gate in new[]{false,true}) foreach(bool allyEnabled in new[]{false,true})
+  foreach(bool playerEnabled in new[]{false,true})
   foreach(int health in new[]{0,50}) foreach(int delta in new[]{-100,-5,0,10}) {
    MortalHelper.Game.Plugin.CanModifyProgress=gate;
-   MortalHelper.Game.Plugin.Instance.Options.GroupAllyHealth.Value=enabled;
+   MortalHelper.Game.Plugin.Instance.Options.GroupAllyHealth.Value=allyEnabled;
+   MortalHelper.Game.Plugin.Instance.Options.GroupHealth.Value=playerEnabled;
    var c=new Mortal.Battle.Character { _entity=new Mortal.Battle.Entity{CurrentType=team} };
    var h=new Mortal.Battle.CharacterHealth{CurrentHealth=health,Owner=c};
    object[] args={h,delta};patch.Invoke(null,args);
-   bool protect=gate&&enabled&&health>0&&delta<0&&team==Mortal.Battle.EntityType.Friend;
+   bool protect=gate&&health>0&&delta<0&&
+    ((team==Mortal.Battle.EntityType.Friend&&allyEnabled)||
+     (team==Mortal.Battle.EntityType.Player&&playerEnabled));
    Check((int)args[1]==(protect?0:delta));
   }
   MortalHelper.Game.Plugin.CanModifyProgress=true;
   MortalHelper.Game.Plugin.Instance.Options.GroupAllyHealth.Value=true;
+  MortalHelper.Game.Plugin.Instance.Options.GroupHealth.Value=true;
   foreach(var owner in new Mortal.Battle.Character[]{null,new Mortal.Battle.Character()}) {
    object[] args={new Mortal.Battle.CharacterHealth{CurrentHealth=50,Owner=owner},-5};patch.Invoke(null,args);Check((int)args[1]==-5);
   }
-  Console.WriteLine("PASS: "+checks+" production ally-health routing checks (managed stand-ins; no Unity runtime)");
+  Console.WriteLine("PASS: "+checks+" production ally-health routing checks (includes player; managed stand-ins; no Unity runtime)");
  }
 }

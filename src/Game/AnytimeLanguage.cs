@@ -25,6 +25,8 @@ namespace MortalHelper.Game
         private static bool probed;
         private static int restoreTo = Unknown;
 
+        internal static bool Supported(int language) => language >= 0 && language < Names.Length;
+
         internal static string Describe(int language)
         {
             if (language == Unknown) return "未知";
@@ -39,7 +41,7 @@ namespace MortalHelper.Game
             {
                 Probe();
                 if (getter == null) return Unknown;
-                try { return (int)getter.Invoke(null, null); }
+                try { return Convert.ToInt32(getter.Invoke(null, null)); }
                 catch (Exception) { return Unknown; }
             }
         }
@@ -69,7 +71,7 @@ namespace MortalHelper.Game
         internal static int ForRecord(AnytimeStoryRecord record)
         {
             if (record == null) return Unknown;
-            if (record.Language != Unknown) return record.Language;
+            if (Supported(record.Language)) return record.Language;
             return InferFromGlobals(record);
         }
 
@@ -132,7 +134,8 @@ namespace MortalHelper.Game
         // Called once the baseline is loaded and the replay is about to run.
         internal static void EnterReplay(int recorded)
         {
-            if (recorded == Unknown) return;
+            LeaveReplay();
+            if (!Supported(recorded)) return;
             int current = Current;
             if (current == Unknown || current == recorded) return;
             if (setter == null)
@@ -143,7 +146,7 @@ namespace MortalHelper.Game
             }
             try
             {
-                setter.Invoke(null, new object[] { recorded });
+                Set(recorded);
                 restoreTo = current;
                 Report("language switched " + Describe(current) + " -> " + Describe(recorded) + " for the replay");
             }
@@ -154,16 +157,22 @@ namespace MortalHelper.Game
             }
         }
 
+        private static void Set(int language)
+        {
+            var parameter = setter.GetParameters()[0].ParameterType;
+            setter.Invoke(null, new[] { parameter.IsEnum ? Enum.ToObject(parameter, language) : (object)language });
+        }
+
         // Puts the player's own language back: success, failure and cancel all end here.
         internal static void LeaveReplay()
         {
             if (restoreTo == Unknown) return;
             int target = restoreTo;
-            restoreTo = Unknown;
             if (setter == null) return;
             try
             {
-                setter.Invoke(null, new object[] { target });
+                Set(target);
+                restoreTo = Unknown;
                 Report("language restored to " + Describe(target));
             }
             catch (Exception error)
@@ -196,11 +205,13 @@ namespace MortalHelper.Game
     // (observed at 51/72 of ch2_5_1). It is pure presentation, so skip it while replaying.
     internal static class AnytimeIntroSkip
     {
-        private static bool installed;
+        private static Harmony installedOn;
 
         internal static void Install(Harmony harmony)
         {
-            if (installed) return;
+            // Patch repair creates a new Harmony instance. Tracking only a boolean would
+            // suppress reinstalling this patch after the previous instance was unpatched.
+            if (ReferenceEquals(installedOn, harmony)) return;
             try
             {
                 // Resolved by name: referencing the game type here would break the build
@@ -212,9 +223,9 @@ namespace MortalHelper.Game
                     Report("character intro panel not found; intro panels stay enabled during replays");
                     return;
                 }
-                installed = true;
                 harmony.Patch(target, prefix: new HarmonyMethod(
                     typeof(AnytimeIntroSkip).GetMethod(nameof(Prefix), BindingFlags.Static | BindingFlags.NonPublic)));
+                installedOn = harmony;
                 Report("character intro panels are skipped while replaying");
             }
             catch (Exception error)

@@ -30,7 +30,6 @@ namespace MortalHelper.Game
         private const int MaxActions = DuelJournalCodec.MaxActions;
         private const int MaxDraws = DuelJournalCodec.MaxDraws;
         private static readonly MethodInfo GetSlotFile = AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile");
-        private static readonly MethodInfo CreateNative = AccessTools.Method(typeof(SaveSystem), "CreateSaveData");
         private static CombatManager manager;
         private static Journal journal;
         private static Journal pending;
@@ -172,6 +171,7 @@ namespace MortalHelper.Game
                     (File.Exists(path + ".mhduel-required") && !File.Exists(path + ".mhduel")))
                     throw new IOException("此槽位有尚未处理的存档恢复材料，请先核对该槽位。");
                 WriteStartPair(path, native, startMarker);
+                SaveSlotComments.Saved(slot);
                 string message = "单挑档已写入编号槽 " + slot + "：读档后从这场战斗开头继续。";
                 try
                 {
@@ -203,6 +203,10 @@ namespace MortalHelper.Game
                 // Legacy unmarked companions remain readable when still present.
                 if (!Numbered(slot)) return false;
                 string path = SlotFile(slot);
+                if (File.Exists(path + ".mhstart") &&
+                    (File.Exists(path + ".mhduel-required") || File.Exists(path + ".mhduel-pending") ||
+                     File.Exists(path + ".mha-required") || File.Exists(path + ".mha-pending")))
+                    throw new InvalidDataException("战斗开场标记与必需中途档或未完成存档同时存在，无法确认槽位状态。");
                 // A battle-start save needs nothing from us: the native file already restarts
                 // the fight, so it loads exactly like the game's own battle autosave. The
                 // marker is only a label and a fingerprint, and a stale one is set aside.
@@ -241,8 +245,27 @@ namespace MortalHelper.Game
                         throw new InvalidDataException("单挑中途档缺少必需的 .mhduel 附档；请恢复完整备份。");
                     return false;
                 }
-                var loaded = Decode(path + ".mhduel");
-                Validate(loaded);
+                string companion = path + ".mhduel";
+                long size = new FileInfo(companion).Length;
+                byte[] bytes = size > DuelJournalCodec.MaxFile ? null : File.ReadAllBytes(companion);
+                Journal loaded;
+                try
+                {
+                    if (bytes == null) throw new InvalidDataException("单挑附档超过 32 MB。");
+                    loaded = DuelJournalCodec.Decode(bytes);
+                }
+                catch (Exception error) when (error is InvalidDataException || error is IOException ||
+                    error is DecoderFallbackException || error is FormatException)
+                {
+                    if (File.Exists(path + ".mhduel-required"))
+                        throw new InvalidDataException("此槽位的单挑附档为必需文件且无法校验，不能按原生档继续：" +
+                            error.Message, error);
+                    Quarantine(companion);
+                    Report((File.Exists(companion) ? "该槽位的旧单挑附档无法校验，移开失败；" :
+                        "该槽位的旧单挑附档无法校验，已保留为 .mhduel.stale；") + "按原生存档载入：" +
+                        error.GetBaseException().Message);
+                    return false;
+                }
                 if (loaded.NativeHash != Hash(File.ReadAllBytes(path)))
                 {
                     // The document does not describe this file, so an ordinary
@@ -936,7 +959,6 @@ namespace MortalHelper.Game
     {
         private readonly StringBuilder text = new StringBuilder();
         private readonly HashSet<object> visited = new HashSet<object>(ReferenceIdentity.Instance);
-        private static readonly MethodInfo CreateNative = AccessTools.Method(typeof(SaveSystem), "CreateSaveData");
         private readonly CombatManager battle;
         private readonly List<CombatStateEffect> activeEffects = new List<CombatStateEffect>();
 
@@ -966,7 +988,7 @@ namespace MortalHelper.Game
             audit.Effects("enemy-effect", battle.EnemyAction);
             audit.Walk("level", battle.CombatLevel, true, 0);
             audit.Walk("enemy-intent", AccessTools.Field(typeof(CombatManager), "_enemyActionResult")?.GetValue(battle), true, 0);
-            var save = (GameSave)CreateNative.Invoke(SaveSystem.Instance, null);
+            var save = (GameSave)NativeSnapshot.Create(SaveSystem.Instance);
             // Only this comparison-owned snapshot is normalized, including its restore data.
             Titles.StripMetadata(save);
             string restore = save.RestoreData;

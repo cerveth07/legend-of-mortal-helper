@@ -31,7 +31,6 @@ namespace MortalHelper.Game
     {
         private const int MaximumEvents = 20000;
         private const int MaximumSidecarBytes = 16000000;
-        private static readonly MethodInfo CreateSave = AccessTools.Method(typeof(SaveSystem), "CreateSaveData");
         private static readonly MethodInfo GetPath = AccessTools.Method(typeof(SaveSystem), "GetSaveDataFile");
         private static readonly List<AnytimeStoryEvent> Events = new List<AnytimeStoryEvent>();
         private static readonly HashSet<string> StandardLuaTables = DiscoverLuaLibraries();
@@ -106,6 +105,11 @@ namespace MortalHelper.Game
         private static SlotTransaction pendingTransaction;
         private static string blockedReason;
         private static AnytimeStoryRecord pendingRecord, playback;
+        private static bool crossVersion;
+        private static string compatibilityDefaults;
+        private static string entryRequest;
+        private static bool usedEntryFallback;
+        private static AnytimeStoryRecord entryBaseline;
         private static int cursor, tokenSerial;
         private static int? replayDice;
         private static int replayDiceSelection;
@@ -127,6 +131,9 @@ namespace MortalHelper.Game
         internal static int ReplayTotal => playback == null ? 0 : playback.Events.Length;
 
         internal static bool Replaying => playback != null && !Failed && !Verified;
+        internal static string SourceForReplay(string current, string name) =>
+            Replaying && playback.ScriptSource != null && CheckpointContent.Key(name) == CheckpointContent.Key(playback.Script)
+                ? playback.ScriptSource : current;
         internal static bool Verified { get; private set; }
         internal static bool Failed { get; private set; }
         // True once the failure exit gave the input back; until then the failure still owns
@@ -250,7 +257,8 @@ namespace MortalHelper.Game
                 // so committing here would create a slot this plugin can never load again.
                 if (string.IsNullOrEmpty(script)) throw new InvalidDataException("当前剧情尚未建立可重放的脚本起点。");
                 var record = new AnytimeStoryRecord {
-                    Version = 4, Language = AnytimeLanguage.Current,
+                    Version = 5, Language = AnytimeLanguage.Current,
+                    ScriptSource = CheckpointContent.SourceFor(script), ScriptHash = CheckpointContent.HashFor(script),
                     Client = Application.version, Baseline = baseline, Script = script, Scene = scene,
                     WaitKind = AnytimeDice.Active ? "Dice" : WaitKinds[0],
                     WaitKey = AnytimeDice.Active ? AnytimeDice.SaveKey : WaitKeys[0],
@@ -327,10 +335,17 @@ namespace MortalHelper.Game
                     pendingTransaction.Commit();
                 }
                 AnytimeNative.FinishOperation(pendingTransaction, saveFile);
+                SaveSlotComments.Saved(pendingSlot);
                 ClearPending();
             }
             catch (Exception error)
             {
+                if (pendingTransaction != null && pendingTransaction.State == SlotTransactionState.Committed)
+                {
+                    AnytimeNative.SaveFailed("剧情存档已写入，但清理旧附档或事务备份失败；下次读写会重试：" + error.Message);
+                    ClearPending();
+                    return;
+                }
                 bool restored = RollBack();
                 AnytimeNative.SaveFailed(restored
                     ? "剧情存档未完成，槽位已回退：" + error.Message
@@ -360,7 +375,11 @@ namespace MortalHelper.Game
             // A new load owns the segment: a stale invalidation from the previous one must not
             // leak into it, or the fresh segment refuses to save for no visible reason.
             invalid = null;
+            // Loading another slot can abandon a replay before its normal success/failure
+            // exit. Do not leak the temporary recorded language into that new session.
+            AnytimeLanguage.LeaveReplay();
             playback = null; Failed = Verified = false; Failure = null;
+            crossVersion = false; compatibilityDefaults = null; entryBaseline = null;
             sceneReady = targetReached = returningTitle = false; replayDice = null; UnlockInput();
             RestoreReplaySpeed();
             replayStartAt = 0f;
@@ -399,6 +418,9 @@ namespace MortalHelper.Game
             try { record = ReadRecord(path, save); }
             catch (Exception error) when (error is InvalidDataException || error is FormatException)
             {
+                if (File.Exists(path + ".mha-required"))
+                    throw new InvalidDataException("此槽位的剧情附档为必需文件且无法校验，不能按原生档继续：" +
+                        error.Message, error);
                 // A sidecar written by an older build cannot be replayed by this one, but the
                 // native file beside it is a valid save. Keep that save usable instead of
                 // refusing the load: the extra point is lost, the progress is not.
@@ -415,6 +437,8 @@ namespace MortalHelper.Game
                 string.IsNullOrEmpty(record.BaselineLuaRandomState) || string.IsNullOrEmpty(record.LuaRandomState) ||
                 (record.WaitKind != "Say" && record.WaitKind != "Choose" && record.WaitKind != "Dice"))
                 throw new InvalidDataException("剧情附加记录缺少可重放的起点或目标。");
+            if (record.Version >= 4 && !AnytimeLanguage.Supported(record.Language))
+                throw new InvalidDataException("剧情附档语言编号无效。");
             if (record.Events.Length > MaximumEvents) throw new InvalidDataException("剧情事件记录超限。");
             foreach (var entry in record.Events)
                 if (entry == null || (entry.Kind != "Say" && entry.Kind != "Choose" && entry.Kind != "Random" && entry.Kind != "Dice" && entry.Kind != "DiceRoll" && entry.Kind != "Numeric"))
@@ -423,6 +447,24 @@ namespace MortalHelper.Game
             // CurrentStoryScript (which its Save never writes). Use the recorded
             // execution entry, then restore the original metadata at ScriptEntering.
             opening.StartStoryScript = record.Script;
+            crossVersion = record.Client != Application.version;
+            // Version labels can stay unchanged in modded builds. Never let Unity
+            // silently discard a recorded field, even on a same-version restore.
+            CheckpointCompatibility.ValidateSchema(record.Baseline, typeof(GameSave));
+            CheckpointCompatibility.ValidateSchema(record.Expected, typeof(GameSave));
+            if (crossVersion)
+            {
+                CheckpointContent.Backup(path, slot, record.Client);
+                Plugin.Instance?.Log("[Compatibility] schema accepted " + record.Client + " -> " + Application.version + "; exact replay still required");
+            }
+            if (entryRequest == slot)
+            {
+                if (!crossVersion) CheckpointContent.Backup(path, slot, record.Client);
+                entryRequest = null; usedEntryFallback = true; entryBaseline = record;
+                save = opening;
+                Plugin.Instance.Status = "已按该段剧情开头恢复；段内选择和数值变化未重放，原槽位与附档保留。请另存新槽位。";
+                return;
+            }
             opening.TimeTick = save.TimeTick;
             // The read state only lives in memory until the game writes the universe file,
             // and a native load replaces it from disk: persist what this session read first,
@@ -506,7 +548,9 @@ namespace MortalHelper.Game
                 // Keep every native field, including all four RNG words, checked.
                 UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.RandomState);
                 string actual = Snapshot();
-                if (!SameSnapshot(actual, playback.Expected))
+                if (!(crossVersion ? CheckpointCompatibility.Equivalent(CleanSnapshot(playback.Expected),
+                    CleanSnapshot(compatibilityDefaults), CleanSnapshot(actual),
+                    !CheckpointCompatibility.HasField(playback.Expected, "StoryLogs")) : SameSnapshot(actual, playback.Expected)))
                     throw new InvalidDataException("剧情状态与存档内容不同。" + SnapshotMismatch(playback.Expected, actual));
                 RestoreLuaRandom(lua, playback.LuaRandomState);
                 baseline = playback.Baseline; baselineGlobals = playback.BaselineGlobals;
@@ -520,7 +564,7 @@ namespace MortalHelper.Game
                 StoryReplay.OnNativeLoadCompleted();
                 if (Plugin.Instance != null)
                 {
-                    Plugin.Instance.Status = "剧情已恢复到存档位置，状态核对通过。";
+                    Plugin.Instance.Status = crossVersion ? "跨版本剧情恢复完成，原有进度与状态核对通过；原档备份保留，请另存新槽位。" : "剧情已恢复到存档位置，状态核对通过。";
                     Plugin.Instance.Log("[Anytime] " + Plugin.Instance.Status);
                     Plugin.Instance.Log("[Anytime] replay done " + ReplaySeconds() + "s events=" + cursor +
                         " script=" + script + " scale=" + ReplayScale);
@@ -545,28 +589,9 @@ namespace MortalHelper.Game
             failedAt = 0f; inputReleased = false;
         }
 
-        // The save cannot be replayed from the entry the game actually started. Stop the
-        // replay before it consumes anything, let the script run normally from its own entry,
-        // and refuse new saves in this segment (the state is no longer a known checkpoint).
-        private static void DegradeFromEntry(string reason)
-        {
-            string detail = Describe(reason);
-            playback = null;
-            Failed = false;
-            Verified = false;
-            Failure = null;
-            invalid = reason;
-            inputReleased = true;
-            AnytimeLanguage.LeaveReplay();
-            UnlockInput();
-            StoryReplay.OnNativeLoadCompleted();
-            if (Plugin.Instance != null)
-            {
-                Plugin.Instance.Status = "该中途档无法精确恢复（" + reason + "），已按本段脚本入口继续；本段不再提供中途存档。";
-                try { Plugin.Instance.Log("[Anytime] degraded: " + detail); }
-                catch (Exception) { }
-            }
-        }
+        // Entry fallback must be explicitly selected; an exact restore never silently
+        // hands control to a different script with partially restored state.
+        private static void DegradeFromEntry(string reason) { Fail(reason); }
 
         // The native load watchdog gave up: stop waiting for a scene that is not coming.
         internal static void NativeLoadAborted(string reason)
@@ -596,6 +621,21 @@ namespace MortalHelper.Game
                 else { baseline = null; invalid = "当前 Lua 环境缺少对话或选项函数，无法安全存档。"; }
                 return;
             }
+            if (entryBaseline != null)
+            {
+                var entry = entryBaseline; entryBaseline = null;
+                try
+                {
+                    if (!SameScript(entry.Script, PlayerStatManagerData.Instance?.CurrentStoryScript))
+                        throw new InvalidDataException("段落恢复入口不匹配。");
+                    var opening = JsonUtility.FromJson<GameSave>(entry.Baseline);
+                    // Native mission refresh may alter flags before the script runs.
+                    // Restore the saved entry state, then let the CURRENT script begin.
+                    RestoreBaselineFlags(opening);
+                    UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(entry.BaselineRandomState);
+                }
+                catch (Exception error) { Fail("段落起点恢复失败：" + error.Message); return; }
+            }
             if (Replaying)
             {
 #if !NO_PROBE
@@ -614,6 +654,7 @@ namespace MortalHelper.Game
                     var original = JsonUtility.FromJson<GameSave>(playback.Baseline);
                     PlayerStatManagerData.Instance.SetStartScript(original.StartStoryScript);
                     RestoreBaselineFlags(original);
+                    if (crossVersion) compatibilityDefaults = Snapshot();
                     RestoreGlobals(lua, playback.BaselineGlobals);
                     UnityEngine.Random.state = JsonUtility.FromJson<UnityEngine.Random.State>(playback.BaselineRandomState);
                     RestoreLuaRandom(lua, playback.BaselineLuaRandomState);
@@ -908,8 +949,8 @@ namespace MortalHelper.Game
         private static string Snapshot()
         {
             var save = SaveSystem.Instance;
-            if (save == null || CreateSave == null) throw new InvalidOperationException("存档服务未就绪。");
-            var data = (GameSave)CreateSave.Invoke(save, null);
+            if (save == null) throw new InvalidOperationException("存档服务未就绪。");
+            var data = (GameSave)NativeSnapshot.Create(save);
             if (data == null) throw new InvalidDataException("原生进度快照为空。");
             data.IsDemo = GameAccess.Field<bool>(save, "_isDemo");
             string json = JsonUtility.ToJson(data);
@@ -917,6 +958,13 @@ namespace MortalHelper.Game
             return json;
         }
         private static bool SameSnapshot(GameSave data, string json) => SameSnapshot(JsonUtility.ToJson(data), json);
+        private static string CleanSnapshot(string json)
+        {
+            var data = JsonUtility.FromJson<GameSave>(json);
+            if (data == null) throw new InvalidDataException("兼容恢复缺少可比较的快照。");
+            Titles.StripMetadata(data);
+            return JsonUtility.ToJson(data);
+        }
         private static bool SameSnapshot(string left, string right)
         {
             var a = JsonUtility.FromJson<GameSave>(left); var b = JsonUtility.FromJson<GameSave>(right);
@@ -1019,6 +1067,27 @@ namespace MortalHelper.Game
             {
                 if (collection == null || collection.List == null) throw new InvalidDataException("当前游戏含空旗标集合。");
                 live.AddRange(collection.List);
+            }
+            if (crossVersion)
+            {
+                var byName = new Dictionary<string, FlagData>(StringComparer.Ordinal);
+                foreach (var flag in live)
+                {
+                    if (flag == null || string.IsNullOrEmpty(flag.name)) throw new InvalidDataException("新版本旗标缺少稳定编号。");
+                    FlagData found;
+                    if (byName.TryGetValue(flag.name, out found) && found != flag) throw new InvalidDataException("新版本旗标编号歧义：" + flag.name);
+                    byName[flag.name] = flag;
+                }
+                var writes = new Dictionary<FlagData, int>();
+                foreach (var value in opening.EventFlags)
+                {
+                    FlagData flag; int previous;
+                    if (value == null || !byName.TryGetValue(value.Name, out flag)) throw new InvalidDataException("新版本缺少旧旗标：" + value?.Name);
+                    if (writes.TryGetValue(flag, out previous) && previous != value.State) throw new InvalidDataException("旧旗标状态冲突：" + value.Name);
+                    writes[flag] = value.State;
+                }
+                foreach (var value in writes) value.Key.State = value.Value;
+                return;
             }
             if (live.Count != opening.EventFlags.Count)
                 throw new InvalidDataException("剧情起点旗标数量不同：记录=" + opening.EventFlags.Count + "，当前=" + live.Count);
@@ -1221,11 +1290,38 @@ namespace MortalHelper.Game
             var bytes = File.ReadAllBytes(side);
             if (bytes.Length == 0 || bytes.Length > MaximumSidecarBytes) throw new InvalidDataException("剧情附加记录大小无效。");
             var record = AnytimeStoryCodec.Read(Encoding.UTF8.GetString(bytes));
-            if (record == null || record.Version != 3 || record.Client != Application.version ||
+            if (record == null || (record.Version != 3 && record.Version != 4 && record.Version != 5) ||
                 record.NativeHash != HashFile(nativePath) || native == null ||
                 !SameSnapshot(native, record.Expected) || native.CurrentScene != record.Scene)
                 throw new InvalidDataException("剧情附加记录与原生存档或当前游戏版本不匹配。");
+            CheckpointContent.Validate(record);
             return record;
+        }
+        internal static string RestartAtEntry(string slot)
+        {
+            if (!AnytimeNative.Numbered(slot)) return "请先在读档列表选择编号槽位。";
+            if (Replaying || AnytimeDuel.Replaying || SceneController.Instance == null || SceneController.Instance.IsLoading || SceneController.Instance.IsPrepare)
+                return "请等待当前加载或恢复结束。";
+            entryRequest = slot; usedEntryFallback = false;
+            try
+            {
+                string path = PathFor(slot);
+                if (string.IsNullOrEmpty(path) || !File.Exists(path + ".mha"))
+                    return "此槽位没有剧情起点附档，未执行恢复。";
+                // Preflight before touching live player data or the selected native slot.
+                var candidate = SaveSystem.Instance.GetSaveData(slot);
+                var record = ReadRecord(path, candidate);
+                CheckpointCompatibility.ValidateSchema(record.Baseline, typeof(GameSave));
+                CheckpointCompatibility.ValidateSchema(record.Expected, typeof(GameSave));
+                SaveSystem.Instance.SetSlot(slot);
+                SaveSystem.Instance.LoadGameData();
+                if (!usedEntryFallback) return "此槽位没有可用的剧情起点附档，未执行降级恢复。";
+                MissionManagerData.Instance.UpdateCheckMissions();
+                SceneController.Instance.LoadCurrentScene();
+                return Plugin.Instance.Status;
+            }
+            catch (Exception error) { return "无法按段落开头恢复：" + error.GetBaseException().Message; }
+            finally { entryRequest = null; }
         }
         // Restores the pre-save slot from the journal. It never infers "the slot
         // was empty" from a missing backup: that inference is what used to delete
@@ -1276,6 +1372,10 @@ if not __mortal_anytime_wrapped and say and choose and wait and math and math.ra
   __mortal_anytime_wrapped = true
   local raw_say, raw_choose, raw_wait, raw_random = say, choose, wait, math.random
   local raw_timer = choosetimer
+  -- Native setcharacter/stage calls still create tweens during replay. Let Unity
+  -- update and retire them between skipped interactions; otherwise a long script
+  -- exhausts LeanTween's pool in one Resume and kills the native Lua coroutine.
+  local replay_yield = coroutine.yield
   local function options_key(options)
     local pieces = {tostring(#options)}
     for i = 1, #options do
@@ -1284,7 +1384,7 @@ if not __mortal_anytime_wrapped and say and choose and wait and math and math.ra
     return table.concat(pieces, '|')
   end
   say = function(text, voice)
-    if __mortal_anytime.before_say(text) then return end
+    if __mortal_anytime.before_say(text) then replay_yield(); return end
     local token = __mortal_anytime.enter_wait('Say', text)
     raw_say(text, voice)
     __mortal_anytime.leave_wait(token)
@@ -1293,7 +1393,7 @@ if not __mortal_anytime_wrapped and say and choose and wait and math and math.ra
   choose = function(options)
     local key = options_key(options)
     local selected = __mortal_anytime.before_choose(key, #options)
-    if selected > 0 then return selected end
+    if selected > 0 then replay_yield(); return selected end
     local token = __mortal_anytime.enter_wait('Choose', key)
     local answer = raw_choose(options)
     __mortal_anytime.leave_wait(token)
@@ -1304,7 +1404,7 @@ if not __mortal_anytime_wrapped and say and choose and wait and math and math.ra
     choosetimer = function(options, duration, default)
       local key = options_key(options) .. ':' .. tostring(duration) .. ':' .. tostring(default)
       local selected = __mortal_anytime.before_choose(key, #options)
-      if selected > 0 then return selected end
+      if selected > 0 then replay_yield(); return selected end
       local token = __mortal_anytime.enter_wait('Choose', key)
       local answer = raw_timer(options, duration, default)
       __mortal_anytime.leave_wait(token)
@@ -1313,7 +1413,7 @@ if not __mortal_anytime_wrapped and say and choose and wait and math and math.ra
     end
   end
   wait = function(duration)
-    if __mortal_anytime.skip_wait() then return end
+    if __mortal_anytime.skip_wait() then replay_yield(); return end
     return raw_wait(duration)
   end
   math.random = function(a, b)

@@ -13,6 +13,9 @@ namespace MortalHelper.Core
         public string Method;
         public string[] Arguments;
         public EffectKind Kind;
+        // null when the call always runs; "" when it sits behind a condition the
+        // reader could not resolve; otherwise a short label such as "分支 X = 2".
+        public string Condition;
     }
 
     public sealed class BranchHint
@@ -54,6 +57,14 @@ namespace MortalHelper.Core
             { "Mission", EffectKind.Quest }, { "AddTalent", EffectKind.Talent }
         };
 
+        // Blocks are tracked as a stack so a call inside "if ... then" can still be
+        // reported: it is labelled with the first resolvable condition (a branch
+        // switch such as `local r = checkpointmanager.Switch("X"); if r == 2 then`)
+        // and never presented as a definite effect. Loops and function bodies stay
+        // opaque: their calls may run zero or many times, so they are not listed.
+        private enum BlockKind { If, Opaque }
+        private struct Block { public BlockKind Kind; public string Condition; }
+
         public static Dictionary<string, BranchHint> Read(string source)
         {
             var result = new Dictionary<string, BranchHint>(StringComparer.Ordinal);
@@ -65,44 +76,56 @@ namespace MortalHelper.Core
             var duplicates = new HashSet<string>(StringComparer.Ordinal);
             BranchHint current = null;
             bool active = false;
-            int depth = 0;
+            var blocks = new List<Block>();
+            var switches = new Dictionary<string, string>(StringComparer.Ordinal);
             for (int i = 0; i < tokens.Count;)
             {
                 Token t = tokens[i++];
                 if (t.Kind == Kind.Marker)
                 {
-                    // A marker starts the option's own branch: depth belongs to the
-                    // enclosing menu, not to whatever came before.
+                    // A marker starts the option's own branch: block state belongs to
+                    // the enclosing menu, not to whatever came before.
                     current = new BranchHint { Id = t.Text };
                     if (result.ContainsKey(t.Text)) duplicates.Add(t.Text);
                     else result.Add(t.Text, current);
                     active = true;
-                    depth = 0;
+                    blocks.Clear();
+                    switches.Clear();
                     continue;
                 }
                 if (!active || t.Kind == Kind.End) continue;
                 if (t.Text == ";") continue;
                 if (t.Kind == Kind.Word)
                 {
-                    switch (t.Text)
+                    if (t.Text == "local") { ReadSwitchAlias(tokens, ref i, switches); continue; }
+                    if (t.Text == "if" || t.Text == "elseif")
                     {
-                        case "if":
-                        case "for":
-                        case "while":
-                        case "function":
-                        case "repeat":
-                            depth++;
-                            continue;
-                        case "elseif":
-                        case "else":
-                            // At depth zero this closes the option's branch.
-                            if (depth == 0) active = false;
-                            continue;
-                        case "end":
-                        case "until":
-                            if (depth > 0) depth--;
-                            else active = false;
-                            continue;
+                        // At block depth zero this else-if belongs to the enclosing menu
+                        // condition, so the option's own branch has ended.
+                        if (t.Text == "elseif" && blocks.Count == 0) { active = false; continue; }
+                        string condition = ReadCondition(tokens, ref i, switches);
+                        if (t.Text == "if") blocks.Add(new Block { Kind = BlockKind.If, Condition = condition });
+                        else if (blocks[blocks.Count - 1].Kind == BlockKind.If)
+                            blocks[blocks.Count - 1] = new Block { Kind = BlockKind.If, Condition = condition };
+                        continue;
+                    }
+                    if (t.Text == "else")
+                    {
+                        if (blocks.Count == 0) { active = false; continue; }
+                        if (blocks[blocks.Count - 1].Kind == BlockKind.If)
+                            blocks[blocks.Count - 1] = new Block { Kind = BlockKind.If, Condition = "" };
+                        continue;
+                    }
+                    if (t.Text == "for" || t.Text == "while" || t.Text == "function" || t.Text == "repeat")
+                    {
+                        blocks.Add(new Block { Kind = BlockKind.Opaque, Condition = null });
+                        continue;
+                    }
+                    if (t.Text == "end" || t.Text == "until")
+                    {
+                        if (blocks.Count > 0) blocks.RemoveAt(blocks.Count - 1);
+                        else active = false;
+                        continue;
                     }
                     if (i + 1 >= tokens.Count || tokens[i].Kind != Kind.Symbol || tokens[i].Text != ".") continue;
                     string owner = t.Text;
@@ -117,22 +140,97 @@ namespace MortalHelper.Core
                     EffectKind kind;
                     if (owner == "statmodifymanager" && Effects.TryGetValue(method, out kind))
                     {
-                        if (depth > 0) { current.Incomplete = true; continue; }
-                        if (!literal) { current.Incomplete = true; continue; }
+                        if (!literal || HasOpaque(blocks)) { current.Incomplete = true; continue; }
                         if (current.Effects.Count >= MaximumEffects) { current.Incomplete = true; continue; }
-                        current.Effects.Add(new EffectCall { Method = method, Arguments = arguments.ToArray(), Kind = kind });
+                        string condition = ConditionOf(blocks);
+                        // A conditional call is listed, but the list can never be
+                        // presented as the complete set of outcomes.
+                        if (condition != null) current.Incomplete = true;
+                        current.Effects.Add(new EffectCall
+                        {
+                            Method = method, Arguments = arguments.ToArray(), Kind = kind, Condition = condition
+                        });
                         continue;
                     }
                     // story jumps (AddStory included) are destinations, not stat changes
-                    if (depth > 0 || !literal) continue;
+                    if (blocks.Count > 0 || !literal) continue;
                     string label = Consequence(owner, method, arguments);
                     if (label == null) continue;
                     if (current.Consequences.Count >= MaximumConsequences) { current.Incomplete = true; continue; }
                     if (!current.Consequences.Contains(label)) current.Consequences.Add(label);
+                    continue;
                 }
             }
             foreach (string id in duplicates) result.Remove(id);
             return result;
+        }
+
+        private static bool HasOpaque(List<Block> blocks)
+        {
+            for (int i = 0; i < blocks.Count; i++) if (blocks[i].Kind == BlockKind.Opaque) return true;
+            return false;
+        }
+
+        // null means "runs unconditionally"; "" means "conditional, label unknown".
+        private static string ConditionOf(List<Block> blocks)
+        {
+            if (blocks.Count == 0) return null;
+            var conditions = new List<string>(); bool unknown = false;
+            foreach (var block in blocks)
+            {
+                if (string.IsNullOrEmpty(block.Condition)) unknown = true;
+                else conditions.Add(block.Condition);
+            }
+            if (conditions.Count == 0) return "";
+            string combined = string.Join(" 且 ", conditions.ToArray());
+            return unknown ? combined + "（另有未解析条件）" : combined;
+        }
+
+        // Reads "if/elseif <expr> then", skips the expression, and resolves the one
+        // shape the game actually uses: NAME == NUMBER where NAME aliases a native
+        // branch switch. Anything else stays unknown instead of being guessed.
+        private static string ReadCondition(List<Token> tokens, ref int index, Dictionary<string, string> switches)
+        {
+            int start = index;
+            int then = -1;
+            for (int k = index; k < tokens.Count && k < index + 64; k++)
+                if (tokens[k].Kind == Kind.Word && tokens[k].Text == "then") { then = k; break; }
+            if (then < 0) { index = tokens.Count; return ""; }
+            index = then + 1;
+            // The scanner emits one symbol per character, so "==" is two "=" tokens.
+            if (then - start == 4 && tokens[start].Kind == Kind.Word &&
+                Symbol(tokens[start + 1], "=") && Symbol(tokens[start + 2], "=") &&
+                tokens[start + 3].Kind == Kind.Number)
+            {
+                string source;
+                if (switches.TryGetValue(tokens[start].Text, out source))
+                    return "分支 " + source + " = " + tokens[start + 3].Text;
+            }
+            return "";
+        }
+
+        // `local NAME = checkpointmanager.Switch("X")` — the name is meaningless to a
+        // player, the switch id is what the branch point is called in the story.
+        private static void ReadSwitchAlias(List<Token> tokens, ref int index, Dictionary<string, string> switches)
+        {
+            int i = index;
+            if (i + 7 >= tokens.Count) return;
+            if (tokens[i].Kind != Kind.Word) return;
+            if (!Symbol(tokens[i + 1], "=")) return;
+            if (tokens[i + 2].Kind != Kind.Word || tokens[i + 2].Text != "checkpointmanager") return;
+            if (!Symbol(tokens[i + 3], ".")) return;
+            if (tokens[i + 4].Kind != Kind.Word || tokens[i + 4].Text != "Switch") return;
+            if (!Symbol(tokens[i + 5], "(")) return;
+            if (tokens[i + 6].Kind != Kind.Text) return;
+            if (!Symbol(tokens[i + 7], ")")) return;
+            switches[tokens[i].Text] = tokens[i + 6].Text;
+            // Deliberately does not advance: the switch call itself is still scanned as
+            // a consequence, so "分支点 X" stays in the destination list.
+        }
+
+        private static bool Symbol(Token token, string text)
+        {
+            return token.Kind == Kind.Symbol && token.Text == text;
         }
 
         // The three calls the game uses to move the story sideways.
@@ -141,9 +239,12 @@ namespace MortalHelper.Core
             if (arguments.Count == 0) return null;
             string first = arguments[0];
             if (owner == "checkpointmanager" && method == "Switch") return "分支点 " + first;
-            if (owner == "luamanager" && method == "SetNextScript") return "剧情 " + first;
+            // AddStory records a LegendInfo entry (the "纪事" text kept in the save);
+            // SetNextScript actually jumps to the next script file. Both used to read
+            // "剧情", which made a recorded entry look like a destination.
+            if (owner == "luamanager" && method == "SetNextScript") return "下一段 " + first;
             if (owner == "luamanager" && method == "ChangeScene") return "场景 " + first;
-            if (owner == "statmodifymanager" && method == "AddStory") return "剧情 " + first;
+            if (owner == "statmodifymanager" && method == "AddStory") return "记录 " + first;
             return null;
         }
 

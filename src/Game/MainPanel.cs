@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using BepInEx.Configuration;
 using Mortal.Core;
+using MortalHelper.Core;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -19,11 +20,11 @@ namespace MortalHelper.Game
         private const float MinWidth = 400f;
         private const float MinHeight = 570f;
 
-        private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "地图", "存档设置", "语言" };
+        private static readonly string[] Pages = { "剧情辅助", "战斗辅助", "养成辅助", "数值编辑", "地图", "存档设置", "设置" };
         private static readonly string[] StoryViews = { "剧情", "回想" };
         private static readonly string[] ItemViews = { "书籍", "杂物", "贵重品", "消耗品" };
         private static readonly string[] BattleViews = { "单挑", "群战" };
-        private static readonly string[] GrowthViews = { "养成", "人际", "称号" };
+        private static readonly string[] GrowthViews = { "养成", "人际", "称号", "门派好感", "天赋等级" };
         private static readonly string[] Lovers = { "自己", "小师妹", "瑞杏", "叶云裳", "虞小梅", "上官萤", "夏侯兰", "郁竹", "魏菊", "龙湘" };
         private static readonly HashSet<string> Editable = NumericEdits.Stats;
         private static readonly string[] StatFamilies = { "全部", "资源门派", "人物状态", "武学技艺", "才学性情", "抗性" };
@@ -42,12 +43,15 @@ namespace MortalHelper.Game
         private Rect shownRect;
         private Rect masterRect;
         private bool recoveryOpen;
+        private bool idGlossaryOpen;
         private bool editOpen = true;
         private bool statsOpen = true, itemsOpen, worldOpen;
         private int statFamily;
         private bool confirmResetSlots, confirmClearComments;
         private bool confirmRestoreMain, confirmRestoreBackup;
+        private string confirmEntrySlot;
         private readonly Dictionary<string, string> relationshipEdits = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> growthEdits = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> statEdits = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> itemEdits = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<EditRecord> editLog = new List<EditRecord>();
@@ -72,6 +76,7 @@ namespace MortalHelper.Game
         private string itemSearch = "", search = "";
         private bool showAllItems, loggedBadge, showAllTitles;
         private string slotComment = "", commentSlot, slotCountText = "";
+        private string storedSlotComment;
         private string legendSlotCountText = "";
         private int recoverySlot = 1;
         private GameObject blocker;
@@ -273,6 +278,7 @@ namespace MortalHelper.Game
             if (plugin.Options.AutoTour.Value) GUI.enabled = false;
             try
             {
+                HandleHotkeyCapture();
                 if (open || closing) DrawPanel();
                 if (!open) DrawBadge();
             }
@@ -589,7 +595,7 @@ namespace MortalHelper.Game
                         case 2: GrowthPage(); break;
                         case 3: NumericPage(); break;
                         case 5: SavePage(); break;
-                        case 6: LanguagePage(); break;
+                        case 6: SettingsPage(); break;
                     }
                 }
                 GUILayout.Space(16f * s);
@@ -614,7 +620,7 @@ namespace MortalHelper.Game
         private void MapPage()
         {
             GUILayout.BeginHorizontal(GUILayout.Height(RowH));
-            UiLabel("崆峒派地图", style.SectionTitle);
+            UiLabel("地图", style.SectionTitle);
             GUILayout.FlexibleSpace();
             if (UiButton("复位", style.SubtleStyle, GUILayout.Width(64f * scale), GUILayout.Height(RowH)))
                 map.ResetView();
@@ -623,7 +629,11 @@ namespace MortalHelper.Game
                 GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true), GUILayout.MinHeight(120f * scale));
             map.Draw(area, style, Localize);
             GUILayout.Space(6f * scale);
-            UiLabel("滚轮缩放 · 拖动查看", style.Description);
+            int view = GUILayout.SelectionGrid(map.View, new[] { Localize("全天下舆图"), Localize("崆峒派") },
+                2, style.Segment, GUILayout.Height(RowH * 2f));
+            if (view != map.View) map.SetView(view);
+            GUILayout.Space(4f * scale);
+            UiLabel("滚轮缩放 · 拖动查看；放大地图可看清地名。", style.Description);
         }
 
         // The master switch lives in the title bar so every page keeps its full height.
@@ -739,9 +749,9 @@ namespace MortalHelper.Game
             Section("选项提示");
             int mode = (int)plugin.Options.HintMode.Value;
             int nextMode = SegmentSetting("选项后果提示", mode,
-                new[] { Localize("关"), Localize("悬停"), Localize("总是") },
-                "把「选完会怎样」写在选项后面。「悬停」要把面板收起（Tab）才生效；「总是」不用悬停，但会一直剧透。");
-            if (nextMode != mode && nextMode >= 0 && nextMode <= 2)
+                new[] { Localize("关"), Localize("悬停") },
+                "把「选完会怎样」放进右侧提示框，原生选项文本保持原样。「悬停」需要先按 Tab 收起面板，再把鼠标停在选项上。");
+            if (nextMode != mode && nextMode >= 0 && nextMode <= 1)
             {
                 plugin.Options.HintMode.Value = (OptionHintMode)nextMode;
                 plugin.Options.Config.Save();
@@ -757,6 +767,33 @@ namespace MortalHelper.Game
             }
             Note(HintStatus());
             Note("提示内容默认只读；「一键设为」会写入当前进度，不修改已保存的存档文件。面板打开时提示暂停显示。");
+
+            // A reader-facing key for the ids that show up under 去向. Collapsed by
+            // default: returning players never need it, and it is not a setting.
+            idGlossaryOpen = Fold("内部编号说明", idGlossaryOpen, () => idGlossaryOpen = !idGlossaryOpen);
+            if (!idGlossaryOpen) return;
+            IdRow("ch2_2_3_2", "剧本（「下一段」指向它）");
+            IdRow("D_2_2_3_2_006", "对白");
+            IdRow("O_2_2_3_2_001", "选项文本");
+            IdRow("N_2_2_3_2_001", "旁白 / 结果");
+            IdRow("Ch_2_2_3_2_004", "剧情节点（纪事 + 分支状态）");
+            IdRow("S0202_02_01", "场景 / 战斗（_01 后缀是该场景的剧本）");
+            IdRow("A00001/M20004", "开关 / 计数器");
+            GUILayout.Space(4f * scale);
+            Note("这些只是资源键，不影响游戏里显示的文字。");
+            Note("剧情标记 H00001 这类，游戏内有名称时会直接显示（如门派好感度）。");
+            Note("人物关系里的 brother2 这类是角色 id，会显示成角色名（如 唐錚）。");
+        }
+
+        private void IdRow(string id, string note)
+        {
+            // The id column is measured once per row so a narrow panel keeps the
+            // description readable instead of pushing it off the right edge.
+            float width = style.Tight.CalcSize(new GUIContent(id)).x + 10f * scale;
+            GUILayout.BeginHorizontal();
+            UiLabel(id, style.Tight, GUILayout.Width(width));
+            UiLabel(note, style.Description, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
         }
 
         // What the current script exposes, so an empty tooltip is never read as a
@@ -766,8 +803,8 @@ namespace MortalHelper.Game
             if (string.IsNullOrEmpty(HintAdapter.ScriptName))
                 return "尚未进入剧情：切换到剧本后，这里显示可解析的选项数。";
             if (HintAdapter.Count == 0)
-                return "当前剧本 " + HintAdapter.ScriptName + "：没有可解析的选项。";
-            string text = "当前剧本 " + HintAdapter.ScriptName + " · 可解析 " + HintAdapter.Count
+                return "当前剧本 " + HintNames.Natural(HintNames.Script(HintAdapter.ScriptName), Plugin.Instance.Options.LanguageKind) + "：没有可解析的选项。";
+            string text = "当前剧本 " + HintNames.Natural(HintNames.Script(HintAdapter.ScriptName), Plugin.Instance.Options.LanguageKind) + " · 可解析 " + HintAdapter.Count
                 + " 个选项 · 有内容 " + HintAdapter.WithContent + " 个";
             if (HintAdapter.WithContent == 0) text += "\n这些选项都是纯演出，没有可显示的数值变化。";
             return text;
@@ -877,6 +914,8 @@ namespace MortalHelper.Game
             if (view != growthView) { growthView = view; loverDraftLoaded = false; scroll[2] = Vector2.zero; }
             if (growthView == 1) { Relationships(); return; }
             if (growthView == 2) { TitlesPage(); return; }
+            if (growthView == 3) { FactionAffinitiesPage(); return; }
+            if (growthView == 4) { TalentLevelsPage(); return; }
             Note("以下选项只在自由活动场景空闲时生效；练功与锻造炼丹两组按操作前后恢复点数与金钱。");
             Section("练功");
             plugin.Options.PracticeLimit.Value = DrawSwitchRow("解除修炼点数消耗上限", plugin.Options.PracticeLimit.Value,
@@ -902,7 +941,8 @@ namespace MortalHelper.Game
             int selected = Titles.History.Selected;
             Note("当前显示：" + Titles.DisplayName(selected >= 0 ? selected : Titles.Current));
             Note("剧情称号：" + Titles.DisplayName(Titles.Current));
-            bool canChoose = GameAccess.CanEditValues;
+            string selectionBlocked = Titles.SelectionBlockReason;
+            bool canChoose = selectionBlocked == null;
             bool enabled = GUI.enabled;
             GUI.enabled = enabled && canChoose && selected >= 0;
             if (UiButton(selected < 0 ? "已跟随剧情" : "跟随剧情", style.ButtonStyle, GUILayout.Height(RowH)))
@@ -910,7 +950,7 @@ namespace MortalHelper.Game
             GUI.enabled = enabled;
             showAllTitles = DrawSwitchRow("显示全部称号", showAllTitles, "包含未获得称号，可自由选择外观。");
             Note("记录与选择随当前存档保存，新开游戏互不继承。旧档只能确认当前称号；从安装本功能后开始记录新获得的称号。");
-            if (!canChoose) Note("请在自由活动时，关闭游戏内菜单后修改。");
+            if (!canChoose) Note(selectionBlocked);
             Section(showAllTitles ? "全部称号" : "已获得称号");
             // Catalog IDs come from the native language table, never global history.
             for (int id = 0; id <= 25; id++)
@@ -958,9 +998,9 @@ namespace MortalHelper.Game
                 "不解锁未登场角色；关闭后不会还原已写入的值。");
 
             Section("角色好感");
-            if (!GameAccess.CanEditValues && !plugin.Options.PreviewEditable.Value)
+            if (!GameAccess.CanEditNumbers && !plugin.Options.PreviewEditable.Value)
             {
-                Note("请在自由活动时，关闭游戏内菜单后修改。");
+                Note(GameAccess.NumericEditBlockReason);
                 return;
             }
             var player = PlayerStatManagerData.Instance;
@@ -985,7 +1025,7 @@ namespace MortalHelper.Game
                     style.Tight.CalcSize(new GUIContent(range)).x + 4f * scale);
                 float nameWidth = stacked ? (width - gap) * .58f : width - rangeWidth - inputWidth - applyWidth - 3f * gap;
                 GUILayout.BeginHorizontal();
-                UiLabel(key, style.Entry, GUILayout.Width(nameWidth));
+                UiLabel(HintNames.Natural(HintNames.Character(((int)item.Type).ToString()), plugin.Options.LanguageKind), style.Entry, GUILayout.Width(nameWidth));
                 GUILayout.Space(gap);
                 UiLabel(range, style.Tight, GUILayout.Width(rangeWidth));
                 if (stacked)
@@ -1004,15 +1044,17 @@ namespace MortalHelper.Game
                     if (!item.Active) plugin.Status = "该角色已下场，请刷新后重试。";
                     else if (!int.TryParse(buffer, out parsed) || parsed < 0 || parsed > maximum)
                         plugin.Status = key + " 的好感必须在 0～" + maximum + " 之间。";
-                    else if (!GameAccess.CanEditValues) plugin.Status = "预览模式：只读，不写入。";
+                    else if (!GameAccess.CanEditNumbers) plugin.Status = GameAccess.NumericEditBlockReason;
                     else
                     {
                         try
                         {
-                            plugin.Gate.NotifyMutation();
-                            item.SetValue(parsed);
+                            int previous = item.Value;
+                            NumericEdits.SetRelationship(item, parsed);
                             relationshipEdits[key] = item.Value.ToString();
-                            plugin.Status = key + " 好感已改为 " + item.Value + "；正常存档后保留。";
+                            Record("好感 " + key + " " + previous + "→" + item.Value,
+                                () => NumericEdits.SetRelationship(item, previous));
+                            plugin.Status = key + " 好感已改为 " + item.Value + "；正常存档后保留。" + NumericEdits.SaveNote;
                         }
                         catch (Exception error) { plugin.Report(error); }
                     }
@@ -1022,6 +1064,97 @@ namespace MortalHelper.Game
             }
             if (shown == 0) Note("当前周目还没有已登场角色。");
             else Note("只列已登场角色；不会补齐恋爱事件或解锁未登场角色。");
+        }
+
+        private void FactionAffinitiesPage()
+        {
+            Section("门派好感");
+            if (!GameAccess.Loaded) { Note("请先开始游戏或读取存档。"); return; }
+            Note("直接修改当前门派好感；允许负数，游戏未设置固定上下限。不会补齐结盟或相关剧情，正常存档后保留。");
+            if (!GameAccess.CanEditNumbers) Note(GameAccess.NumericEditBlockReason);
+            var entries = NumericEdits.FactionAffinities;
+            for (int i = 0; i < entries.GetLength(0); i++)
+            {
+                string id = entries[i, 0], name = entries[i, 1];
+                var flag = NumericEdits.FactionAffinity(id);
+                if (flag == null) { Note(name + "：数据未就绪或存在冲突。"); continue; }
+                GrowthValueRow("faction:" + id, name, () => flag.State,
+                    value => NumericEdits.SetFactionAffinity(flag, value), int.MinValue, int.MaxValue,
+                    GameAccess.CanEditNumbers);
+            }
+            UndoSection();
+        }
+
+        private void TalentLevelsPage()
+        {
+            Section("天赋等级");
+            if (!GameAccess.Loaded) { Note("请先开始游戏或读取存档。"); return; }
+            Note("0 级为未习得；上限取自当前游戏数据。只修改等级，不补发秘籍修炼奖励或相关剧情。");
+            string blocked = NumericEdits.TalentEditBlockReason;
+            if (blocked != null) Note(blocked);
+            var entries = NumericEdits.TalentLevels;
+            for (int i = 0; i < entries.GetLength(0); i++)
+            {
+                var talent = NumericEdits.TalentLevel(entries[i, 0]);
+                string name = entries[i, 1];
+                if (talent == null) { Note(name + "：数据未就绪或存在冲突。"); continue; }
+                int maximum = GameAccess.Field<int>(talent, "_maxLevel");
+                GrowthValueRow("talent:" + talent.Id, name, () => talent.Level,
+                    value => NumericEdits.SetTalentLevel(talent, value), 0, maximum,
+                    blocked == null && GameAccess.CanEditNumbers);
+            }
+            UndoSection();
+        }
+
+        private void GrowthValueRow(string key, string name, Func<int> read, Action<int> write,
+            int minimum, int maximum, bool editable)
+        {
+            float width = ContentWidth(), gap = 8f * scale;
+            bool stacked = width < 520f * scale;
+            float applyWidth = Mathf.Max(64f * scale, style.ButtonStyle.CalcSize(new GUIContent("应用")).x);
+            float inputWidth = GUI.skin.textField.CalcSize(new GUIContent("-2147483648")).x + 4f * scale;
+            string buffer;
+            if (!growthEdits.TryGetValue(key, out buffer)) growthEdits[key] = buffer = read().ToString();
+            string label = Localize(name) + "  " + read() + (minimum == 0 ? " / " + maximum : "");
+            GUILayout.BeginHorizontal();
+            UiLabel(label, style.Entry, GUILayout.Width(stacked ? width : width - inputWidth - applyWidth - 2f * gap));
+            if (stacked)
+            {
+                GUILayout.EndHorizontal();
+                GUILayout.Space(4f * scale);
+                GUILayout.BeginHorizontal();
+            }
+            else GUILayout.Space(gap);
+            bool enabled = GUI.enabled;
+            GUI.enabled = enabled && editable;
+            buffer = EditableTextField(key, buffer, 11,
+                GUILayout.Width(stacked ? width - applyWidth - gap : inputWidth), GUILayout.Height(RowH));
+            growthEdits[key] = buffer;
+            GUILayout.Space(gap);
+            if (UiButton("应用", style.ButtonStyle, GUILayout.Width(applyWidth), GUILayout.Height(RowH)))
+            {
+                int value;
+                if (!int.TryParse(buffer, out value) || value < minimum || value > maximum)
+                    plugin.Status = name + " 必须在 " + minimum + "～" + maximum + " 之间。";
+                else Defer(() =>
+                {
+                    try
+                    {
+                        int before = read();
+                        write(value);
+                        growthEdits[key] = read().ToString();
+                        if (before != read()) Record(name + " " + before + "→" + read(), () =>
+                        {
+                            write(before); growthEdits[key] = read().ToString();
+                        });
+                        plugin.Status = name + " 已改为 " + read() + "；正常存档后保留。" + NumericEdits.SaveNote;
+                    }
+                    catch (Exception error) { plugin.Report(error); }
+                });
+            }
+            GUI.enabled = enabled;
+            GUILayout.EndHorizontal();
+            GUILayout.Space(8f * scale);
         }
 
         // Initialize on entry; keep the user draft across Layout/Repaint events.
@@ -1146,10 +1279,11 @@ namespace MortalHelper.Game
                         try
                         {
                             int old = stat.Value;
-                            NumericEdits.SetStat(stat, number);
+                            bool refreshed = NumericEdits.SetStat(stat, number);
                             statEdits[key] = stat.Value.ToString();
                             Record("属性 " + name + " " + old + "→" + stat.Value, () => NumericEdits.SetStat(stat, old));
-                            plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。" + NumericEdits.SaveNote;
+                            plugin.Status = name + " 已改为 " + stat.Value + "；正常存档后保留。" +
+                                (refreshed ? "" : "商店显示刷新失败，请重新打开商店。") + NumericEdits.SaveNote;
                             Flash("stat:" + key);
                         }
                         catch (Exception error) { plugin.Report(error); }
@@ -1232,12 +1366,13 @@ namespace MortalHelper.Game
                         try
                         {
                             int previous = item.CurrentCount;
-                            NumericEdits.SetItem(itemType, item, number);
+                            bool refreshed = NumericEdits.SetItem(itemType, item, number);
                             itemEdits[key] = item.CurrentCount.ToString();
                             GameItemType undoType = itemType;
                             Record("物品 " + name + " " + previous + "→" + item.CurrentCount, () => NumericEdits.SetItem(undoType, item, previous));
                             plugin.Status = name + " 数量已改为 " + item.CurrentCount + "；正常存档后保留。" +
-                                (NumericShopRefresh.Open ? "商店列表已刷新，待购／待售数量已重置。" : "") + NumericEdits.SaveNote;
+                                (refreshed ? (NumericShopRefresh.Open ? "商店列表已刷新，待购／待售数量已重置。" : "") :
+                                "商店显示刷新失败，请重新打开商店。") + NumericEdits.SaveNote;
                             Flash("item:" + key);
                         }
                         catch (Exception error) { plugin.Report(error); }
@@ -1286,6 +1421,21 @@ namespace MortalHelper.Game
             Note("中途档含配套恢复记录；复制、备份或移动存档时需一并保留。");
             string availability = AnytimeNative.Availability;
             Note(availability == null ? "当前可用：可在游戏系统菜单选择编号槽。" : "当前不可用：" + availability);
+            Section("跨版本剧情恢复");
+            Note("读档时自动尝试兼容迁移并核对原有状态；跨版本恢复前保留完整备份。无法精确恢复时，可选择从该段剧情开头继续。段内选择与数值变化将重新进行，请另存新槽位。");
+            string entrySlot = SlotSelection.Resolve();
+            if (confirmEntrySlot != null && confirmEntrySlot != entrySlot) confirmEntrySlot = null;
+            Note("当前选择的槽位：" + (entrySlot ?? "未选择；请先在读档列表点选槽位"));
+            if (UiButton(confirmEntrySlot == null ? "从本段开头恢复所选档" : "确认回到段落开头（段内进度将重走）", style.ButtonStyle, GUILayout.Height(RowH)))
+            {
+                if (!AnytimeNative.Numbered(entrySlot)) plugin.Status = "请先在读档列表选择编号槽位。";
+                else if (confirmEntrySlot == null) confirmEntrySlot = entrySlot;
+                else
+                {
+                    string requested = entrySlot; confirmEntrySlot = null;
+                    Defer(() => plugin.Status = AnytimeStory.RestartAtEntry(requested));
+                }
+            }
             Section("存档格数");
             int configured = plugin.Options.SlotCount.Value;
             bool custom = configured >= 2 && configured <= 999;
@@ -1333,7 +1483,9 @@ namespace MortalHelper.Game
             else
             {
                 UiLabel("当前选中槽位：" + selected, style.Entry);
-                if (commentSlot != selected) { commentSlot = selected; slotComment = SaveSlotComments.Get(selected); }
+                string storedComment = SaveSlotComments.Get(selected);
+                if (commentSlot != selected || storedSlotComment != storedComment)
+                { commentSlot = selected; storedSlotComment = storedComment; slotComment = storedComment; }
                 slotComment = EditableTextField("slot-comment", slotComment, 60, GUILayout.Height(RowH));
                 GUILayout.BeginHorizontal();
                 if (UiButton("保存备注", style.ButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
@@ -1369,8 +1521,15 @@ namespace MortalHelper.Game
             else Note("还没有备注；按 F2 或在上方编辑框保存后会出现在这里。");
 
             SubSection("排序");
-            plugin.Options.SortRecent.Value = DrawSwitchRow("按最近存档排序（F3 切换）", plugin.Options.SortRecent.Value,
+            bool recent = plugin.Options.SortRecent.Value;
+            bool nextRecent = DrawSwitchRow("按最近存档排序（F3 切换）", recent,
                 "只重排读档列表顺序；槽位编号与存档文件不变。");
+            if (nextRecent != recent) Defer(() =>
+            {
+                plugin.Options.SortRecent.Value = nextRecent;
+                plugin.Options.Config.Save();
+                SaveSlotSort.Refresh();
+            });
 
             // Recorded checkpoints belong to saving, not to the story hints; they moved
             // here unchanged and stay hidden unless the experimental switch is on.
@@ -1436,7 +1595,9 @@ namespace MortalHelper.Game
             Note("恢复需要二次确认，将覆盖当前未存档进度；历史备份是上一份检查点，不是原生存档。");
         }
 
-        private void LanguagePage()
+        // 设置页：面板语言 + 可改键的快捷键。快捷键必须能在游戏里当场验证，
+        // 所以入口在这一页；打不开面板时的兜底是徽章和配置文件的 PanelKey。
+        private void SettingsPage()
         {
             Section("语言");
             UiLang[] kinds = { UiLang.Hans, UiLang.Hant, UiLang.Ja, UiLang.Ko };
@@ -1453,6 +1614,95 @@ namespace MortalHelper.Game
                 plugin.Status = "面板语言：" + names[next];
             }
             Note("尚未翻译的条目会显示原文（简体中文）。");
+
+            Section("按键");
+            Note("点键名后按下新键：Esc 取消，Backspace 清除。可以带 Ctrl/Alt/Shift（如 Ctrl+Tab）。");
+            HotkeyRow(HotkeyAction.Panel, "面板", "打不开面板时，点左上角徽章，或改配置里的 PanelKey。");
+            HotkeyRow(HotkeyAction.Comment, "存档备注", "在存档或读档列表选中槽位后按下。");
+            HotkeyRow(HotkeyAction.SortRecent, "最近排序", "在读档列表按下，切换最近存档排序。");
+            if (captureAction.HasValue) Note("请按下新键…（Esc 取消，Backspace 清除）");
+            if (!string.IsNullOrEmpty(captureMessage)) Note(captureMessage);
+            Note("输入框获得焦点时热键不响应；笔记本的 F 键可能需要同时按 Fn。");
+        }
+
+        private HotkeyAction? captureAction;
+        private string captureMessage = "";
+
+        private void HotkeyRow(HotkeyAction action, string label, string hint)
+        {
+            GUILayout.BeginHorizontal();
+            UiLabel(label, style.Entry, GUILayout.Width(76f * scale), GUILayout.Height(RowH));
+            bool capturing = captureAction.HasValue && captureAction.Value == action;
+            string shown = capturing ? "请按键…" : Hotkeys.Display(plugin.Options, action);
+            if (string.IsNullOrEmpty(shown)) shown = "未设置";
+            if (UiButton(shown, capturing ? style.ButtonStyle : style.Segment,
+                GUILayout.ExpandWidth(true), GUILayout.Height(RowH)))
+                BeginCapture(action);
+            if (UiButton("默认", style.SubtleStyle, GUILayout.Width(56f * scale), GUILayout.Height(RowH)))
+            {
+                string problem = Hotkeys.Reset(plugin.Options, action);
+                CancelCapture(problem.Length > 0 ? label + " 未恢复默认：" + problem :
+                    label + " 已恢复默认：" + Hotkeys.Display(plugin.Options, action));
+            }
+            GUILayout.EndHorizontal();
+            Note(hint);
+        }
+
+        private void BeginCapture(HotkeyAction action)
+        {
+            captureAction = action;
+            Hotkeys.Capturing = true;
+            captureMessage = "";
+            GUI.FocusControl(null);
+        }
+
+        private void CancelCapture(string message)
+        {
+            captureAction = null;
+            Hotkeys.Capturing = false;
+            captureMessage = message ?? "";
+        }
+
+        // 捕获必须在页面绘制之前：按下 Tab 时先吞掉事件，
+        // 否则这一次按键会先把面板收起来，键就永远存不进去。
+        private void HandleHotkeyCapture()
+        {
+            if (captureAction.HasValue && !Visible && !closing) { CancelCapture(""); return; }
+            if (!captureAction.HasValue) { Hotkeys.Capturing = false; return; }
+            Hotkeys.Capturing = true;
+            Event current = Event.current;
+            if (current == null) return;
+            if (current.type == EventType.MouseDown)
+            {
+                current.Use();
+                CancelCapture("已取消改键，正在重绘…");
+                return;
+            }
+            if (current.type != EventType.KeyDown) return;
+            if (current.keyCode == KeyCode.Escape) { current.Use(); CancelCapture("已取消改键。"); return; }
+            if (current.keyCode == KeyCode.Backspace || current.keyCode == KeyCode.Delete)
+            {
+                current.Use();
+                HotkeyAction action = captureAction.Value;
+                Hotkeys.Write(plugin.Options, action, Hotkey.Parse(Hotkey.Disabled));
+                CancelCapture(Hotkeys.Label(action) + " 已清除热键，只能点左上角徽章打开面板。");
+                return;
+            }
+            if (current.keyCode == KeyCode.None || IsModifierKey(current.keyCode)) { current.Use(); return; }
+            Hotkey candidate = Hotkey.From(current.control, current.alt, current.shift, current.keyCode.ToString());
+            string problem = Hotkeys.Check(plugin.Options, captureAction.Value, candidate);
+            if (problem.Length > 0) { current.Use(); captureMessage = problem; return; }
+            HotkeyAction target = captureAction.Value;
+            Hotkeys.Write(plugin.Options, target, candidate);
+            CancelCapture(Hotkeys.Label(target) + " 已设为 " + Hotkeys.Display(plugin.Options, target));
+        }
+
+        private static bool IsModifierKey(KeyCode key)
+        {
+            return key == KeyCode.LeftControl || key == KeyCode.RightControl ||
+                key == KeyCode.LeftShift || key == KeyCode.RightShift ||
+                key == KeyCode.LeftAlt || key == KeyCode.RightAlt ||
+                key == KeyCode.LeftCommand || key == KeyCode.RightCommand;
         }
 
         private GUIStyle coverStyle, coverSubStyle;
@@ -1522,7 +1772,7 @@ namespace MortalHelper.Game
             }
             UiLabel(Mathf.RoundToInt(opacity * 100f) + "%", style.FooterValue, GUILayout.Width(48f * s));
             GUILayout.FlexibleSpace();
-            UiLabel(plugin.Options.Toggle.Value + " 收起", style.FooterLabel, GUILayout.Width(72f * s));
+            UiLabel(Hotkeys.ShortDisplay(plugin.Options, HotkeyAction.Panel) + " 收起", style.FooterLabel, GUILayout.Width(72f * s));
             GUILayout.EndHorizontal();
         }
 
@@ -1597,7 +1847,7 @@ namespace MortalHelper.Game
             badgeKeyStyle.fontSize = Mathf.Clamp(Mathf.FloorToInt(footerH * .62f), 10, 18);
             badgeKeyStyle.normal.textColor = new Color(.90f, .76f, .48f, 1f);
             UiLabel(new Rect(tagRect.x, tagRect.y - 1f, tagRect.width, tagRect.height + 2f),
-                plugin.Options.Toggle.Value.ToString(), badgeKeyStyle);
+                Hotkeys.ShortDisplay(plugin.Options, HotkeyAction.Panel), badgeKeyStyle);
 
             Vector2 mouse = Event.current.mousePosition;
             if (GUI.enabled && Event.current.type == EventType.MouseDown && badge.Contains(mouse))
@@ -1900,7 +2150,8 @@ namespace MortalHelper.Game
 
         internal void ClearSelection()
         {
-            statEdits.Clear(); itemEdits.Clear(); relationshipEdits.Clear();
+            confirmEntrySlot = null;
+            statEdits.Clear(); itemEdits.Clear(); relationshipEdits.Clear(); growthEdits.Clear();
             editLog.Clear(); loverDraftLoaded = false;
             SaveSlotComments.Selected = null; commentSlot = null;
         }

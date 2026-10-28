@@ -115,22 +115,32 @@ namespace MortalHelperInstaller {
  }
  public sealed class Window : Form {
   readonly TextBox path=new TextBox(); readonly Label status=new Label(); readonly Button install=new Button(),remove=new Button(),browse=new Button(),open=new Button();
+  static readonly Color Ink=Color.FromArgb(42,47,43), Muted=Color.FromArgb(98,106,98), Red=Color.FromArgb(156,57,43), Green=Color.FromArgb(54,103,75), Border=Color.FromArgb(212,206,194);
   public Window() {
-   Text="活侠 · 万象录 — 安装与卸载"; ClientSize=new Size(620,330); FormBorderStyle=FormBorderStyle.FixedDialog; MaximizeBox=false; StartPosition=FormStartPosition.CenterScreen;
-   AutoScaleDimensions=new SizeF(96,96); AutoScaleMode=AutoScaleMode.Dpi; Font=new Font("Microsoft YaHei UI",10); BackColor=Color.FromArgb(246,248,250);
-   var heading=new Label{Text="活侠 · 万象录",Font=new Font("Microsoft YaHei UI",21,FontStyle.Bold),ForeColor=Color.FromArgb(34,65,85),Bounds=new Rectangle(26,22,560,44)}; Controls.Add(heading);
-   Controls.Add(new Label{Text="选择游戏目录，安装后从 Steam 启动游戏。",Bounds=new Rectangle(28,74,560,25)});
-   Controls.Add(new Label{Text="游戏目录",Bounds=new Rectangle(28,114,100,24)}); path.SetBounds(28,142,465,30); Controls.Add(path);
-   browse.Text="选择…"; browse.SetBounds(502,141,90,32); browse.Click+=(s,e)=>{using(var d=new OpenFileDialog{Filter="活侠传|Mortal.exe",Title="选择游戏目录中的 Mortal.exe"}) if(d.ShowDialog()==DialogResult.OK) path.Text=System.IO.Path.GetDirectoryName(d.FileName);}; Controls.Add(browse);
-   install.Text="安装 / 更新"; install.SetBounds(28,192,170,40); install.BackColor=Color.FromArgb(34,65,85); install.ForeColor=Color.White; install.FlatStyle=FlatStyle.Flat; install.Click+=(s,e)=>Run(false); Controls.Add(install);
-   remove.Text="卸载万象录"; remove.SetBounds(212,192,170,40); remove.Click+=(s,e)=>Run(true); Controls.Add(remove);
-   open.Text="打开游戏目录"; open.SetBounds(396,192,196,40); open.Click+=(s,e)=>{try{string p=Engine.Normalize(path.Text); if(Directory.Exists(p)) Process.Start("explorer.exe",p);}catch(Exception ex){status.Text=ex.Message;}}; Controls.Add(open);
-   status.SetBounds(28,252,564,65); status.ForeColor=Color.FromArgb(60,72,82); status.Text="无需管理员权限。卸载会保留游戏存档和设置。"; Controls.Add(status);
+   Text="万象录 · 安装器"; ClientSize=new Size(620,382); FormBorderStyle=FormBorderStyle.FixedDialog; MaximizeBox=false; StartPosition=FormStartPosition.CenterScreen;
+   Font=new Font("Microsoft YaHei UI",10); BackColor=Color.FromArgb(247,244,236); ForeColor=Ink;
+   Controls.Add(new Label{BackColor=Red,Bounds=new Rectangle(27,24,4,49)});
+   Controls.Add(new Label{Text="万象录",Font=new Font("SimSun",23,FontStyle.Bold),ForeColor=Ink,Bounds=new Rectangle(39,19,540,45)});
+   Controls.Add(new Label{Text="《活侠传》辅助工具 · 安装与卸载",Font=new Font("Microsoft YaHei UI",9),ForeColor=Muted,Bounds=new Rectangle(40,66,540,22)});
+   Controls.Add(new Label{BackColor=Border,Bounds=new Rectangle(29,98,562,1)});
+   Controls.Add(new Label{Text="游戏目录",Font=new Font("Microsoft YaHei UI",10,FontStyle.Bold),Bounds=new Rectangle(29,113,160,25)});
+   Controls.Add(new Label{Text="选择包含 Mortal.exe 的游戏文件夹",Font=new Font("Microsoft YaHei UI",9),ForeColor=Muted,Bounds=new Rectangle(29,138,562,22)});
+   path.SetBounds(29,170,466,24); path.BorderStyle=BorderStyle.FixedSingle; path.BackColor=Color.White; Controls.Add(path);
+   browse.Text="选择…"; browse.SetBounds(505,165,86,34); StyleSecondary(browse); browse.Click+=(s,e)=>{using(var d=new OpenFileDialog{Filter="活侠传|Mortal.exe",Title="选择游戏目录中的 Mortal.exe"}) if(d.ShowDialog()==DialogResult.OK) path.Text=System.IO.Path.GetDirectoryName(d.FileName);}; Controls.Add(browse);
+   install.Text="安装 / 更新"; install.SetBounds(29,219,166,43); install.BackColor=Red; install.ForeColor=Color.White; install.FlatStyle=FlatStyle.Flat; install.FlatAppearance.BorderSize=0; install.FlatAppearance.MouseOverBackColor=Color.FromArgb(130,45,34); install.Click+=(s,e)=>Run(false); Controls.Add(install);
+   remove.Text="卸载万象录"; remove.SetBounds(207,219,166,43); StyleSecondary(remove); remove.Click+=(s,e)=>Run(true); Controls.Add(remove);
+   open.Text="打开游戏目录"; open.SetBounds(385,219,206,43); StyleSecondary(open); open.Click+=(s,e)=>{try{string p=Engine.Normalize(path.Text); if(Directory.Exists(p)) Process.Start("explorer.exe",p);}catch(Exception ex){ShowStatus(ex.Message,Red);}}; Controls.Add(open);
+   Controls.Add(new Label{Text="当前状态",Font=new Font("Microsoft YaHei UI",9,FontStyle.Bold),ForeColor=Muted,Bounds=new Rectangle(29,282,120,22)});
+   status.SetBounds(29,307,562,43); status.Font=new Font("Microsoft YaHei UI",9); Controls.Add(status); ShowStatus("请选择游戏目录，再点击「安装 / 更新」。",Muted);
+   Controls.Add(new Label{Text="卸载会保留游戏存档和设置。",Font=new Font("Microsoft YaHei UI",9),ForeColor=Muted,Bounds=new Rectangle(29,357,562,20)});
    MinimumSize=Size;
-   path.TextChanged+=(s,e)=>{ if(path.Text.Length==0) return; try { string p=Engine.Normalize(path.Text); status.Text=File.Exists(System.IO.Path.Combine(p,Engine.Plugin))?(File.Exists(System.IO.Path.Combine(p,"BepInEx/mortal-helper-install.xml"))?"已安装万象录，可更新或卸载。卸载会保留游戏存档和设置。":"已手动安装万象录，可更新后由安装器管理卸载。"):File.Exists(System.IO.Path.Combine(p,"Mortal.exe"))?"已找到游戏。点击「安装 / 更新」即可安装。":"请选择游戏目录中的 Mortal.exe。"; }catch { status.Text="请选择游戏目录中的 Mortal.exe。"; } };
-   try { path.Text=Engine.Discover().Select(Engine.Normalize).FirstOrDefault()??""; } catch { status.Text="请点击「选择」找到游戏目录中的 Mortal.exe。"; }
+   path.TextChanged+=(s,e)=>{ if(path.Text.Length==0) { ShowStatus("请选择游戏目录，再点击「安装 / 更新」。",Muted); return; } try { string p=Engine.Normalize(path.Text); ShowStatus(File.Exists(System.IO.Path.Combine(p,Engine.Plugin))?(File.Exists(System.IO.Path.Combine(p,"BepInEx/mortal-helper-install.xml"))?"已安装万象录，可以更新或卸载。":"已手动安装万象录；更新后可由安装器管理卸载。"):File.Exists(System.IO.Path.Combine(p,"Mortal.exe"))?"已找到游戏，可以安装。":"未找到 Mortal.exe，请重新选择游戏目录。",Muted); }catch { ShowStatus("未找到游戏目录，请重新选择。",Muted); } };
+   try { path.Text=Engine.Discover().Select(Engine.Normalize).FirstOrDefault()??""; } catch { ShowStatus("自动查找失败，请点击「选择…」指定 Mortal.exe。",Muted); }
+   AutoScaleDimensions=new SizeF(96,96); AutoScaleMode=AutoScaleMode.Dpi;
   }
-  void Run(bool uninstall) { install.Enabled=remove.Enabled=false; try { string p=Engine.Normalize(path.Text); path.Text=p; if(uninstall && MessageBox.Show(this,"卸载万象录？游戏存档和设置会保留。","卸载",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK) return; status.Text=uninstall?Engine.Uninstall(p):Engine.Install(p,Engine.Payload()); }catch(Exception ex){status.Text=ex.Message;}finally{install.Enabled=remove.Enabled=true;} }
+  static void StyleSecondary(Button button) { button.BackColor=Color.White; button.ForeColor=Ink; button.FlatStyle=FlatStyle.Flat; button.FlatAppearance.BorderColor=Border; button.FlatAppearance.MouseOverBackColor=Color.FromArgb(239,235,225); }
+  void ShowStatus(string message,Color color) { status.Text=message; status.ForeColor=color; }
+  void Run(bool uninstall) { install.Enabled=remove.Enabled=false; try { string p=Engine.Normalize(path.Text); path.Text=p; if(uninstall && MessageBox.Show(this,"卸载万象录？游戏存档和设置会保留。","卸载",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK) return; ShowStatus(uninstall?Engine.Uninstall(p):Engine.Install(p,Engine.Payload()),Green); }catch(Exception ex){ShowStatus(ex.Message,Red);}finally{install.Enabled=remove.Enabled=true;} }
  }
  static class Program {
   [STAThread] static void Main(string[] args) {

@@ -49,6 +49,15 @@ try {
     Assert (($saveOps -contains 'UnityEngine.Random/State UnityEngine.Random::get_state()') -and ($saveOps -contains 'Mortal.Core.UnityRandomState Mortal.Core.GameSave::FreeRandomState')) 'native save snapshot captures live Unity random state'
     $loadOps = Operands (Get-GameMethod $player 'Load')
     Assert (($loadOps -contains 'Mortal.Core.UnityRandomState Mortal.Core.PlayerStatManagerData::_freeRandomState') -and !($loadOps -contains 'System.Void UnityEngine.Random::set_state(UnityEngine.Random/State)')) 'native load stores free random seed without restoring Unity RNG'
+    $talent = Get-GameType 'Mortal.Core' 'PlayerTalentData'
+    Assert (@($talent.Fields | Where-Object { $_.Name -eq '_maxLevel' -and $_.FieldType.FullName -eq 'System.Int32' }).Count -eq 1) 'talent editor reads a native integer maximum'
+    $setup = Get-GameMethod $talent 'Setup'
+    Assert (($setup.Parameters.Count -eq 1) -and ($setup.Parameters[0].ParameterType.FullName -eq 'System.Int32') -and ((Operands $setup) -contains 'System.Int32 Mortal.Core.PlayerTalentData::_level')) 'talent Setup writes native level'
+    Assert (($saveOps -contains 'System.Int32 Mortal.Core.TalentSave::Level') -and ($loadOps -contains 'System.Void Mortal.Core.PlayerTalentDataCollection::Set(System.String,System.Int32)')) 'native saves persist talent levels and reload them'
+    $missions = Get-GameType 'Mortal.Core' 'MissionManagerData'
+    $flagSave = Operands (Get-GameMethod $missions 'Save')
+    $flagLoad = Operands (Get-GameMethod $missions 'Load')
+    Assert (($flagSave -contains 'System.Int32 Mortal.Core.FlagData::State') -and ($flagSave -contains 'System.Int32 Mortal.Core.EventFlagSave::State') -and ($flagLoad -contains 'System.Void Mortal.Core.MissionManagerData::SetFlag(System.String,System.Int32)')) 'native saves persist faction flag state and reload it'
     $sourceRoot = Join-Path $PSScriptRoot '../src'
     $targets = @()
     foreach ($file in Get-ChildItem $sourceRoot -Recurse -Filter '*.cs') {

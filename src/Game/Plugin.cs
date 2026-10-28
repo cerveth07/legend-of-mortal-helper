@@ -9,7 +9,7 @@ using UnityEngine.SceneManagement;
 
 namespace MortalHelper.Game
 {
-    [BepInPlugin("cerveth.mortal.helper", "活侠·万象录", "0.1.1")]
+    [BepInPlugin("cerveth.mortal.helper", "活侠·万象录", "1.1.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal static Plugin Instance;
@@ -37,33 +37,17 @@ namespace MortalHelper.Game
                 if (Options.AutoTour.Value || Options.PreviewEditable.Value)
                     Application.runInBackground = true;
                 Panel = new MainPanel(this);
-                // A broken junction or an unreadable plugin directory must not abort startup:
-                // the scan is a courtesy warning, not a precondition for the mod working.
-                try
-                {
-                    foreach (string path in Directory.GetFiles(Paths.PluginPath, "*.dll", SearchOption.AllDirectories))
-                    {
-                        string file = Path.GetFileName(path);
-                        if (file.Equals("MortalFateHelper.dll", StringComparison.OrdinalIgnoreCase) ||
-                            file.Equals("LOMSave2.dll", StringComparison.OrdinalIgnoreCase) ||
-                            file.StartsWith("DiceMaster", StringComparison.OrdinalIgnoreCase) ||
-                            file.Equals("ControlMyDestiny.dll", StringComparison.OrdinalIgnoreCase))
-                            throw new InvalidOperationException("检测到旧辅助插件 " + file + "；请先将其移出 plugins 后重启。");
-                    }
-                }
-                catch (InvalidOperationException) { throw; }
-                catch (Exception error) { Logger.LogWarning("插件目录扫描失败，已跳过旧插件检测：" + error.Message); }
+                CheckLegacyPlugins();
                 patches = new Harmony("cerveth.mortal.helper");
                 patches.PatchAll(typeof(Plugin).Assembly);
-                // Resolved by name at runtime: the intro panel is presentation only, but
-                // its coroutine throws during replays and the story waits on it forever.
                 AnytimeIntroSkip.Install(patches);
                 SceneManager.activeSceneChanged += SceneChanged;
-                Logger.LogInfo("Mortal helper 0.1.1 initialized; experimental build.");
+                Logger.LogInfo("Mortal helper 1.1.0 initialized; anytime save remains experimental.");
                 Logger.LogInfo("Display: " + Panel.Describe());
             }
             catch (Exception error)
             {
+                SceneManager.activeSceneChanged -= SceneChanged;
                 patches?.UnpatchSelf();
                 patches = null;
                 // Never persist Enabled=false here. It would stay off after the cause is
@@ -82,17 +66,44 @@ namespace MortalHelper.Game
             if (Options == null) return false;
             try
             {
+                CheckLegacyPlugins();
                 patches = new Harmony("cerveth.mortal.helper");
                 patches.PatchAll(typeof(Plugin).Assembly);
                 AnytimeIntroSkip.Install(patches);
                 InteractionLock.Reset();
-            SceneManager.activeSceneChanged -= SceneChanged;
+                SceneManager.activeSceneChanged -= SceneChanged;
                 SceneManager.activeSceneChanged += SceneChanged;
                 patchFailed = false;
                 Logger.LogInfo("Mortal helper patches restored after an earlier initialisation failure.");
                 return true;
             }
-            catch (Exception error) { Report(error); return false; }
+            catch (Exception error)
+            {
+                SceneManager.activeSceneChanged -= SceneChanged;
+                patches?.UnpatchSelf();
+                patches = null;
+                Report(error);
+                return false;
+            }
+        }
+
+        private void CheckLegacyPlugins()
+        {
+            // An unreadable plugin directory is only a warning; a detected conflict is fatal.
+            try
+            {
+                foreach (string path in Directory.GetFiles(Paths.PluginPath, "*.dll", SearchOption.AllDirectories))
+                {
+                    string file = Path.GetFileName(path);
+                    if (file.Equals("MortalFateHelper.dll", StringComparison.OrdinalIgnoreCase) ||
+                        file.Equals("LOMSave2.dll", StringComparison.OrdinalIgnoreCase) ||
+                        file.StartsWith("DiceMaster", StringComparison.OrdinalIgnoreCase) ||
+                        file.Equals("ControlMyDestiny.dll", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("检测到旧辅助插件 " + file + "；请先将其移出 plugins 后重启。");
+                }
+            }
+            catch (InvalidOperationException) { throw; }
+            catch (Exception error) { Logger.LogWarning("插件目录扫描失败，已跳过旧插件检测：" + error.Message); }
         }
 
         private void Update()
@@ -100,16 +111,20 @@ namespace MortalHelper.Game
             if (Options == null) return;
             Panel?.Drain();
             Tour();
-            if (!GameAccess.Typing && Input.GetKeyDown(KeyCode.F3))
+            if (Hotkeys.Down(Options, HotkeyAction.SortRecent))
             {
                 Options.SortRecent.Value = !Options.SortRecent.Value;
                 Options.Config.Save();
                 SaveSlotSort.Refresh();
                 Status = Options.SortRecent.Value ? "读档列表已按最近存档排序。" : "读档列表已恢复原有顺序。";
             }
-            if (!GameAccess.Typing && Input.GetKeyDown(KeyCode.F2) && !string.IsNullOrEmpty(SaveSlotComments.Selected))
-                Panel.OpenSaveSettings();
-            if (!GameAccess.Typing && Input.GetKeyDown(Options.Toggle.Value))
+            if (Hotkeys.Down(Options, HotkeyAction.Comment))
+            {
+                string slot = SlotSelection.Resolve();
+                if (string.IsNullOrEmpty(slot)) Status = "先在存档或读档列表里点一个槽位，再使用备注快捷键。";
+                else Panel.OpenSaveSettings();
+            }
+            if (Hotkeys.Down(Options, HotkeyAction.Panel))
             {
                 // Log the requested state: Panel.Visible still reports "open" while the
                 // closing animation runs, which made the log contradict the screen.
@@ -137,6 +152,7 @@ namespace MortalHelper.Game
             Step("progress", ProgressionTools.Maintain);
             Step("titles", Titles.Tick);
             Step("replay", StoryReplay.Tick);
+            Step("map-labels", MapLabelDump.Tick);
 #if !NO_PROBE
             Step("probe", Probe.Tick);
 #endif

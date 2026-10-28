@@ -4,6 +4,7 @@ using System.Text;
 using Mortal.Core;
 using Mortal.Story;
 using MortalHelper.Core;
+using UnityEngine;
 
 namespace MortalHelper.Game
 {
@@ -43,13 +44,13 @@ namespace MortalHelper.Game
             {
                 if (requirement.Kind == RequirementKind.Switch)
                 {
-                    report.Lines.Add("检查点 " + requirement.Name);
+                    report.Lines.Add(HintNames.Checkpoint(requirement.Name, "Switch"));
                     report.Block = "检查点类条件不能一键满足。";
                     return report;
                 }
                 if (requirement.Kind == RequirementKind.Position)
                 {
-                    report.Lines.Add("地点检查 " + requirement.Name);
+                    report.Lines.Add(HintNames.Checkpoint(requirement.Name, "Position"));
                     report.Block = "地点类条件不能一键满足。";
                     return report;
                 }
@@ -62,7 +63,7 @@ namespace MortalHelper.Game
                 ConditionResultData data = Find(manager, requirement.Name);
                 if (data == null)
                 {
-                    report.Lines.Add("条件 " + requirement.Name);
+                    report.Lines.Add(HintNames.Checkpoint(requirement.Name, "Condition"));
                     report.Block = "游戏里找不到这个条件的定义。";
                     return report;
                 }
@@ -84,6 +85,48 @@ namespace MortalHelper.Game
                 report.Satisfied = null;
             }
             return report;
+        }
+
+        // Naming a destination must not evaluate conditions, random draws or counters.
+        internal static string Definition(ScriptableObject data)
+        {
+            if (!(data is ConditionResultData) && !(data is SwitchResultData)) return "";
+            try
+            {
+                var items = GameAccess.Field<List<ConditionResultItem>>(data, "_items");
+                if (items == null) return "";
+                var alternatives = new List<string>();
+                var report = new ConditionReport();
+                foreach (var item in items)
+                {
+                    if (item == null || alternatives.Count >= 6) continue;
+                    var comparisons = GameAccess.Field<List<StatCompareItem>>(item, "_items");
+                    if (comparisons == null) continue;
+                    var parts = new List<string>();
+                    foreach (var compare in comparisons)
+                    {
+                        if (compare == null || parts.Count >= 6) continue;
+                        var left = GameAccess.Field<StatGroupVariable>(compare, "_value1");
+                        var right = GameAccess.Field<StatGroupVariable>(compare, "_value2");
+                        var op = GameAccess.Field<StatCompareType>(compare, "_compareOp");
+                        parts.Add(Describe(left, 0, report, false) + " " + Symbol(op) + " " + Describe(right, 0, report, false));
+                    }
+                    if (parts.Count > 0)
+                    {
+                        var logic = GameAccess.Field<LogicOperatorType>(item, "_logicOp");
+                        string group = string.Join(logic == LogicOperatorType.OR ? " 或 " : " 且 ", parts.ToArray());
+                        if (parts.Count > 1) group = "（" + group + "）";
+                        if (comparisons.Count > parts.Count) group += "（其余比较未展开）";
+                        alternatives.Add(group);
+                    }
+                }
+                string text = string.Join("；或 ", alternatives.ToArray());
+                if (items.Count > alternatives.Count && alternatives.Count >= 6) text += "（其余分支未展开）";
+                if (data is SwitchResultData && GameAccess.Field<bool>(data, "_useCount"))
+                    text += (text.Length > 0 ? "；" : "") + "另有触发次数判定";
+                return text;
+            }
+            catch (Exception) { return ""; }
         }
 
         // The game looks conditions up by asset name; so do we, without executing them.
@@ -244,8 +287,9 @@ namespace MortalHelper.Game
                 parts.Add(Describe(reference: references[i], depth: depth,
                     report: report, simple: simple && references.Count == 1 && kind == StatGroupType.Sum));
             }
-            string separator = kind == StatGroupType.Max ? " 或 " : kind == StatGroupType.Min ? " 与 " : "＋";
-            return string.Join(separator, parts.ToArray());
+            if (kind == StatGroupType.Max || kind == StatGroupType.Min)
+                return (kind == StatGroupType.Max ? "最大值（" : "最小值（") + string.Join("，", parts.ToArray()) + "）";
+            return string.Join("＋", parts.ToArray());
         }
 
         private static string Describe(StatValueReference reference, int depth, ConditionReport report, bool simple)
@@ -271,15 +315,13 @@ namespace MortalHelper.Game
                 case StatCheckType.好感度:
                     {
                         RelationshipStat relationship = GameAccess.Field<RelationshipStat>(reference, "_relationship");
-                        return relationship == null ? "好感" : "好感 " + relationship.Type;
+                        return relationship == null ? "好感" : HintNames.Character(((int)relationship.Type).ToString()) + "好感";
                     }
                 case StatCheckType.旗標:
                     {
                         FlagData flag = GameAccess.Field<FlagData>(reference, "_flag");
                         if (flag == null) return "剧情标记";
-                        string note = flag.DevNote;
-                        return string.IsNullOrEmpty(note) ? "剧情标记 " + flag.name
-                            : "剧情标记 " + flag.name + "（" + note + "）";
+                        return "剧情记录「" + HintNames.Flag(flag) + "」";
                     }
                 case StatCheckType.書籍:
                     return "书籍 " + GameNames.ItemName(GameAccess.Field<ItemData>(reference, "_book"));

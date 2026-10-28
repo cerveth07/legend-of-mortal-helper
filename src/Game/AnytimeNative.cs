@@ -133,6 +133,11 @@ namespace MortalHelper.Game
                     SaveFailed("此槽位有上次未完成的存档事务；请先读取该槽位让插件自动恢复。");
                     return false;
                 }
+                if (File.Exists(path + ".mha-pending") || File.Exists(path + ".mhduel-pending"))
+                {
+                    SaveFailed("此槽位有上一版本中断的存档记录，请先恢复备份。");
+                    return false;
+                }
                 if (!File.Exists(path)) QuarantineOrphans(path);
                 if (!HasCompanion(path)) return true;
                 supersedeTransaction = SlotTransaction.Begin(SlotTransaction.JournalFor(path), "supersede", new[] {
@@ -160,7 +165,12 @@ namespace MortalHelper.Game
                 AnytimeStory.AfterNativeSave(path, data);
                 return;
             }
-            if (supersedeTransaction == null || !string.Equals(path, supersedePath, StringComparison.Ordinal)) return;
+            if (supersedeTransaction == null)
+            {
+                SaveSlotComments.NativeSaved(savingSlot, path, data);
+                return;
+            }
+            if (!string.Equals(path, supersedePath, StringComparison.Ordinal)) return;
             var transaction = supersedeTransaction;
             supersedeTransaction = null;
             supersedePath = null;
@@ -170,9 +180,16 @@ namespace MortalHelper.Game
                     throw new IOException("普通存档写入后内容校验不一致。");
                 transaction.RecordReplacement(SlotTransaction.HashFile(path));
                 FinishOperation(transaction, path);
+                SaveSlotComments.Saved(savingSlot);
             }
             catch (Exception error)
             {
+                if (transaction.State == SlotTransactionState.Committed)
+                {
+                    SaveFailed("普通存档已写入，但清理旧附档或事务备份失败；下次读写会重试：" +
+                        error.GetBaseException().Message);
+                    return;
+                }
                 var report = transaction.Rollback();
                 SaveFailed(report.Complete
                     ? "普通存档未完成，槽位已回退：" + error.GetBaseException().Message
@@ -213,11 +230,11 @@ namespace MortalHelper.Game
             bool story = operation == "story", duel = operation == "duel", supersede = operation == "supersede";
             // A story commit supersedes any duel record, and a duel commit
             // supersedes any story record: the slot has exactly one meaning.
-            // Retirement happens after Commit(): a locked file must be reported as pending
-            // cleanup, never as a save failure, because the new pair is already durable.
+            // Retirement happens after Commit(): a locked file must leave the
+            // journal in place so the next load cannot accept a stale required marker.
             if (story || supersede)
-            { TryDelete(path + ".mhduel"); TryDelete(path + ".mhduel-required"); TryDelete(path + ".mhstart"); }
-            if (duel || supersede) { TryDelete(path + ".mha"); TryDelete(path + ".mha-required"); }
+            { DeleteIfExists(path + ".mhduel"); DeleteIfExists(path + ".mhduel-required"); DeleteIfExists(path + ".mhstart"); }
+            if (duel || supersede) { DeleteIfExists(path + ".mha"); DeleteIfExists(path + ".mha-required"); }
         }
 
         // Settles any journal left on the slot. Called before the game reads the
@@ -255,17 +272,22 @@ namespace MortalHelper.Game
                 FinishOperation(transaction, path);
                 return;
             }
+            bool newerSavePreserved = false;
             if (!string.IsNullOrEmpty(transaction.ReplacementHash) && File.Exists(path))
             {
                 // A replacement hash was recorded, so a verified new file existed at commit
                 // time. Something else wrote this slot since: keep that file (it is the newest
                 // thing the player has) before the pre-save original is restored over it.
                 Quarantine(path);
-                Report("此槽位的存档在恢复前被其他程序改写，已把当前文件保留为 .dat.stale 并恢复保存前版本。");
+                if (File.Exists(path))
+                    throw new IOException("无法保留后来写入的原生存档；已停止回退，事务日志与备份仍在。请解除文件占用后重试。");
+                newerSavePreserved = true;
             }
             var report = transaction.Rollback();
             if (!report.Complete)
                 throw new InvalidDataException("此槽位上次未完成的存档无法回退：" + report.Detail);
+            if (newerSavePreserved)
+                Report("此槽位后来写入的原生存档已保留为 .dat.stale，保存前版本已恢复。");
             Report("上次未完成的存档已回退到保存前的状态：" + Path.GetFileName(path));
         }
 
@@ -434,15 +456,6 @@ namespace MortalHelper.Game
 
         internal static void DeleteIfExists(string path)
         { if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path); }
-
-        // Best effort: a companion that cannot be removed right now is retired by the next
-        // settle instead of turning a successful save into a reported failure.
-        private static void TryDelete(string path)
-        {
-            try { DeleteIfExists(path); }
-            catch (Exception error)
-            { Report("此槽位的配套文件暂时无法删除，下次存档或读档会自动重试：" + error.GetBaseException().Message); }
-        }
 
         // Never delete an earlier quarantine: a second stale companion must not destroy
         // the first one, which may be the only copy left. Shared by the story and duel

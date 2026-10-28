@@ -8,6 +8,9 @@ using MortalHelper.Game;
 
 internal static class Contracts
 {
+    private sealed class LegacySnapshotService { public int Calls; private string CreateSaveData() { Calls++; return "legacy"; } }
+    private sealed class CurrentSnapshotService { public bool IncludeLog; private string CreateSaveData(bool includeStoryLog = true) { IncludeLog = includeStoryLog; return "current"; } }
+    private sealed class UnsupportedSnapshotService { private string CreateSaveData(int unknown) { return "unsupported"; } }
     private static int passed;
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); passed++; }
     private static void Reject(Action action, string message)
@@ -29,11 +32,21 @@ internal static class Contracts
 
     private static void Main()
     {
+        var legacySnapshot = new LegacySnapshotService();
+        Check((string)NativeSnapshot.Create(legacySnapshot) == "legacy" && legacySnapshot.Calls == 1, "legacy native snapshot signature remains supported");
+        var currentSnapshot = new CurrentSnapshotService();
+        Check((string)NativeSnapshot.Create(currentSnapshot) == "current" && currentSnapshot.IncludeLog, "new native snapshot includes story log like manual save");
+        Reject(() => NativeSnapshot.Create(null), "missing snapshot service rejected");
+        bool unsupportedSnapshot = false;
+        try { NativeSnapshot.Create(new UnsupportedSnapshotService()); }
+        catch (MissingMethodException) { unsupportedSnapshot = true; }
+        Check(unsupportedSnapshot, "unknown future snapshot signature rejected explicitly");
         Check(UiLanguage.Convert("剧情辅助·万象录", true) == "劇情輔助·萬象錄", "traditional UI conversion failed");
         Check(UiLanguage.Convert("劇情輔助·萬象錄", false) == "剧情辅助·万象录", "simplified UI conversion failed");
         Check(UiLanguage.Convert("群战·郁竹·因为", true) == "群戰·郁竹·因為", "traditional UI wording changed names");
         Check(UiLanguage.Convert("ID 42 / F2", true) == "ID 42 / F2", "non-Chinese UI text changed");
         TitleContracts.Run(Check);
+        CheckpointCompatibilityContracts.Run(Check);
         NumericEditContracts.Run(Check);
         var session = new InteractionSession(); string error; int? number;
         Check(!session.Commit(0,"",0,100,null,2,out error),"closed session accepted click");
@@ -57,7 +70,19 @@ internal static class Contracts
         Check(hints["O_test"].Effects.Count==1,"simple effect not parsed");
         Check(hints["O_test"].Effects[0].Kind==EffectKind.Stat,"stat effect misclassified");
         hints = ScriptHints.Read(prefix + "if a then\nstatmodifymanager.Player(\"Money\", 999)\nend");
-        Check(hints["O_test"].Effects.Count==0 && hints["O_test"].Incomplete,"conditional claimed definite");
+        Check(hints["O_test"].Effects.Count==1 && hints["O_test"].Effects[0].Condition!=null && hints["O_test"].Incomplete,
+            "conditional effect dropped or claimed definite");
+        // A switch alias makes the conditional readable: the local variable name means
+        // nothing to a player, the branch id does.
+        hints = ScriptHints.Read(prefix + "local r = checkpointmanager.Switch(\"S7\")\nif r == 2 then\n" +
+            "statmodifymanager.Character(\"brother2\", 2, 1)\nend");
+        Check(hints["O_test"].Effects.Count==1 && hints["O_test"].Effects[0].Condition=="分支 S7 = 2",
+            "switch condition not resolved");
+        Check(hints["O_test"].Consequences.Count==1 && hints["O_test"].Consequences[0]=="分支点 S7",
+            "switch call lost to alias tracking");
+        // A function body may never run, so its calls are not listed at all.
+        hints = ScriptHints.Read(prefix + "local function f()\nstatmodifymanager.Player(\"Money\", 1)\nend");
+        Check(hints["O_test"].Effects.Count==0 && hints["O_test"].Incomplete,"function body effect listed");
         // Real scripts open an option with presentation calls and change stats afterwards;
         // the scan must survive them instead of stopping at the first unfamiliar word.
         hints = ScriptHints.Read(prefix + "runblock(flowcharts.view, \"out\")\n" +
@@ -84,7 +109,7 @@ internal static class Contracts
 
         var consequence=ScriptHints.Read(prefix+"checkpointmanager.Switch(\"S12\")\nluamanager.SetNextScript(\"S0017_02\")\nend");
         Check(consequence["O_test"].Consequences.Count==2 && consequence["O_test"].Consequences[0]=="分支点 S12","consequence scan failed");
-        Check(ScriptHints.Read(prefix+"statmodifymanager.AddStory(\"S03\")")["O_test"].Consequences[0]=="剧情 S03","story consequence mislabelled");
+        Check(ScriptHints.Read(prefix+"statmodifymanager.AddStory(\"S03\")")["O_test"].Consequences[0]=="记录 S03","story consequence mislabelled");
         Check(ScriptHints.Read("--[=[\ncheckpointmanager.Switch(\"FAKE\")\n]=]\n"+prefix+"x()")["O_test"].Consequences.Count==0,"comment produced a consequence");
         Check(ScriptHints.Read(prefix+"-- checkpointmanager.Switch(\"FAKE\")\nx()")["O_test"].Consequences.Count==0,"line comment produced a consequence");
         Check(ScriptHints.Read(prefix+"checkpointmanager.Switch(\"A\")\ncheckpointmanager.Switch(\"A\")")["O_test"].Consequences.Count==1,"duplicate consequence kept");
@@ -412,6 +437,23 @@ internal static class Contracts
         Check(LegendSlotCapacity.Visible(30, new[] { 24 }) == 24, "sparse legend does not grow solely from last slot");
         Check(LegendSlotCapacity.Visible(30, new[] { 0, -1, 1000 }) == 12, "invalid legend file indices ignored");
         Check(LegendSlotCapacity.Visible(14, new[] { 13 }) == 14, "partial final legend batch respects cap");
+        // Hotkey text parsing: the panel stores what the player pressed, and a hand-edited
+        // config must not turn into an unrelated key or a silently dead shortcut.
+        Check(!Hotkey.Parse("None").Enabled, "None disables a shortcut");
+        Check(!Hotkey.Parse("").Enabled && !Hotkey.Parse(null).Enabled, "empty config disables a shortcut");
+        Check(!Hotkey.Parse("Ctrl").Enabled, "a modifier alone is not a shortcut");
+        Check(Hotkey.Parse("Tab").Enabled && Hotkey.Parse("tab").Key == "tab", "a bare key keeps its spelling");
+        Hotkey combo = Hotkey.Parse("ctrl + tab");
+        Check(combo.Enabled && combo.Ctrl && !combo.Alt && !combo.Shift,
+            "modifier prefix is recognised, case-insensitively");
+        Check(combo.ToString() == "Ctrl+tab", "canonical form puts modifiers first");
+        Check(Hotkey.Parse("Tab+Shift").Shift && Hotkey.Parse("Tab+Shift").Key == "Tab",
+            "modifier position in the config does not matter");
+        Check(Hotkey.Parse("Ctrl+Alt+F9").ToString() == "Ctrl+Alt+F9", "two modifiers round trip");
+        Check(Hotkey.Parse("F9+Q").Key == "F9", "a second key cannot silently replace the first");
+        Check(Hotkey.Parse("Tab;Drop").Key == "Tab", "trailing junk after the key name is dropped");
+        Check(Hotkey.From(true, false, false, "None").ToString() == "Ctrl+None",
+            "a disabled combination still round trips");
         passed += StoryContracts.Run();
         passed += DuelJournalTests.Run();
         passed += DuelSaveMenuStateTests.Run();
@@ -646,6 +688,31 @@ internal static class Contracts
             damaged.Write("old-native", "old-side", false);
             TransactionJournal(damaged.Journal);
             Reject(() => SlotTransaction.Read(damaged.Journal), "damaged journal accepted");
+
+            // A parseable change to the existence flag must never authorize
+            // rollback to delete a native save that existed before writing.
+            var changed = new Fixture(root, "changed-existence");
+            changed.Write("old-native", "old-side", false);
+            SlotTransaction.Begin(changed.Journal, "story", changed.Paths);
+            string journalText = File.ReadAllText(changed.Journal);
+            Check(journalText.Contains("|1|"), "test journal had no existing native entry");
+            File.WriteAllText(changed.Journal, journalText.Replace("|1|", "|0|"));
+            Reject(() => SlotTransaction.Read(changed.Journal), "changed existence flag passed journal checksum");
+            Check(File.ReadAllText(changed.Native) == "old-native" && File.Exists(changed.Journal),
+                "damaged journal touched the original native save");
+
+            // Legacy logs have no integrity check. They can still be inspected
+            // manually, but may not drive an automatic rollback or cleanup.
+            var legacy = new Fixture(root, "legacy-journal");
+            legacy.Write("old-native", "old-side", false);
+            SlotTransaction.Begin(legacy.Journal, "story", legacy.Paths);
+            string legacyText = File.ReadAllText(legacy.Journal);
+            legacyText = legacyText.Replace("slot-transaction 2", "slot-transaction 1");
+            legacyText = legacyText.Substring(0, legacyText.LastIndexOf("sum=", StringComparison.Ordinal));
+            File.WriteAllText(legacy.Journal, legacyText);
+            Reject(() => SlotTransaction.Read(legacy.Journal), "unchecked old journal was auto-recovered");
+            Check(File.ReadAllText(legacy.Native) == "old-native" && File.Exists(legacy.Journal),
+                "old journal rejection changed native progress");
 
             // 13. Begin refuses to stack a second transaction on a slot.
             var stacked = new Fixture(root, "stacked");

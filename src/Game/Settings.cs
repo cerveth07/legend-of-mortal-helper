@@ -5,13 +5,15 @@ using UnityEngine;
 namespace MortalHelper.Game
 {
     // One switch per feature: what the option hints show, and how much of it.
+    // "Always" is kept only so an old config file still parses; it is migrated to
+    // Hover on load because writing the summary into the native option text is gone.
     internal enum OptionHintMode { Off, Hover, Always }
     internal enum OptionHintDetail { Simple, Full }
 
     internal sealed class Settings
     {
         public readonly ConfigEntry<bool> ExperimentalRecovery;
-        public readonly ConfigEntry<bool> Enabled, DiagnoseScript;
+        public readonly ConfigEntry<bool> Enabled, DiagnoseScript, DumpMapLabels;
         public readonly ConfigEntry<OptionHintMode> HintMode;
         public readonly ConfigEntry<OptionHintDetail> HintDetail;
         public readonly ConfigEntry<float> Opacity, BadgeX, BadgeY;
@@ -20,7 +22,7 @@ namespace MortalHelper.Game
         public readonly ConfigEntry<bool> GroupHealth, GroupAllyHealth, GroupMana, GroupCooldown, GroupFreeze, GroupDown;
         public readonly ConfigEntry<bool> UnlimitedActions, MaxAffection, SkillFree, ForgeFree, FastSkill, FastForge, PracticeLimit;
         public readonly ConfigEntry<string> Point;
-        public readonly ConfigEntry<KeyCode> Toggle;
+        public readonly ConfigEntry<string> PanelKey, CommentKey, SortKey;
         public readonly ConfigEntry<float> X, Y, Width, Height;
         public readonly ConfigEntry<float> Speed;
         public readonly ConfigEntry<int> SlotCount;
@@ -42,16 +44,26 @@ namespace MortalHelper.Game
             ConfigEntry<bool> traditionalChinese;
             Enabled = config.Bind("General", "Enabled", true, "启用本插件辅助；不会撤销已应用的修改。");
             ExperimentalRecovery = config.Bind("Recovery", "ExperimentalEnabled", false, "高级测试：显示并启用精确恢复入口，默认隐藏。实验恢复尚未通过完整游戏重放验收，仅限备份后的测试进度；随机状态仍可能导致严格校验失败。");
-            Toggle = config.Bind("General", "PanelKey", KeyCode.Tab, "展开或收起面板。");
+            // Strings, not KeyCode: the player report is "another app takes Tab", and the
+            // answer to that is Ctrl+Tab or F9, which a bare KeyCode cannot express.
+            PanelKey = config.Bind("General", "PanelKey", "Tab",
+                "展开或收起面板；支持 Ctrl/Alt/Shift 组合（如 Ctrl+Tab），写 None 关闭热键（改用左上角徽章）。");
+            CommentKey = config.Bind("Keys", "Comment", "F2",
+                "在存档/读档列表选中槽位后打开备注编辑；None 关闭。");
+            SortKey = config.Bind("Keys", "SortRecent", "F3",
+                "切换读档列表的最近存档排序；None 关闭。");
             // The hint used to be three booleans; migrate the old choice once, then the
             // single mode switch owns it.
             bool migrate = !config.ContainsKey(new ConfigDefinition("Story", "HintMode"));
             HintMode = config.Bind("Story", "HintMode", OptionHintMode.Hover,
-                "选项后果提示：Off 关闭 / Hover 悬停显示 / Always 总是显示（后果直接写在选项后面）。");
+                "选项后果提示：Off 关闭 / Hover 悬停时显示在右侧提示框。");
+            if (HintMode.Value == OptionHintMode.Always) HintMode.Value = OptionHintMode.Hover;
             HintDetail = config.Bind("Story", "HintDetail", OptionHintDetail.Simple,
                 "显示范围：Simple 只写数值、好感与物品 / Full 另加剧情标记与分支去向（含剧透）。");
             if (migrate) MigrateHints(config);
             DiagnoseScript = config.Bind("Diagnostics", "DiagnoseScript", false, "诊断：切换剧本时在状态行显示脚本名与可解析分支数（无面板入口）。");
+            DumpMapLabels = config.Bind("Diagnostics", "DumpMapLabels", false,
+                "诊断：进入旅行地图时把地名文本的内容、屏幕坐标、字号与颜色写进日志（只读，每个会话一次）。");
             Point = config.Bind("Story", "BasePoint", "", "指定点数模式下的基础点数；按每次判定范围校验。");
             DuelHealth = config.Bind("Duel", "KeepHealth", false, "单挑主角生命不因普通扣减降低。");
             DuelStamina = config.Bind("Duel", "KeepStamina", false, "单挑主角气力不因普通扣减降低。");
